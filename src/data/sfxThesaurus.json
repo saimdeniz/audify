@@ -1,0 +1,317 @@
+[
+  {
+    "id": "whoosh",
+    "label": "Whoosh / Geçiş",
+    "terms": ["whoosh", "swish", "swoosh", "flyby", "passby", "swing", "whip", "transition", "gecis", "savrulma", "hava gecisi"]
+  },
+  {
+    "id": "impact",
+    "label": "Impact / Darbe",
+    "terms": ["impact", "hit", "slam", "boom", "thud", "crash", "smash", "punch", "collision", "darbe", "vurus", "carpma", "gumleme"]
+  },
+  {
+    "id": "braam",
+    "label": "Braam / Trailer",
+    "terms": ["braam", "bram", "horn", "trailer", "cinematic", "epic", "blockbuster", "sinematik", "fragman", "boru"]
+  },
+  {
+    "id": "riser",
+    "label": "Riser / Yükseliş",
+    "terms": ["riser", "uplifter", "buildup", "build", "sweep", "swell", "ascend", "tension", "yukselis", "gerilim", "tirmandirma"]
+  },
+  {
+    "id": "downlifter",
+    "label": "Downlifter / Düşüş",
+    "terms": ["downlifter", "downer", "fall", "drop", "subdrop", "bassdrop", "dive", "descend", "dusus", "inis", "bas dususu"]
+  },
+  {
+    "id": "explosion",
+    "label": "Explosion / Patlama",
+    "terms": ["explosion", "explode", "blast", "detonation", "kaboom", "bomb", "grenade", "dynamite", "patlama", "bomba", "infilak"]
+  },
+  {
+    "id": "footsteps",
+    "label": "Footsteps / Ayak Sesi",
+    "terms": ["footstep", "footsteps", "step", "steps", "walk", "walking", "run", "running", "sneaker", "boot", "ayak", "adim", "yurume", "kosma", "ayak sesi"]
+  },
+  {
+    "id": "foley",
+    "label": "Foley / Hareket",
+    "terms": ["foley", "movement", "handling", "grab", "prop", "rummage", "hareket", "dokunus", "esya"]
+  },
+  {
+    "id": "cloth",
+    "label": "Cloth / Kumaş",
+    "terms": ["cloth", "clothing", "fabric", "rustle", "jacket", "leather", "swooshcloth", "kumas", "kiyafet", "hisirti", "elbise"]
+  },
+  {
+    "id": "ui",
+    "label": "UI / Arayüz",
+    "terms": ["ui", "hud", "click", "beep", "button", "interface", "menu", "blip", "pop", "toggle", "notification", "arayuz", "buton", "tik", "tiklama", "bildirim"]
+  },
+  {
+    "id": "glitch",
+    "label": "Glitch / Parazit",
+    "terms": ["glitch", "stutter", "static", "interference", "distortion", "corrupt", "bitcrush", "data", "parazit", "bozulma", "cizirti"]
+  },
+  {
+    "id": "scifi",
+    "label": "Sci-Fi / Bilimkurgu",
+    "terms": ["scifi", "laser", "zap", "beam", "plasma", "blaster", "cyber", "futuristic", "spaceship", "teleport", "warp", "bilimkurgu", "lazer", "uzay", "isinlanma"]
+  },
+  {
+    "id": "electricity",
+    "label": "Electricity / Elektrik",
+    "terms": ["electricity", "electric", "spark", "zap", "volt", "arc", "buzz", "hum", "shock", "elektrik", "kivilcim", "akim", "carpma"]
+  },
+  {
+    "id": "magic",
+    "label": "Magic / Büyü",
+    "terms": ["magic", "magical", "spell", "sparkle", "shimmer", "chime", "arcane", "enchant", "fairy", "wand", "portal", "buyu", "sihir", "parilti", "isilti"]
+  },
+  {
+    "id": "weapons",
+    "label": "Guns / Silah",
+    "terms": ["weapon", "weapons", "gun", "shot", "gunshot", "rifle", "pistol", "shotgun", "sniper", "reload", "bullet", "ricochet", "silah", "atesli", "tabanca", "tufek", "mermi", "sarjor"]
+  },
+  {
+    "id": "blades",
+    "label": "Blades / Kılıç",
+    "terms": ["sword", "blade", "knife", "dagger", "slash", "stab", "sheathe", "unsheathe", "katana", "kilic", "bicak", "kesme", "saplama", "kin"]
+  },
+  {
+    "id": "combat",
+    "label": "Fight / Dövüş",
+    "terms": ["fight", "combat", "punch", "slap", "smack", "bodyfall", "martial", "dovus", "yumruk", "tekme", "tokat"]
+  },
+  {
+    "id": "gore",
+    "label": "Gore / Kan & Kemik",
+    "terms": ["gore", "blood", "squish", "splat", "flesh", "bone", "crunch", "break", "snap", "guts", "kan", "kemik", "et", "ezilme", "kirilma"]
+  },
+  {
+    "id": "glass",
+    "label": "Glass / Cam",
+    "terms": ["glass", "shatter", "smash", "window", "bottle", "clink", "shard", "crack", "cam", "pencere", "sise", "cam kirilmasi", "catlama"]
+  },
+  {
+    "id": "metal",
+    "label": "Metal / Demir",
+    "terms": ["metal", "metallic", "clang", "clank", "iron", "steel", "chain", "anvil", "scrape", "demir", "celik", "zincir", "metalik", "cinlama"]
+  },
+  {
+    "id": "wood",
+    "label": "Wood / Ahşap",
+    "terms": ["wood", "wooden", "plank", "timber", "creak", "splinter", "branch", "stick", "knock", "ahsap", "tahta", "giciirti", "dal", "odun", "tiklatma"]
+  },
+  {
+    "id": "rock",
+    "label": "Rock / Taş & Enkaz",
+    "terms": ["stone", "boulder", "debris", "rubble", "gravel", "pebble", "crumble", "avalanche", "tas", "kaya", "enkaz", "cakil", "yikinti"]
+  },
+  {
+    "id": "door",
+    "label": "Door / Kapı",
+    "terms": ["door", "doorslam", "creak", "hinge", "latch", "lock", "unlock", "gate", "knock", "kapi", "kilit", "mentese", "kapi carpma"]
+  },
+  {
+    "id": "paper",
+    "label": "Paper / Kağıt",
+    "terms": ["paper", "page", "book", "flip", "tear", "rip", "crumple", "cardboard", "scroll", "kagit", "sayfa", "kitap", "yirtma", "burusturma"]
+  },
+  {
+    "id": "camera",
+    "label": "Camera / Fotoğraf",
+    "terms": ["camera", "shutter", "flash", "polaroid", "lens", "focus", "snapshot", "kamera", "deklansor", "fotograf", "flas"]
+  },
+  {
+    "id": "keyboard",
+    "label": "Typing / Klavye",
+    "terms": ["keyboard", "typing", "key", "keypress", "mouseclick", "typewriter", "klavye", "tus", "yazma", "daktilo"]
+  },
+  {
+    "id": "coins",
+    "label": "Money / Para",
+    "terms": ["coin", "coins", "money", "cash", "register", "ching", "jackpot", "gold", "treasure", "para", "altin", "bozuk para", "kasa", "hazine"]
+  },
+  {
+    "id": "bell",
+    "label": "Bell / Zil & Çan",
+    "terms": ["bell", "ding", "chime", "ring", "gong", "churchbell", "doorbell", "deskbell", "zil", "can", "cingirak"]
+  },
+  {
+    "id": "alarm",
+    "label": "Alarm / Siren",
+    "terms": ["alarm", "siren", "alert", "warning", "horn", "klaxon", "buzzer", "emergency", "uyari", "acil", "korna", "ikaz"]
+  },
+  {
+    "id": "clock",
+    "label": "Clock / Saat",
+    "terms": ["clock", "tick", "ticking", "tock", "stopwatch", "timer", "countdown", "pendulum", "saat", "tiktak", "kronometre", "geri sayim"]
+  },
+  {
+    "id": "phone",
+    "label": "Phone / Telefon",
+    "terms": ["phone", "telephone", "ringtone", "vibrate", "dial", "hangup", "cellphone", "smartphone", "telefon", "titresim", "arama", "calma"]
+  },
+  {
+    "id": "fire",
+    "label": "Fire / Ateş",
+    "terms": ["fire", "flame", "burn", "burning", "ignite", "torch", "campfire", "bonfire", "fireball", "sizzle", "ates", "alev", "yanma", "mesale", "citirti"]
+  },
+  {
+    "id": "water",
+    "label": "Water / Su",
+    "terms": ["water", "splash", "liquid", "aqua", "bubble", "bubbles", "drip", "drop", "pour", "underwater", "ocean", "wave", "river", "stream", "su", "dalga", "damla", "damlama", "baloncuk", "sualti", "nehir", "deniz"]
+  },
+  {
+    "id": "wind",
+    "label": "Wind / Rüzgar",
+    "terms": ["wind", "windy", "breeze", "gust", "air", "howl", "blizzard", "draft", "tornado", "ruzgar", "esinti", "ugultu", "firtina", "kasirga"]
+  },
+  {
+    "id": "rain",
+    "label": "Rain & Storm / Yağmur",
+    "terms": ["rain", "rainy", "storm", "thunder", "lightning", "weather", "downpour", "drizzle", "thunderstorm", "yagmur", "gok gurultusu", "simsek", "yildirim", "saganak"]
+  },
+  {
+    "id": "ice",
+    "label": "Ice & Snow / Buz & Kar",
+    "terms": ["ice", "snow", "freeze", "frozen", "frost", "crystal", "icicle", "glacier", "buz", "kar", "donma", "kristal", "ayaz"]
+  },
+  {
+    "id": "vehicle",
+    "label": "Vehicles / Araç & Motor",
+    "terms": ["car", "vehicle", "engine", "motor", "drive", "driving", "tire", "skid", "screech", "brake", "rev", "exhaust", "truck", "motorcycle", "araba", "arac", "motor", "fren", "lastik", "egzoz", "kamyon"]
+  },
+  {
+    "id": "aircraft",
+    "label": "Aircraft / Uçak & Helikopter",
+    "terms": ["airplane", "plane", "jet", "helicopter", "chopper", "propeller", "rotor", "drone", "takeoff", "ucak", "helikopter", "pervane", "jet"]
+  },
+  {
+    "id": "voice",
+    "label": "Voice / İnsan Sesi",
+    "terms": ["voice", "vocal", "vox", "speech", "talk", "whisper", "insan sesi", "vokal", "konusma", "fisilti"]
+  },
+  {
+    "id": "scream",
+    "label": "Scream / Çığlık",
+    "terms": ["scream", "screaming", "shriek", "yell", "shout", "ciglik", "bagirma", "feryat"]
+  },
+  {
+    "id": "laugh",
+    "label": "Laughter / Kahkaha",
+    "terms": ["laugh", "laughter", "giggle", "chuckle", "kahkaha", "gulme", "kikirdama"]
+  },
+  {
+    "id": "breath",
+    "label": "Breath / Nefes",
+    "terms": ["breath", "breathe", "breathing", "gasp", "sigh", "pant", "inhale", "exhale", "nefes", "soluk", "ic cekme"]
+  },
+  {
+    "id": "crowd",
+    "label": "Crowd / Kalabalık",
+    "terms": ["crowd", "applause", "clapping", "cheer", "cheering", "walla", "chatter", "stadium", "audience", "kalabalik", "alkis", "tezahurat", "seyirci"]
+  },
+  {
+    "id": "dog",
+    "label": "Dog / Köpek",
+    "terms": ["dog", "dogs", "bark", "barking", "woof", "puppy", "hound", "kopek", "havlama"]
+  },
+  {
+    "id": "cat",
+    "label": "Cat / Kedi",
+    "terms": ["cat", "cats", "meow", "purr", "kitten", "kedi", "miyavlama", "mirildanma"]
+  },
+  {
+    "id": "bird",
+    "label": "Bird / Kuş",
+    "terms": ["bird", "birds", "chirp", "tweet", "crow", "owl", "wings", "flap", "kus", "cikcik", "kanat", "karga", "baykus"]
+  },
+  {
+    "id": "animals",
+    "label": "Animals / Hayvan",
+    "terms": ["animal", "animals", "wildlife", "fauna", "hayvan", "vahsi yasam"]
+  },
+  {
+    "id": "monster",
+    "label": "Monster / Canavar",
+    "terms": ["monster", "creature", "beast", "dragon", "zombie", "demon", "growl", "snarl", "hiss", "roar", "alien", "canavar", "yaratik", "ejderha", "zombi", "hirilti", "kukreme"]
+  },
+  {
+    "id": "horror",
+    "label": "Horror / Korku",
+    "terms": ["horror", "scary", "creepy", "eerie", "spooky", "terror", "stinger", "jumpscare", "nightmare", "ghost", "haunted", "dread", "korku", "urpertici", "hayalet", "kabus"]
+  },
+  {
+    "id": "cartoon",
+    "label": "Cartoon / Komedi",
+    "terms": ["cartoon", "comedy", "funny", "boing", "plop", "slidewhistle", "honk", "squeak", "slip", "bonk", "wink", "cizgi film", "komik", "komedi", "ziplama"]
+  },
+  {
+    "id": "heartbeat",
+    "label": "Heartbeat / Kalp Atışı",
+    "terms": ["heartbeat", "heart", "pulse", "thump", "palpitation", "kalp", "kalp atisi", "nabiz"]
+  },
+  {
+    "id": "tape",
+    "label": "Vinyl & Tape / Plak & Kaset",
+    "terms": ["vinyl", "crackle", "tape", "cassette", "rewind", "fastforward", "recordscratch", "scratch", "projector", "plak", "kaset", "geri sarma", "projektor"]
+  },
+  {
+    "id": "ambience",
+    "label": "Ambience / Ortam & Atmosfer",
+    "terms": ["ambience", "ambient", "amb", "atmos", "atmosphere", "roomtone", "background", "env", "environment", "ortam", "atmosfer", "arkaplan", "cevre"]
+  },
+  {
+    "id": "nature",
+    "label": "Nature & Forest / Doğa & Orman",
+    "terms": ["nature", "forest", "woods", "jungle", "outdoor", "doga", "orman"]
+  },
+  {
+    "id": "city",
+    "label": "City & Traffic / Şehir & Trafik",
+    "terms": ["city", "urban", "street", "traffic", "downtown", "sehir", "sokak", "trafik", "kent"]
+  },
+  {
+    "id": "kick",
+    "label": "Kick / Bas Davul",
+    "terms": ["kick", "kicks", "bassdrum", "kickdrum", "bd", "bas davul"]
+  },
+  {
+    "id": "snare",
+    "label": "Snare / Trampet",
+    "terms": ["snare", "snares", "rimshot", "sd", "trampet"]
+  },
+  {
+    "id": "hihat",
+    "label": "Hi-Hat",
+    "terms": ["hihat", "hihats", "hat", "hats", "hh", "closedhat", "openhat"]
+  },
+  {
+    "id": "cymbal",
+    "label": "Cymbal / Zil",
+    "terms": ["cymbal", "cymbals", "crashcymbal", "ride", "zil"]
+  },
+  {
+    "id": "drums",
+    "label": "Drums / Davul & Ritim",
+    "terms": ["drum", "drums", "perc", "percussion", "taiko", "groove", "davul", "ritim", "perkusyon"]
+  },
+  {
+    "id": "bass",
+    "label": "Bass & Sub / Bas",
+    "terms": ["bass", "sub", "subbass", "808", "reese", "lowend", "rumble", "bas", "alt frekans", "ugultu"]
+  },
+  {
+    "id": "loop",
+    "label": "Loop / Döngü",
+    "terms": ["loop", "loops", "looped", "loopable", "dongu", "tekrar"]
+  },
+  {
+    "id": "music",
+    "label": "Music / Müzik",
+    "terms": ["music", "bgm", "ost", "soundtrack", "score", "song", "cue", "theme", "melody", "muzik", "fon muzigi", "melodi"]
+  }
+]

@@ -1,0 +1,23 @@
+# Personal data & backups - never share/commit
+user/
+*.db
+*.db-shm
+*.db-wal
+*.audify-backup.zip
+*.audify-profile
+*.audify-settings.json
+log.txt
+
+# Local machine build artifacts & machine-specific cargo config
+Audify.exe
+src-tauri/.cargo/config.toml
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

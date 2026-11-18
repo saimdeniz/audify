@@ -1,0 +1,21 @@
+import { KeyboardShortcuts } from "../types";
+
+export const DEFAULT_SHORTCUTS: KeyboardShortcuts = {
+  playPause: " ",
+  stopPlayback: "Escape",
+  prevTrack: "[",
+  nextTrack: "]",
+  toggleShuffle: "s",
+  toggleLoop: "l",
+  toggleAutoPreview: "p",
+  toggleMute: "m",
+  toggleFavorite: "f",
+  saveSlice: "Ctrl+S",
+  clearSlice: "c",
+  removeFromCollection: "Delete",
+  addToBin: "b",
+  copyFilePath: "Ctrl+Shift+P",
+  showInFolder: "Ctrl+Shift+E",
+  findSimilar: "Shift+Enter",
+  toggleMiniDock: "Ctrl+M",
+};

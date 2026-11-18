@@ -1,0 +1,93 @@
+name: Build, Verify & Release (Windows x64)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Verify & Build Portable Audify.exe
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust target & Cargo registry
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Frontend verification gate (TypeScript, ESLint, Vitest & Vite dist)
+        run: |
+          npx tsc --noEmit --noUnusedLocals --noUnusedParameters
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx eslint src --max-warnings=0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        shell: pwsh
+
+      - name: Rust verification gate (Clippy & Unit Tests)
+        run: |
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        shell: pwsh
+
+      - name: Build portable release Audify.exe (with path-prefix remapping)
+        run: |
+          npm run build:exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $hash = (Get-FileHash -Path "Audify.exe" -Algorithm SHA256).Hash
+          "$hash  Audify.exe" | Out-File -FilePath "SHA256SUMS.txt" -Encoding utf8
+          Get-Content "SHA256SUMS.txt"
+        shell: pwsh
+
+      - name: Upload portable Audify.exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Audify-Windows-x64-Portable
+          path: |
+            Audify.exe
+            SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release (on v* tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Audify.exe
+            SHA256SUMS.txt
+          generate_release_notes: true
