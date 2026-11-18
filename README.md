@@ -4,6 +4,10 @@
 
 Built with **Tauri v2**, **React 18 / TypeScript**, and **Rust / SQLite (FTS5 + WAL)**, Audify is engineered to manage **50,000+ to 100,000+ audio files** with instant search, 60 FPS waveform scrubbing, ~400 MB RAM usage, and direct drag-and-drop slicing into **DaVinci Resolve, Premiere Pro, Reaper, Ableton Live, FL Studio, Logic Pro, and Pro Tools**.
 
+<img width="1919" height="1032" alt="dark" src="https://github.com/user-attachments/assets/cd25ecf1-e947-4b81-9ef7-e58bceea995b" />
+<img width="1919" height="1032" alt="light" src="https://github.com/user-attachments/assets/ebf82412-b874-44d0-8c2b-3cf6118b4252" />
+<img width="1919" height="1033" alt="ascii" src="https://github.com/user-attachments/assets/711d2a04-ff07-4979-a27e-36d757979bec" />
+
 ---
 
 ## Table of Contents
