@@ -64,7 +64,7 @@ export const AiModelSetupCard: React.FC = () => {
             <button
               type="button"
               onClick={() => void cancelAiDownload()}
-              className="h-[22px] px-2.5 bg-surface-3 hover:bg-surface-hover border border-line hover:border-danger text-fg text-[10.5px] font-medium rounded-xs inline-flex items-center space-x-1 cursor-pointer"
+              className="h-[22px] px-2.5 bg-surface-3 hover:bg-surface-hover border border-line hover:border-accent text-fg hover:text-accent-fg text-[10.5px] font-medium rounded-xs inline-flex items-center space-x-1 cursor-pointer"
             >
               <X className="w-3 h-3" />
               <span>Cancel download</span>
@@ -232,7 +232,7 @@ export const AiModelSetupCard: React.FC = () => {
                       clearAiData: false,
                     })
                   }
-                  className="h-[24px] px-2.5 bg-surface-2 hover:bg-surface-3 border border-line hover:border-danger disabled:opacity-50 rounded-xs text-[11px] font-medium text-fg-2 hover:text-fg inline-flex items-center space-x-1 shrink-0 whitespace-nowrap cursor-pointer"
+                  className="h-[24px] px-2.5 bg-surface-2 hover:bg-surface-3 border border-line hover:border-accent disabled:opacity-50 rounded-xs text-[11px] font-medium text-fg-2 hover:text-accent-fg inline-flex items-center space-x-1 shrink-0 whitespace-nowrap cursor-pointer"
                   title="Delete .onnx model while keeping analyzed embeddings"
                 >
                   <Trash2 className="w-3 h-3 shrink-0" />
@@ -256,7 +256,7 @@ export const AiModelSetupCard: React.FC = () => {
                 cancelLabel="Cancel"
                 deleteTitle="Remove model and purge all AI embeddings & pending suggestions"
                 confirmTitle="Confirm removing model and purging all AI embeddings"
-                idleClassName="h-[24px] px-2.5 bg-surface-2 hover:bg-surface-3 border border-line hover:border-danger disabled:opacity-50 rounded-xs text-[11px] font-medium text-fg-2 hover:text-danger inline-flex items-center space-x-1 shrink-0 whitespace-nowrap cursor-pointer"
+                idleClassName="h-[24px] px-2.5 bg-surface-2 hover:bg-surface-3 border border-line hover:border-accent disabled:opacity-50 rounded-xs text-[11px] font-medium text-fg-2 hover:text-accent-fg inline-flex items-center space-x-1 shrink-0 whitespace-nowrap cursor-pointer"
               />
             </div>
           </div>

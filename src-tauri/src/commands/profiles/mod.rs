@@ -13,6 +13,7 @@ pub(crate) use export_pkg::{apply_share_safe, build_profile_export_package_with_
 use export_share::{
     collect_profile_library_ids, extract_custom_slice_path, sanitize_profile_settings_json,
 };
+#[cfg(test)]
 pub(crate) use import_pkg::import_profile_from_file_with_conn;
 use path_relink::relink_imported_settings_paths;
 
@@ -369,6 +370,19 @@ pub fn delete_profile(
         return Err("Cannot delete the only remaining workspace profile".to_string());
     }
 
+    let trashed_slice_paths: Vec<String> = tx
+        .prepare(
+            "SELECT COALESCE(trash_file_path, '') FROM sample_slices
+             WHERE profile_id = ?1 AND COALESCE(is_trashed, 0) = 1",
+        )
+        .ok()
+        .and_then(|mut stmt| {
+            stmt.query_map(params![profile_id], |r| r.get::<_, String>(0))
+                .ok()
+                .map(|rows| rows.flatten().collect())
+        })
+        .unwrap_or_default();
+
     let deleted = tx
         .execute("DELETE FROM profiles WHERE id = ?1", params![profile_id])
         .map_err(|e| format!("Failed to delete profile: {}", e))?;
@@ -393,6 +407,28 @@ pub fn delete_profile(
     }
     tx.commit()
         .map_err(|e| format!("Failed to commit profile deletion: {}", e))?;
+
+    let slice_trash_dir = state.user_dir.join("cache").join("slice_trash");
+    if let Ok(canon_trash) = slice_trash_dir.canonicalize() {
+        for raw_tp in trashed_slice_paths {
+            let tp = raw_tp.trim();
+            if tp.is_empty()
+                || crate::security::is_unc_or_network_path(tp)
+                || crate::security::has_ntfs_ads_colon(tp)
+            {
+                continue;
+            }
+            if let Ok(meta) = fs::symlink_metadata(tp) {
+                if !meta.file_type().is_symlink() && meta.is_file() {
+                    if let Ok(canon) = fs::canonicalize(tp) {
+                        if canon.starts_with(&canon_trash) {
+                            let _ = fs::remove_file(tp);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let active_id = get_active_profile_id(&conn);
     invalidate_ai_cache_if_present(&app);
@@ -492,20 +528,35 @@ pub fn export_profile_to_file(
 }
 
 #[tauri::command]
-pub fn import_profile_from_file(
+pub async fn import_profile_from_file(
     app: AppHandle,
     state: State<'_, AppState>,
     file_path: String,
 ) -> Result<ImportProfileResult, String> {
-    let mut conn = state.lock_db();
-    let old_active_id = get_active_profile_id(&conn);
-    let old_slice = query_profile_by_id(&conn, old_active_id)
-        .ok()
-        .and_then(|p| extract_custom_slice_path(&p.settings_json));
-    let res = import_profile_from_file_with_conn(&mut conn, &file_path)?;
-    let new_slice = extract_custom_slice_path(&res.profile.settings_json);
-    invalidate_ai_cache_if_present(&app);
-    let removed = old_slice.as_deref().filter(|old_s| new_slice.as_deref() != Some(*old_s));
-    crate::reconcile_library_asset_scopes(&app, &conn, removed);
-    Ok(res)
+    let state_owned = state.inner().clone();
+    let app_clone = app.clone();
+    let user_dir_err = state.user_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = state_owned.lock_db();
+        let old_active_id = get_active_profile_id(&conn);
+        let old_slice = query_profile_by_id(&conn, old_active_id)
+            .ok()
+            .and_then(|p| extract_custom_slice_path(&p.settings_json));
+        let res = import_pkg::import_profile_from_file_with_user_dir(
+            &mut conn,
+            Some(&state_owned.user_dir),
+            &file_path,
+        )?;
+        let new_slice = extract_custom_slice_path(&res.profile.settings_json);
+        invalidate_ai_cache_if_present(&app_clone);
+        let removed = old_slice
+            .as_deref()
+            .filter(|old_s| new_slice.as_deref() != Some(*old_s));
+        crate::reconcile_library_asset_scopes(&app_clone, &conn, removed);
+        Ok(res)
+    })
+    .await
+    .map_err(|e| {
+        crate::security::sanitize_err(&user_dir_err, &format!("Profile import task failed: {}", e))
+    })?
 }

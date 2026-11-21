@@ -693,6 +693,7 @@ describe("Integrated Duplicates View & UI Polish", () => {
       get: useSampleStore.getState,
       applyProfileSettingsImmediately: vi.fn(),
       bumpProfileEpoch: vi.fn(() => 1),
+      getProfileEpoch: vi.fn(() => 1),
       resetFiltersOnProfileChange: vi.fn(),
     });
     const handler = listenCallbacks.get("duplicate-scan-progress");

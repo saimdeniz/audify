@@ -194,7 +194,7 @@ export const SampleTable: React.FC = () => {
     parentRef,
     headerRef,
     sampleCount: samples.length,
-    slicesFilterActive,
+    showSlicesTable,
     isSimilarityMode,
   });
 
@@ -211,6 +211,7 @@ export const SampleTable: React.FC = () => {
     const childrenMap = new Map<number, Collection[]>();
 
     for (const c of collections) {
+      if (c.smart_query?.trim()) continue;
       if (c.parent_id) {
         const list = childrenMap.get(c.parent_id) || [];
         list.push(c);

@@ -10,15 +10,28 @@ import type { StoreSliceContext } from "../types";
 export function createSliceHistorySlice(ctx: StoreSliceContext) {
   const { set, get, applyInstantMemoryFilter, emitNotice } = ctx;
 
-  let cachedSliceActions: ReturnType<
+  type SliceActionsInstance = ReturnType<
     typeof import("./sliceHistoryActions").createSliceHistoryActions
-  > | null = null;
-  const loadSliceActions = async () => {
-    if (!cachedSliceActions) {
-      const mod = await import("./sliceHistoryActions");
-      cachedSliceActions = mod.createSliceHistoryActions(ctx);
+  >;
+  let cachedSliceActions: SliceActionsInstance | null = null;
+  let pendingSliceActions: Promise<SliceActionsInstance | null> | null = null;
+  const loadSliceActions = async (): Promise<SliceActionsInstance | null> => {
+    if (cachedSliceActions) return cachedSliceActions;
+    if (!pendingSliceActions) {
+      pendingSliceActions = import("./sliceHistoryActions")
+        .then((mod) => {
+          if (typeof mod?.createSliceHistoryActions !== "function") {
+            return null;
+          }
+          cachedSliceActions = mod.createSliceHistoryActions(ctx);
+          return cachedSliceActions;
+        })
+        .catch(() => null)
+        .finally(() => {
+          pendingSliceActions = null;
+        });
     }
-    return cachedSliceActions;
+    return pendingSliceActions;
   };
 
   const getCurrentVisibleSlices = () => {
@@ -185,10 +198,15 @@ export function createSliceHistorySlice(ctx: StoreSliceContext) {
 
     closeBatchRenameSlicesModal: () => set({ batchRenameSliceIds: null }),
 
-    fetchSliceHistory: async () => (await loadSliceActions()).fetchSliceHistory(),
+    fetchSliceHistory: async () => {
+      const actions = await loadSliceActions();
+      if (actions) await actions.fetchSliceHistory();
+    },
 
-    saveActiveSlice: async (customName?: string) =>
-      (await loadSliceActions()).saveActiveSlice(customName),
+    saveActiveSlice: async (customName?: string) => {
+      const actions = await loadSliceActions();
+      return actions ? actions.saveActiveSlice(customName) : null;
+    },
 
     recordSliceExport: async (payload: {
       slicePath: string;
@@ -198,51 +216,81 @@ export function createSliceHistorySlice(ctx: StoreSliceContext) {
       endSec: number;
       pitchSemitones?: number;
       applyMicroFade?: boolean;
-    }) => (await loadSliceActions()).recordSliceExport(payload),
+    }) => {
+      const actions = await loadSliceActions();
+      return actions ? actions.recordSliceExport(payload) : null;
+    },
 
-    toggleSliceFavorite: async (sliceId: number) =>
-      (await loadSliceActions()).toggleSliceFavorite(sliceId),
+    toggleSliceFavorite: async (sliceId: number) => {
+      const actions = await loadSliceActions();
+      if (actions) await actions.toggleSliceFavorite(sliceId);
+    },
 
-    toggleSliceFavoritesBatch: async (sliceIds: number[], isFavorite: boolean) =>
-      (await loadSliceActions()).toggleSliceFavoritesBatch(sliceIds, isFavorite),
+    toggleSliceFavoritesBatch: async (sliceIds: number[], isFavorite: boolean) => {
+      const actions = await loadSliceActions();
+      if (actions) await actions.toggleSliceFavoritesBatch(sliceIds, isFavorite);
+    },
 
     batchRenameSlices: async (
       entries: Array<{ slice_id: number; new_stem: string }>,
       opts?: { isHistoryReplay?: boolean }
-    ) => (await loadSliceActions()).batchRenameSlices(entries, opts),
+    ) => {
+      const actions = await loadSliceActions();
+      if (actions) await actions.batchRenameSlices(entries, opts);
+    },
 
-    clearMissingSlices: async () =>
-      (await loadSliceActions()).clearMissingSlices(),
+    clearMissingSlices: async () => {
+      const actions = await loadSliceActions();
+      return actions ? actions.clearMissingSlices() : 0;
+    },
 
     trashSliceFiles: async (
       sliceIds: number[],
       opts?: { isHistoryReplay?: boolean }
-    ) => (await loadSliceActions()).trashSliceFiles(sliceIds, opts),
+    ) => {
+      const actions = await loadSliceActions();
+      if (actions) await actions.trashSliceFiles(sliceIds, opts);
+    },
 
-    fetchSliceTrashStatus: async () =>
-      (await loadSliceActions()).fetchSliceTrashStatus(),
+    fetchSliceTrashStatus: async () => {
+      const actions = await loadSliceActions();
+      if (actions) await actions.fetchSliceTrashStatus();
+    },
 
-    fetchTrashedSlices: async () =>
-      (await loadSliceActions()).fetchTrashedSlices(),
+    fetchTrashedSlices: async () => {
+      const actions = await loadSliceActions();
+      if (actions) await actions.fetchTrashedSlices();
+    },
 
     restoreTrashedSlices: async (
       sliceIds?: number[],
       opts?: { isHistoryReplay?: boolean }
-    ) => (await loadSliceActions()).restoreTrashedSlices(sliceIds, opts),
+    ) => {
+      const actions = await loadSliceActions();
+      return actions ? actions.restoreTrashedSlices(sliceIds, opts) : [];
+    },
 
-    emptyTrashedSlices: async (sliceIds?: number[]) =>
-      (await loadSliceActions()).emptyTrashedSlices(sliceIds),
+    emptyTrashedSlices: async (sliceIds?: number[]) => {
+      const actions = await loadSliceActions();
+      return actions ? actions.emptyTrashedSlices(sliceIds) : null;
+    },
 
-    undoLastSliceOp: async () =>
-      (await loadSliceActions()).undoLastSliceOp(),
+    undoLastSliceOp: async () => {
+      const actions = await loadSliceActions();
+      if (actions) await actions.undoLastSliceOp();
+    },
 
-    redoLastSliceOp: async () =>
-      (await loadSliceActions()).redoLastSliceOp(),
+    redoLastSliceOp: async () => {
+      const actions = await loadSliceActions();
+      if (actions) await actions.redoLastSliceOp();
+    },
 
     selectSliceForPreview: (entry: SliceHistoryEntry, shouldPlay = true) =>
       previewEntry(entry, shouldPlay),
 
-    jumpToSliceSource: async (entry: SliceHistoryEntry) =>
-      (await loadSliceActions()).jumpToSliceSource(entry),
+    jumpToSliceSource: async (entry: SliceHistoryEntry) => {
+      const actions = await loadSliceActions();
+      if (actions) await actions.jumpToSliceSource(entry);
+    },
   };
 }

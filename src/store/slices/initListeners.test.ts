@@ -74,6 +74,7 @@ describe("initListeners remote profile sync", () => {
       get: useSampleStore.getState,
       applyProfileSettingsImmediately,
       bumpProfileEpoch,
+      getProfileEpoch: vi.fn(() => 1),
       resetFiltersOnProfileChange,
     });
 
@@ -108,6 +109,7 @@ describe("initListeners remote profile sync", () => {
         get: useSampleStore.getState,
         applyProfileSettingsImmediately: vi.fn(),
         bumpProfileEpoch: vi.fn(() => 3),
+        getProfileEpoch: vi.fn(() => 3),
         resetFiltersOnProfileChange: vi.fn(),
       });
 

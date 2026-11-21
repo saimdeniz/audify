@@ -82,8 +82,8 @@ export const InlineConfirmDeleteButton: React.FC<InlineConfirmDeleteButtonProps>
           className={
             idleClassName ??
             (idleLabel
-              ? "h-[24px] px-2 rounded-[3px] bg-danger/15 hover:bg-danger hover:text-danger-on border border-danger/50 text-danger font-mono text-[10.5px] font-semibold inline-flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-40 disabled:pointer-events-none shrink-0"
-              : `${box} bg-surface-2 hover:bg-danger hover:text-danger-on hover:border-danger border border-line text-fg-3 rounded-xs flex items-center justify-center transition-colors cursor-pointer shrink-0`)
+              ? "h-[24px] px-2 rounded-[3px] bg-surface-2 hover:bg-accent-soft hover:text-accent-fg border border-line hover:border-accent text-fg-2 font-mono text-[10.5px] font-semibold inline-flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-40 disabled:pointer-events-none shrink-0"
+              : `${box} bg-surface-2 hover:bg-accent-soft hover:text-accent-fg hover:border-accent border border-line text-fg-3 rounded-xs flex items-center justify-center transition-colors cursor-pointer shrink-0`)
           }
           title={deleteTitle}
         >

@@ -63,12 +63,11 @@ export const SimilarityReferenceBanner: React.FC<
   const handleSliderPointerUp = () => {
     if (!isPointerDraggingRef.current) return;
     isPointerDraggingRef.current = false;
-    setDraftMinPct((pending) => {
-      if (pending !== null && pending !== committedMinPct) {
-        onChangeMinScore(pending / 100);
-      }
-      return null;
-    });
+    const pending = draftMinPct;
+    setDraftMinPct(null);
+    if (pending !== null && pending !== committedMinPct) {
+      onChangeMinScore(pending / 100);
+    }
   };
 
   const handleSliderChange = (nextPct: number) => {
@@ -112,7 +111,7 @@ export const SimilarityReferenceBanner: React.FC<
             <button
               type="button"
               onClick={() => onDismissMatchedAi(similarityPendingIds)}
-              className="h-[22px] px-1.5 rounded-xs bg-danger/15 hover:bg-danger/25 border border-danger/50 text-danger font-mono text-[10.5px] font-semibold inline-flex items-center gap-1 transition-colors shrink-0 cursor-pointer"
+              className="h-[22px] px-1.5 rounded-xs bg-surface-2 hover:bg-accent-soft border border-line hover:border-accent text-fg-2 hover:text-accent-fg font-mono text-[10.5px] font-semibold inline-flex items-center gap-1 transition-colors shrink-0 cursor-pointer"
               title={`Dismiss all ${similarityPendingIds.length} pending AI tag suggestions across matched samples`}
             >
               <Ban className="w-3 h-3 shrink-0" />
@@ -195,7 +194,7 @@ export const SimilarityReferenceBanner: React.FC<
         <button
           type="button"
           onClick={onClearSimilarity}
-          className="w-[22px] h-[22px] rounded-xs border border-line bg-surface-2 hover:bg-danger/15 hover:border-danger/50 text-fg-2 hover:text-danger inline-flex items-center justify-center transition-colors shrink-0"
+          className="w-[22px] h-[22px] rounded-xs border border-line bg-surface-2 hover:bg-accent-soft hover:border-accent text-fg-2 hover:text-accent-fg inline-flex items-center justify-center transition-colors shrink-0"
           title="Clear similarity filter"
         >
           <X className="w-3.5 h-3.5" />

@@ -7,7 +7,6 @@ import { invokeCommand } from "../../utils/tauriCommands";
 export { formatTrashOpLabel } from "../../utils/trashStatusFormat";
 import {
   AUDIFY_STORAGE_KEYS,
-  persistNavigationFilters,
   safeSetItem,
   saveTrashStatus,
 } from "../storageHelpers";
@@ -33,7 +32,6 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
   const {
     set,
     get,
-    applyInstantMemoryFilter,
     emitNotice,
     releaseMatchingAudioHandle,
     pushBoundedHistory,
@@ -83,33 +81,6 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
       });
     },
 
-    requestTrashSubfolder: (
-      libraryId: number,
-      folderPath: string,
-      folderName: string,
-      sampleCount: number
-    ) => {
-      const state = get();
-      if (!state.enableAdvancedFileOps) return;
-      const lib = state.libraries.find((l) => l.id === libraryId);
-      if (lib?.is_read_only) {
-        emitNotice(
-          `Library "${lib.name}" is locked as a Protected Vault`,
-          "error"
-        );
-        return;
-      }
-      set({
-        pendingTrashRequest: {
-          kind: "folder",
-          libraryId,
-          folderPath,
-          folderName,
-          sampleCount,
-        },
-      });
-    },
-
     confirmPendingTrashRequest: async (dontAskAgain?: boolean) => {
       const req = get().pendingTrashRequest;
       set({ pendingTrashRequest: null });
@@ -123,37 +94,6 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
         await get().moveSamplesToTrash(req.sampleIds);
       } else {
         await get().trashPhysicalSubfolder(req.libraryId, req.folderPath);
-      }
-    },
-
-    cancelPendingTrashRequest: () => {
-      set({ pendingTrashRequest: null });
-    },
-
-    setTrashFilterActive: (trashFilterActive: boolean) => {
-      const wasTrashActive = get().trashFilterActive;
-      if (trashFilterActive) {
-        persistNavigationFilters(null, null, false, null);
-      }
-      set({
-        trashFilterActive,
-        ...(trashFilterActive
-          ? {
-              folderFilter: null,
-              selectedLicenseGroupId: null,
-              binFilterActive: false,
-              duplicatesFilterActive: false,
-              slicesFilterActive: false,
-              favoriteOnly: false,
-              recentOnly: false,
-              selectedCollectionId: null,
-            }
-          : wasTrashActive
-          ? { folderFilter: null }
-          : {}),
-      });
-      if (!applyInstantMemoryFilter({ preserveMultiSelect: false })) {
-        void get().fetchSamples({ preserveMultiSelect: false });
       }
     },
 
@@ -219,10 +159,20 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
                   label: `${summary.affected_count} file(s)`,
                 })
               : state.fileOpUndoStack;
+          let nextKnownIds = state.knownSampleIds;
+          if (state.knownSampleIds.size > 0) {
+            const mutated = new Set(state.knownSampleIds);
+            let removedAny = false;
+            for (const id of targetSet) {
+              if (mutated.delete(id)) removedAny = true;
+            }
+            if (removedAny) nextKnownIds = mutated;
+          }
           return {
             allProfileSamples: nextAll,
             rawSamples: nextRaw,
             samples: nextSamples,
+            knownSampleIds: nextKnownIds,
             favoritesCount: Math.max(0, state.favoritesCount - removedFavCount),
             trashedProfileSamples: [],
             duplicateScanResult: pruneDuplicateScanResult(
@@ -272,10 +222,19 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
       opts?: { isHistoryReplay?: boolean }
     ) => {
       if (get().trashOpStatus) return null;
+      const stForRelease = get();
       const idsToRelease =
         sampleIds && sampleIds.length > 0
           ? sampleIds
-          : get().samples.map((s) => s.id);
+          : Array.from(
+              new Set([
+                ...stForRelease.trashedProfileSamples.map((s) => s.id),
+                ...stForRelease.samples.map((s) => s.id),
+                ...(stForRelease.selectedSample?.is_trashed
+                  ? [stForRelease.selectedSample.id]
+                  : []),
+              ])
+            );
       const targetCount =
         sampleIds && sampleIds.length > 0
           ? sampleIds.length
@@ -354,10 +313,19 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
 
     emptyAudifyTrash: async (sampleIds?: number[]) => {
       if (get().trashOpStatus) return null;
+      const stForRelease = get();
       const idsToRelease =
         sampleIds && sampleIds.length > 0
           ? sampleIds
-          : get().samples.map((s) => s.id);
+          : Array.from(
+              new Set([
+                ...stForRelease.trashedProfileSamples.map((s) => s.id),
+                ...stForRelease.samples.map((s) => s.id),
+                ...(stForRelease.selectedSample?.is_trashed
+                  ? [stForRelease.selectedSample.id]
+                  : []),
+              ])
+            );
       const targetCount =
         sampleIds && sampleIds.length > 0
           ? sampleIds.length
@@ -416,6 +384,13 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
             selectedSampleIds: state.selectedSampleIds.filter(
               (id) => !deletedSet.has(id)
             ),
+            ...(state.selectedSample && deletedSet.has(state.selectedSample.id)
+              ? {
+                  selectedSample: null,
+                  isPlaying: false,
+                  sliceRange: null,
+                }
+              : {}),
             fileOpUndoStack: state.fileOpUndoStack.filter(retainHistoryItem),
             fileOpRedoStack: state.fileOpRedoStack.filter(retainHistoryItem),
             ...(summary.trashed_count === 0

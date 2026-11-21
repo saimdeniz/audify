@@ -97,7 +97,7 @@ export const AiAudioTab: React.FC = () => {
               <button
                 type="button"
                 onClick={() => void cancelAiAnalysis()}
-                className="h-[22px] px-2.5 bg-surface-3 hover:bg-surface-hover border border-line hover:border-danger text-fg text-[10.5px] font-semibold rounded-xs inline-flex items-center space-x-1 shrink-0 whitespace-nowrap cursor-pointer"
+                className="h-[22px] px-2.5 bg-surface-3 hover:bg-surface-hover border border-line hover:border-accent text-fg hover:text-accent-fg text-[10.5px] font-semibold rounded-xs inline-flex items-center space-x-1 shrink-0 whitespace-nowrap cursor-pointer"
               >
                 <X className="w-3 h-3 shrink-0" />
                 <span>Stop</span>
@@ -215,7 +215,7 @@ export const AiAudioTab: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => void dismissAllAiTagSuggestions()}
-                    className="h-[24px] px-2.5 bg-surface-2 hover:bg-surface-3 border border-line hover:border-danger text-fg-2 hover:text-danger text-[11px] font-medium rounded-xs inline-flex items-center space-x-1 shrink-0 whitespace-nowrap cursor-pointer"
+                    className="h-[24px] px-2.5 bg-surface-2 hover:bg-surface-3 border border-line hover:border-accent text-fg-2 hover:text-accent-fg text-[11px] font-medium rounded-xs inline-flex items-center space-x-1 shrink-0 whitespace-nowrap cursor-pointer"
                     title={`Dismiss all ${pendingAiSuggestionsCount.toLocaleString()} pending AI tag suggestions without adding them as tags`}
                   >
                     <Ban className="w-3 h-3 shrink-0" />

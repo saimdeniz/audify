@@ -71,9 +71,13 @@ fn execute_external_copy_disk(
             for entry in walkdir::WalkDir::new(&pb)
                 .follow_links(false)
                 .max_depth(8)
+                .max_open(32)
                 .into_iter()
                 .filter_map(|e| e.ok())
             {
+                if candidate_files.len() >= 10_000 {
+                    break;
+                }
                 if entry.file_type().is_file() {
                     let ep = entry.path();
                     let ext = ep

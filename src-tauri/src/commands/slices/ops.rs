@@ -143,12 +143,16 @@ pub(crate) fn batch_rename_slices_with_conn(
         }
         let clean_stem = sanitize_custom_slice_stem(&item.new_stem)?;
         let old_record = query_slice_record_by_id(conn, profile_id, item.slice_id)?;
+        if old_record.is_trashed {
+            return Err("Cannot rename a trashed slice".to_string());
+        }
         if normalize_clean_path(&old_record.slice_path)
             .eq_ignore_ascii_case(&normalize_clean_path(&old_record.source_file_path))
         {
             return Err("Refusing to rename a source library track".to_string());
         }
         let src_pb = ensure_existing_slice_in_scope(conn, user_dir, &old_record.slice_path)?;
+        super::ensure_slice_not_in_readonly_library(conn, &src_pb)?;
         let parent_dir = src_pb
             .parent()
             .ok_or_else(|| "Invalid slice parent folder".to_string())?;
@@ -415,6 +419,75 @@ mod tests {
         assert_eq!(restored.len(), 1);
         assert!(slices_dir.join("Beta.wav").exists());
         assert!(restored[0].is_favorite);
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn batch_restore_trashed_slices_avoids_colliding_target_overwrite() {
+        let base = temp_dir("batch_restore_collision");
+        let user_dir = base.join("user");
+        let slices_dir = user_dir.join("slices");
+        let trash_dir = user_dir.join("cache").join("slice_trash");
+        let lib_dir = base.join("lib");
+        fs::create_dir_all(&slices_dir).unwrap();
+        fs::create_dir_all(&trash_dir).unwrap();
+        fs::create_dir_all(&lib_dir).unwrap();
+
+        let mut conn = init_db(&user_dir).unwrap();
+        let pid = get_active_profile_id(&conn);
+
+        let src_wav = lib_dir.join("source.wav");
+        let t1_wav = trash_dir.join("1_dup_a.wav");
+        let t2_wav = trash_dir.join("2_dup_b.wav");
+        write_wav_i16(&src_wav, 48000, 1, &vec![500i16; 4800]).unwrap();
+        write_wav_i16(&t1_wav, 48000, 1, &vec![1111i16; 1200]).unwrap();
+        write_wav_i16(&t2_wav, 48000, 1, &vec![2222i16; 2400]).unwrap();
+
+        let orig_a = slices_dir.join("Hit.wav");
+        let orig_b = slices_dir.join("Hit.wav");
+        let len_t1 = fs::metadata(&t1_wav).unwrap().len();
+        let len_t2 = fs::metadata(&t2_wav).unwrap().len();
+
+        conn.execute(
+            "INSERT INTO sample_slices
+             (profile_id, slice_path, slice_name, source_file_path, source_file_name, start_sec, end_sec, duration_ms, is_trashed, trash_file_path)
+             VALUES (?1, ?2, 'Hit.wav', ?3, 'source.wav', 0.0, 0.25, 250, 1, ?4)",
+            params![
+                pid,
+                orig_a.to_string_lossy().to_string(),
+                src_wav.to_string_lossy().to_string(),
+                t1_wav.to_string_lossy().to_string()
+            ],
+        )
+        .unwrap();
+        let id1 = conn.last_insert_rowid();
+
+        // Simulate a second trashed slice whose original parent is unauthorized so both fallback to user_dir/slices/Hit.wav
+        let fallback_orig = base.join("unauthorized_dir").join("Hit.wav");
+        conn.execute(
+            "INSERT INTO sample_slices
+             (profile_id, slice_path, slice_name, source_file_path, source_file_name, start_sec, end_sec, duration_ms, is_trashed, trash_file_path)
+             VALUES (?1, ?2, 'Hit.wav', ?3, 'source.wav', 0.25, 0.5, 250, 1, ?4)",
+            params![
+                pid,
+                fallback_orig.to_string_lossy().to_string(),
+                src_wav.to_string_lossy().to_string(),
+                t2_wav.to_string_lossy().to_string()
+            ],
+        )
+        .unwrap();
+        let id2 = conn.last_insert_rowid();
+        let _ = orig_b;
+
+        let restored = restore_trashed_slice_files_with_conn(&mut conn, &user_dir, &[id1, id2])
+            .expect("batch restore must not overwrite or collide");
+        assert_eq!(restored.len(), 2);
+        assert_ne!(restored[0].slice_path, restored[1].slice_path);
+        assert_eq!(restored[0].slice_name, "Hit.wav");
+        assert_eq!(restored[1].slice_name, "Hit_01.wav");
+        assert_eq!(fs::metadata(&restored[0].slice_path).unwrap().len(), len_t1);
+        assert_eq!(fs::metadata(&restored[1].slice_path).unwrap().len(), len_t2);
 
         let _ = fs::remove_dir_all(&base);
     }

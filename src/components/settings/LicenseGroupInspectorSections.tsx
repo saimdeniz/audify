@@ -1,5 +1,7 @@
-import React from "react";
+import React, { useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Check, ChevronDown, Folder, FolderOpen, Plus, X } from "lucide-react";
+import { Z_INDEX } from "../../constants/zIndex";
 import { LicenseGroup, LicenseQuoteMode } from "../../types";
 import { formatLicenseGroupLine } from "../../utils/format";
 
@@ -147,7 +149,7 @@ export const LicenseLinkedFoldersSection: React.FC<
                       ),
                     })
                   }
-                  className="w-[16px] h-[16px] flex items-center justify-center text-fg-3 hover:text-danger rounded-xs transition-colors cursor-pointer"
+                  className="w-[16px] h-[16px] flex items-center justify-center text-fg-3 hover:text-accent-fg rounded-xs transition-colors cursor-pointer"
                   title="Unlink folder"
                 >
                   <X className="w-2.5 h-2.5" />
@@ -189,7 +191,30 @@ export const LicenseTemplateEditorSection: React.FC<
   isQuoteModeDropdownOpen,
   setIsQuoteModeDropdownOpen,
   updateLicenseGroup,
-}) => (
+}) => {
+  const quoteTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const [quoteMenuPos, setQuoteMenuPos] = useState({ top: 0, right: 0 });
+
+  useLayoutEffect(() => {
+    if (!isQuoteModeDropdownOpen) return;
+    const update = () => {
+      const rect = quoteTriggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setQuoteMenuPos({
+        top: Math.min(rect.bottom + 4, window.innerHeight - 160),
+        right: Math.max(8, window.innerWidth - rect.right),
+      });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [isQuoteModeDropdownOpen]);
+
+  return (
   <div className="space-y-1.5 pt-1 border-t border-line">
     <div className="flex items-center justify-between">
       <label className="text-[10px] font-mono text-fg-3 font-semibold">
@@ -198,6 +223,7 @@ export const LicenseTemplateEditorSection: React.FC<
 
       <div className="relative shrink-0">
         <button
+          ref={quoteTriggerRef}
           type="button"
           onClick={() => setIsQuoteModeDropdownOpen(!isQuoteModeDropdownOpen)}
           className="h-[20px] px-1.5 bg-surface-2 hover:border-accent border border-line rounded-xs font-mono text-[9px] text-fg flex items-center space-x-1 transition-colors cursor-pointer"
@@ -210,45 +236,54 @@ export const LicenseTemplateEditorSection: React.FC<
           <ChevronDown className="w-2.5 h-2.5 text-fg-3 shrink-0" />
         </button>
 
-        {isQuoteModeDropdownOpen && (
-          <>
-            <div
-              className="fixed inset-0 z-40"
-              onClick={() => setIsQuoteModeDropdownOpen(false)}
-            />
-            <div
-              data-settings-dropdown-open="true"
-              className="absolute right-0 top-full mt-1 w-36 bg-surface-2 border border-line rounded-md shadow-2xl py-1 z-50 font-mono text-[10px] backdrop-blur-md"
-            >
-              {QUOTE_MODE_OPTIONS.map((opt) => {
-                const isCurrent =
-                  (activeLicenseGroup.quoteMode || "auto") === opt.id;
-                return (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => {
-                      void updateLicenseGroup(activeLicenseGroup.id, {
-                        quoteMode: opt.id,
-                      });
-                      setIsQuoteModeDropdownOpen(false);
-                    }}
-                    className={`w-full px-2.5 py-1.5 text-left flex items-center justify-between transition-colors cursor-pointer ${
-                      isCurrent
-                        ? "bg-accent-soft text-accent-fg font-bold"
-                        : "text-fg-2 hover:bg-surface-3 hover:text-fg"
-                    }`}
-                  >
-                    <span>{opt.label}</span>
-                    {isCurrent && (
-                      <Check className="w-3 h-3 text-accent-fg shrink-0" />
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </>
-        )}
+        {isQuoteModeDropdownOpen &&
+          createPortal(
+            <>
+              <div
+                style={{ zIndex: Z_INDEX.contextMenu }}
+                className="fixed inset-0"
+                onClick={() => setIsQuoteModeDropdownOpen(false)}
+              />
+              <div
+                data-settings-dropdown-open="true"
+                data-mica-overlay="true"
+                style={{
+                  top: quoteMenuPos.top,
+                  right: quoteMenuPos.right,
+                  zIndex: Z_INDEX.floatingMenu,
+                }}
+                className="fixed w-36 bg-surface-2 border border-line rounded-md shadow-2xl py-1 font-mono text-[10px] backdrop-blur-md"
+              >
+                {QUOTE_MODE_OPTIONS.map((opt) => {
+                  const isCurrent =
+                    (activeLicenseGroup.quoteMode || "auto") === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => {
+                        void updateLicenseGroup(activeLicenseGroup.id, {
+                          quoteMode: opt.id,
+                        });
+                        setIsQuoteModeDropdownOpen(false);
+                      }}
+                      className={`w-full px-2.5 py-1.5 text-left flex items-center justify-between transition-colors cursor-pointer ${
+                        isCurrent
+                          ? "bg-accent-soft text-accent-fg font-bold"
+                          : "text-fg-2 hover:bg-surface-3 hover:text-fg"
+                      }`}
+                    >
+                      <span>{opt.label}</span>
+                      {isCurrent && (
+                        <Check className="w-3 h-3 text-accent-fg shrink-0" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </>,
+            document.body
+          )}
       </div>
     </div>
 
@@ -297,7 +332,8 @@ export const LicenseTemplateEditorSection: React.FC<
       className="w-full h-[58px] p-2 bg-surface-2 border border-line focus:border-accent font-mono text-[10.5px] text-fg outline-none rounded-xs resize-none leading-relaxed"
     />
   </div>
-);
+  );
+};
 
 interface LicensePreviewSectionProps {
   activeLicenseGroup: LicenseGroup;

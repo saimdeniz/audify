@@ -41,10 +41,46 @@ export async function runStartupMtimeBackfill(
   const epochChanged = () =>
     ctx.getProfileEpoch ? ctx.getProfileEpoch() !== startEpoch : false;
 
+const MTIME_FLUSH_THRESHOLD = 12000;
+
   try {
     let afterId = 0;
     let hasMore = true;
     let appliedTotal = 0;
+    const pendingPatches = new Map<number, number>();
+
+    const flushPendingPatches = () => {
+      if (pendingPatches.size === 0 || epochChanged()) return;
+      const patchMap = new Map(pendingPatches);
+      pendingPatches.clear();
+      ctx.set((st) => {
+        const nextAll = patchSampleMtimes(st.allProfileSamples, patchMap);
+        const nextRaw = patchSampleMtimes(st.rawSamples, patchMap);
+        const nextSamples = patchSampleMtimes(st.samples, patchMap);
+        const selMtime = st.selectedSample
+          ? patchMap.get(st.selectedSample.id)
+          : undefined;
+        const nextSelected =
+          st.selectedSample && selMtime !== undefined
+            ? { ...st.selectedSample, file_modified_at: selMtime }
+            : st.selectedSample;
+        if (
+          nextAll === st.allProfileSamples &&
+          nextRaw === st.rawSamples &&
+          nextSamples === st.samples &&
+          nextSelected === st.selectedSample
+        ) {
+          return {};
+        }
+        return {
+          allProfileSamples: nextAll,
+          rawSamples: nextRaw,
+          samples: nextSamples,
+          selectedSample: nextSelected,
+          smartCollectionCounts: st.smartCollectionCounts,
+        };
+      });
+    };
 
     while (hasMore) {
       if (epochChanged()) return;
@@ -55,31 +91,13 @@ export async function runStartupMtimeBackfill(
       if (!res || epochChanged()) return;
 
       if (res.patches.length > 0) {
-        const patchMap = new Map<number, number>();
         for (const p of res.patches) {
-          patchMap.set(p.sample_id, p.file_modified_at);
+          pendingPatches.set(p.sample_id, p.file_modified_at);
         }
-
-        ctx.set((st) => {
-          const nextAll = patchSampleMtimes(st.allProfileSamples, patchMap);
-          const nextRaw = patchSampleMtimes(st.rawSamples, patchMap);
-          const nextSamples = patchSampleMtimes(st.samples, patchMap);
-          const selMtime = st.selectedSample
-            ? patchMap.get(st.selectedSample.id)
-            : undefined;
-          const nextSelected =
-            st.selectedSample && selMtime !== undefined
-              ? { ...st.selectedSample, file_modified_at: selMtime }
-              : st.selectedSample;
-          return {
-            allProfileSamples: nextAll,
-            rawSamples: nextRaw,
-            samples: nextSamples,
-            selectedSample: nextSelected,
-            smartCollectionCounts: st.smartCollectionCounts,
-          };
-        });
         appliedTotal += res.patches.length;
+        if (pendingPatches.size >= MTIME_FLUSH_THRESHOLD) {
+          flushPendingPatches();
+        }
       }
 
       hasMore = res.has_more && res.last_scanned_id > afterId;
@@ -89,6 +107,8 @@ export async function runStartupMtimeBackfill(
         if (epochChanged()) return;
       }
     }
+
+    flushPendingPatches();
 
     if (
       appliedTotal > 0 &&

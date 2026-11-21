@@ -223,7 +223,9 @@ export const SampleBatchActionBar: React.FC<SampleBatchActionBarProps> = ({
                 ADD TO COLLECTION ({selectedSampleIds.length})
               </div>
               <div className="max-h-[160px] overflow-y-auto space-y-0.5 pr-0.5">
-                {rootCollections.map((rootCol) => {
+                {rootCollections
+                  .filter((c) => !c.smart_query?.trim())
+                  .map((rootCol) => {
                   const children = childrenByParentId.get(rootCol.id) || [];
                   const hasChildren = children.length > 0;
                   const isCollapsed = Boolean(collapsedMenuColIds[rootCol.id]);
@@ -316,7 +318,7 @@ export const SampleBatchActionBar: React.FC<SampleBatchActionBarProps> = ({
                           >
                             <span className="flex items-center space-x-1.5 truncate">
                               <CornerDownRight className="w-2.5 h-2.5 text-fg-3 shrink-0" />
-                              <span className="w-1.5 h-1.5 rounded-full shrink-0 shadow-xs bg-accent" />
+                              <span className="w-1.5 h-1.5 rounded-[2px] shrink-0 shadow-xs bg-accent" />
                               <span className="truncate">{child.name}</span>
                             </span>
                             <span className="font-mono text-[9.5px] text-fg-3 shrink-0 ml-1">
@@ -448,7 +450,7 @@ export const SampleBatchActionBar: React.FC<SampleBatchActionBarProps> = ({
                     await assignGenreBatch(selectedSampleIds, "");
                     setBatchPopover(null);
                   }}
-                  className="text-[10px] font-mono text-fg-3 hover:text-danger"
+                  className="text-[10px] font-mono text-fg-3 hover:text-accent-fg"
                   title="Clear genre on selected"
                 >
                   Clear

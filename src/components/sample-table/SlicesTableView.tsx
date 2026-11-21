@@ -5,7 +5,7 @@ import { AUDIFY_STORAGE_KEYS } from "../../constants/storageKeys";
 import { safeSetItem } from "../../store/storageHelpers";
 import { useSampleStore } from "../../store/useSampleStore";
 import { SliceHistoryEntry } from "../../types";
-import { startNativeSampleDrag } from "../../utils/drag";
+import { beginDragOnMove, startNativeSampleDrag } from "../../utils/drag";
 import { safeGetItem } from "../../utils/localStorageSafe";
 import { normalizePathForMatch } from "../../utils/pathHelpers";
 import { getVisibleSortedSlices } from "../../utils/slicePreview";
@@ -95,6 +95,14 @@ export const SlicesTableView: React.FC = () => {
     null
   );
   const parentRef = useRef<HTMLDivElement | null>(null);
+  const activeResizeCleanupRef = useRef<(() => void) | null>(null);
+  const suppressNextRowClickRef = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      activeResizeCleanupRef.current?.();
+    };
+  }, []);
 
   useEffect(() => {
     if (isSliceTrashMode) {
@@ -108,9 +116,11 @@ export const SlicesTableView: React.FC = () => {
     (colKey: keyof SliceColWidths, e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
+      activeResizeCleanupRef.current?.();
       const startX = e.clientX;
       const startW = colWidths[colKey];
       const bounds = SLICE_COL_BOUNDS[colKey];
+      let latestWidths = colWidths;
 
       const onMove = (ev: MouseEvent) => {
         const delta = ev.clientX - startX;
@@ -119,21 +129,29 @@ export const SlicesTableView: React.FC = () => {
           Math.min(bounds.max, Math.round(startW + delta))
         );
         setColWidths((prev) => {
+          if (prev[colKey] === nextW) return prev;
           const updated = { ...prev, [colKey]: nextW };
-          safeSetItem(
-            AUDIFY_STORAGE_KEYS.sliceColumnWidthsV1,
-            JSON.stringify(updated)
-          );
+          latestWidths = updated;
           return updated;
         });
       };
 
-      const onUp = () => {
+      const cleanup = () => {
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
         document.body.style.cursor = "";
+        activeResizeCleanupRef.current = null;
       };
 
+      const onUp = () => {
+        cleanup();
+        safeSetItem(
+          AUDIFY_STORAGE_KEYS.sliceColumnWidthsV1,
+          JSON.stringify(latestWidths)
+        );
+      };
+
+      activeResizeCleanupRef.current = cleanup;
       document.body.style.cursor = "col-resize";
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
@@ -216,6 +234,7 @@ export const SlicesTableView: React.FC = () => {
     getScrollElement: () => parentRef.current,
     estimateSize: () => SLICE_ROW_HEIGHT,
     overscan: 14,
+    scrollMargin: 26,
   });
 
   useEffect(() => {
@@ -228,6 +247,11 @@ export const SlicesTableView: React.FC = () => {
 
   const handleRowClick = useCallback(
     (e: React.MouseEvent, entry: SliceHistoryEntry, index: number) => {
+      if (suppressNextRowClickRef.current) {
+        suppressNextRowClickRef.current = false;
+        e.stopPropagation();
+        return;
+      }
       const st = useSampleStore.getState();
       if (e.shiftKey && st.lastSelectedSliceIndex !== null) {
         const start = Math.min(st.lastSelectedSliceIndex, index);
@@ -283,12 +307,17 @@ export const SlicesTableView: React.FC = () => {
     []
   );
 
-  const handleRowDragStart = useCallback(
-    (e: React.DragEvent, entry: SliceHistoryEntry) => {
+  const handleRowMouseDown = useCallback(
+    (e: React.MouseEvent, entry: SliceHistoryEntry) => {
+      if (e.button !== 0) return;
+      const target = e.target as HTMLElement;
+      if (target.closest("button")) return;
+
       e.preventDefault();
       const st = useSampleStore.getState();
       const inTrash = st.trashFilterActive && st.trashViewTab === "slices";
       if (!entry.file_exists || entry.is_trashed || inTrash) return;
+
       const isPart = st.selectedSliceIds.includes(entry.id);
       const paths = isPart
         ? st.sliceHistory
@@ -297,9 +326,17 @@ export const SlicesTableView: React.FC = () => {
             )
             .map((s) => s.slice_path)
         : [entry.slice_path];
-      void startNativeSampleDrag(
-        paths.length > 0 ? paths : [entry.slice_path]
-      );
+      const finalPaths = paths.length > 0 ? paths : [entry.slice_path];
+
+      beginDragOnMove(e.clientX, e.clientY, () => {
+        suppressNextRowClickRef.current = true;
+        window.dispatchEvent(new CustomEvent("audify:hide-tooltip"));
+        void startNativeSampleDrag(finalPaths).finally(() => {
+          window.setTimeout(() => {
+            suppressNextRowClickRef.current = false;
+          }, 60);
+        });
+      });
     },
     []
   );
@@ -310,7 +347,7 @@ export const SlicesTableView: React.FC = () => {
       <div
         ref={parentRef}
         tabIndex={0}
-        role="listbox"
+        role="grid"
         aria-label="Saved slices"
         aria-multiselectable="true"
         className="flex-1 overflow-auto relative outline-none"
@@ -529,7 +566,7 @@ export const SlicesTableView: React.FC = () => {
                     onRowClick={handleRowClick}
                     onRowDoubleClick={handleRowDoubleClick}
                     onRowContextMenu={handleRowContextMenu}
-                    onRowDragStart={handleRowDragStart}
+                    onRowMouseDown={handleRowMouseDown}
                   />
                 );
               })}

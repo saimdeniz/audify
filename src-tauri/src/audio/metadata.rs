@@ -231,132 +231,113 @@ fn match_tokens_to_canonical_genre(tokens: &HashSet<String>, raw_lower: &str) ->
     None
 }
 
-pub fn extract_embedded_audio_meta(
-    path: Option<&Path>,
-    file_name: &str,
-    file_path: &str,
-) -> EmbeddedAudioMeta {
-    let mut meta = EmbeddedAudioMeta::default();
+fn populate_embedded_meta_from_tagged(
+    tagged: &lofty::file::TaggedFile,
+    meta: &mut EmbeddedAudioMeta,
+) {
+    for tag in tagged.tags() {
+        if meta.artist.is_empty() {
+            if let Some(a) = tag
+                .artist()
+                .map(|c| c.into_owned())
+                .or_else(|| {
+                    tag.get_string(&lofty::tag::ItemKey::AlbumArtist)
+                        .map(|s| s.to_string())
+                })
+                .or_else(|| {
+                    tag.get_string(&lofty::tag::ItemKey::Composer)
+                        .map(|s| s.to_string())
+                })
+            {
+                let s = a.trim().to_string();
+                if !s.is_empty() {
+                    meta.artist = s;
+                }
+            }
+        }
 
-    if let Some(p) = path {
-        let raw = p.to_string_lossy();
-        let is_safe_regular = !is_unc_or_network_path(&raw)
-            && !has_ntfs_ads_colon(&raw)
-            && fs::symlink_metadata(p)
-                .map(|m| !m.file_type().is_symlink() && m.is_file())
-                .unwrap_or(false);
-        if is_safe_regular {
-            if let Ok(probed) = Probe::open(p) {
-                if let Ok(tagged) = probed.read() {
-                    for tag in tagged.tags() {
-                        if meta.artist.is_empty() {
-                            if let Some(a) = tag
-                                .artist()
-                                .map(|c| c.into_owned())
-                                .or_else(|| {
-                                    tag.get_string(&lofty::tag::ItemKey::AlbumArtist)
-                                        .map(|s| s.to_string())
-                                })
-                                .or_else(|| {
-                                    tag.get_string(&lofty::tag::ItemKey::Composer)
-                                        .map(|s| s.to_string())
-                                })
-                            {
-                                let s = a.trim().to_string();
-                                if !s.is_empty() {
-                                    meta.artist = s;
-                                }
-                            }
-                        }
+        if meta.album.is_empty() {
+            if let Some(al) = tag.album() {
+                let s = al.trim().to_string();
+                if !s.is_empty() {
+                    meta.album = s;
+                }
+            }
+        }
 
-                        if meta.album.is_empty() {
-                            if let Some(al) = tag.album() {
-                                let s = al.trim().to_string();
-                                if !s.is_empty() {
-                                    meta.album = s;
-                                }
-                            }
-                        }
-
-                        if meta.year.is_empty() {
-                            if let Some(y) = tag.year() {
-                                if (1900..=2100).contains(&y) {
-                                    meta.year = y.to_string();
-                                }
-                            }
-                            if meta.year.is_empty() {
-                                if let Some(raw_date) = tag
-                                    .get_string(&lofty::tag::ItemKey::Year)
-                                    .or_else(|| tag.get_string(&lofty::tag::ItemKey::RecordingDate))
-                                    .or_else(|| {
-                                        tag.get_string(&lofty::tag::ItemKey::OriginalReleaseDate)
-                                    })
-                                {
-                                    let digits: String = raw_date
-                                        .trim()
-                                        .chars()
-                                        .take_while(|c| c.is_ascii_digit())
-                                        .collect();
-                                    if digits.len() == 4 {
-                                        meta.year = digits;
-                                    }
-                                }
-                            }
-                        }
-
-                        if meta.genre.is_empty() {
-                            let mut raw_candidates: Vec<String> = Vec::new();
-                            if let Some(g) = tag.genre() {
-                                let s = g.trim().to_string();
-                                if !s.is_empty() {
-                                    raw_candidates.push(s);
-                                }
-                            }
-                            if let Some(m) = tag.get_string(&lofty::tag::ItemKey::Mood) {
-                                let s = m.trim().to_string();
-                                if !s.is_empty() {
-                                    raw_candidates.push(s);
-                                }
-                            }
-
-                            for raw in raw_candidates {
-                                let lower = raw.to_lowercase();
-                                if lower == "other"
-                                    || lower == "unknown"
-                                    || lower == "sfx"
-                                    || lower == "sound effect"
-                                    || lower == "sound effects"
-                                    || lower == "none"
-                                    || lower
-                                        .chars()
-                                        .all(|c| c.is_numeric() || c == '(' || c == ')')
-                                {
-                                    continue;
-                                }
-                                let embedded_tokens = tokenize_audio_identifier(&lower);
-                                if let Some(canonical) =
-                                    match_tokens_to_canonical_genre(&embedded_tokens, &lower)
-                                {
-                                    meta.genre = canonical;
-                                    break;
-                                }
-                                let first_seg = raw
-                                    .split([';', '/', ',', '|'])
-                                    .next()
-                                    .unwrap_or("")
-                                    .trim();
-                                if first_seg.len() >= 3 && first_seg.len() <= 22 {
-                                    meta.genre = first_seg.to_string();
-                                    break;
-                                }
-                            }
-                        }
+        if meta.year.is_empty() {
+            if let Some(y) = tag.year() {
+                if (1900..=2100).contains(&y) {
+                    meta.year = y.to_string();
+                }
+            }
+            if meta.year.is_empty() {
+                if let Some(raw_date) = tag
+                    .get_string(&lofty::tag::ItemKey::Year)
+                    .or_else(|| tag.get_string(&lofty::tag::ItemKey::RecordingDate))
+                    .or_else(|| tag.get_string(&lofty::tag::ItemKey::OriginalReleaseDate))
+                {
+                    let digits: String = raw_date
+                        .trim()
+                        .chars()
+                        .take_while(|c| c.is_ascii_digit())
+                        .collect();
+                    if digits.len() == 4 {
+                        meta.year = digits;
                     }
                 }
             }
         }
-    }
 
+        if meta.genre.is_empty() {
+            let mut raw_candidates: Vec<String> = Vec::new();
+            if let Some(g) = tag.genre() {
+                let s = g.trim().to_string();
+                if !s.is_empty() {
+                    raw_candidates.push(s);
+                }
+            }
+            if let Some(m) = tag.get_string(&lofty::tag::ItemKey::Mood) {
+                let s = m.trim().to_string();
+                if !s.is_empty() {
+                    raw_candidates.push(s);
+                }
+            }
+
+            for raw in raw_candidates {
+                let lower = raw.to_lowercase();
+                if lower == "other"
+                    || lower == "unknown"
+                    || lower == "sfx"
+                    || lower == "sound effect"
+                    || lower == "sound effects"
+                    || lower == "none"
+                    || lower
+                        .chars()
+                        .all(|c| c.is_numeric() || c == '(' || c == ')')
+                {
+                    continue;
+                }
+                let embedded_tokens = tokenize_audio_identifier(&lower);
+                if let Some(canonical) = match_tokens_to_canonical_genre(&embedded_tokens, &lower) {
+                    meta.genre = canonical;
+                    break;
+                }
+                let first_seg = raw
+                    .split([';', '/', ',', '|'])
+                    .next()
+                    .unwrap_or("")
+                    .trim();
+                if first_seg.len() >= 3 && first_seg.len() <= 22 {
+                    meta.genre = first_seg.to_string();
+                    break;
+                }
+            }
+        }
+    }
+}
+
+fn fill_fallback_genre_from_path(meta: &mut EmbeddedAudioMeta, file_name: &str, file_path: &str) {
     if meta.genre.is_empty() {
         let (lower_stem, lower_parent, lower_grandparent) =
             extract_stem_and_near_folders(file_path, file_name);
@@ -374,7 +355,52 @@ pub fn extract_embedded_audio_meta(
             }
         }
     }
+}
 
+fn open_safe_lofty_tagged_file(path: Option<&Path>) -> Option<lofty::file::TaggedFile> {
+    let p = path?;
+    let raw = p.to_string_lossy();
+    let is_safe_regular = !is_unc_or_network_path(&raw)
+        && !has_ntfs_ads_colon(&raw)
+        && fs::symlink_metadata(p)
+            .map(|m| !m.file_type().is_symlink() && m.is_file())
+            .unwrap_or(false);
+    if !is_safe_regular {
+        return None;
+    }
+    Probe::open(p).ok()?.read().ok()
+}
+
+/// Single-pass Lofty probe extracting both embedded metadata (artist/album/year/genre) and
+/// fast BPM/Key tags (`TBPM`/`TKEY`) + filename heuristics without opening the file twice.
+pub fn extract_embedded_meta_and_bpm_key(
+    path: Option<&Path>,
+    file_name: &str,
+    file_path: &str,
+) -> (EmbeddedAudioMeta, crate::dsp_analysis::BpmKeyResult) {
+    let mut meta = EmbeddedAudioMeta::default();
+    let mut bpm_key = crate::dsp_analysis::BpmKeyResult::default();
+
+    if let Some(tagged) = open_safe_lofty_tagged_file(path) {
+        populate_embedded_meta_from_tagged(&tagged, &mut meta);
+        crate::dsp_analysis::extract_bpm_key_from_tagged_file(&tagged, &mut bpm_key);
+    }
+
+    fill_fallback_genre_from_path(&mut meta, file_name, file_path);
+    crate::dsp_analysis::fill_bpm_key_from_filename(file_name, &mut bpm_key);
+    (meta, bpm_key)
+}
+
+pub fn extract_embedded_audio_meta(
+    path: Option<&Path>,
+    file_name: &str,
+    file_path: &str,
+) -> EmbeddedAudioMeta {
+    let mut meta = EmbeddedAudioMeta::default();
+    if let Some(tagged) = open_safe_lofty_tagged_file(path) {
+        populate_embedded_meta_from_tagged(&tagged, &mut meta);
+    }
+    fill_fallback_genre_from_path(&mut meta, file_name, file_path);
     meta
 }
 

@@ -56,10 +56,17 @@ pub(super) fn restore_manual_meta_slices_and_bin(
             .and_then(|idx| resolved_ref_ids.get(idx).copied().flatten());
         let (final_src_path, final_src_name) = if let Some(sid) = resolved_src_id {
             if let Some((fpath, fname)) = sample_meta_by_id.get(&sid) {
-                (normalize_clean_path(fpath), fname.clone())
+                (
+                    crate::commands::slices::format_os_display_path(std::path::Path::new(
+                        &normalize_clean_path(fpath),
+                    )),
+                    fname.clone(),
+                )
             } else {
                 (
-                    normalize_clean_path(&sl.source_file_path),
+                    crate::commands::slices::format_os_display_path(std::path::Path::new(
+                        &normalize_clean_path(&sl.source_file_path),
+                    )),
                     sl.source_file_name.clone(),
                 )
             }
@@ -69,11 +76,15 @@ pub(super) fn restore_manual_meta_slices_and_bin(
             (sl.source_file_name.clone(), sl.source_file_name.clone())
         } else {
             (
-                normalize_clean_path(&sl.source_file_path),
+                crate::commands::slices::format_os_display_path(std::path::Path::new(
+                    &normalize_clean_path(&sl.source_file_path),
+                )),
                 sl.source_file_name.clone(),
             )
         };
-        let norm_slice = normalize_clean_path(raw_slice_path);
+        let norm_slice = crate::commands::slices::format_os_display_path(std::path::Path::new(
+            &normalize_clean_path(raw_slice_path),
+        ));
         let pitch = if sl.pitch_semitones.is_finite() {
             sl.pitch_semitones.clamp(-24.0, 24.0)
         } else {

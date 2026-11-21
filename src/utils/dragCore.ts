@@ -95,6 +95,7 @@ export function tryAcquireNativeDrag(): boolean {
 
 export function releaseNativeDrag(): void {
   isNativeDragInFlight = false;
+  isLeftMouseButtonHeld = false;
 }
 
 // Prevent WebView2 / Chromium from starting a competing HTML5 text/link DoDragDrop loop

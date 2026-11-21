@@ -116,6 +116,7 @@ pub fn create_physical_subfolder(
     crate::library_watcher::suppress_watcher_if_managed(&app, 2500);
     let conn = state.lock_db();
     create_physical_subfolder_with_conn(&conn, library_id, &parent_folder_path, &new_folder_name)
+        .map_err(|e| crate::security::sanitize_err(&state.user_dir, &e))
 }
 
 pub(crate) fn rename_physical_subfolder_with_conn(
@@ -256,6 +257,58 @@ pub(crate) fn rename_physical_subfolder_with_conn(
         return Err(e);
     }
 
+    if let Err(e) = crate::commands::slices::relink_sample_slices_path_prefix(
+        &tx,
+        &old_prefix_slash,
+        &old_prefix_lower,
+        &norm_new_folder,
+    ) {
+        drop(tx);
+        let _ = fs::rename(&target_pb, &clean_folder_pb);
+        return Err(e);
+    }
+
+    let collection_rules: Vec<(i64, String)> = tx
+        .prepare("SELECT id, rule_path FROM collections WHERE rule_path IS NOT NULL AND rule_path != ''")
+        .ok()
+        .and_then(|mut stmt| {
+            stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+                .ok()
+                .map(|rows| rows.flatten().collect())
+        })
+        .unwrap_or_default();
+    let old_folder_lower = norm_old_folder.to_lowercase();
+    for (cid, rp) in collection_rules {
+        let norm_rp = normalize_clean_path(&rp);
+        let updated_rp = if cfg!(windows) {
+            if norm_rp.to_lowercase() == old_folder_lower {
+                Some(norm_new_folder.clone())
+            } else {
+                crate::commands::libraries::replace_library_prefix(
+                    &norm_rp,
+                    &old_prefix_slash,
+                    &old_prefix_lower,
+                    &norm_new_folder,
+                )
+            }
+        } else if norm_rp == norm_old_folder {
+            Some(norm_new_folder.clone())
+        } else {
+            crate::commands::libraries::replace_library_prefix(
+                &norm_rp,
+                &old_prefix_slash,
+                &old_prefix_lower,
+                &norm_new_folder,
+            )
+        };
+        if let Some(new_rp) = updated_rp {
+            let _ = tx.execute(
+                "UPDATE collections SET rule_path = ?1 WHERE id = ?2",
+                params![new_rp, cid],
+            );
+        }
+    }
+
     if let Err(e) = crate::commands::profiles::path_relink::relink_prefix_in_all_profiles_settings(
         &tx,
         &norm_old_folder,
@@ -303,13 +356,17 @@ pub(super) fn ensure_writable_library_folder_for_relocate(
         return Err("Parent directory traversal ('..') is not allowed in target folder".to_string());
     }
 
+    let active_id = crate::db::get_active_profile_id(conn);
     let (lib_path, lib_name, lib_read_only): (String, String, bool) = conn
         .query_row(
-            "SELECT path, name, COALESCE(is_read_only, 0) FROM libraries WHERE id = ?1",
-            params![library_id],
+            "SELECT path, name, COALESCE(is_read_only, 0)
+             FROM libraries
+             WHERE id = ?1
+               AND (is_global = 1 OR id IN (SELECT library_id FROM profile_libraries WHERE profile_id = ?2))",
+            params![library_id, active_id],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
-        .map_err(|_| "Target library not found".to_string())?;
+        .map_err(|_| "Target library not found in active profile".to_string())?;
 
     if lib_read_only {
         return Err(format!(
@@ -372,7 +429,8 @@ pub fn rename_physical_subfolder(
     crate::library_watcher::suppress_watcher_if_managed(&app, 2500);
     let mut conn = state.lock_db();
     let res =
-        rename_physical_subfolder_with_conn(&mut conn, library_id, &folder_path, &new_folder_name)?;
+        rename_physical_subfolder_with_conn(&mut conn, library_id, &folder_path, &new_folder_name)
+            .map_err(|e| crate::security::sanitize_err(&state.user_dir, &e))?;
     if res.updated_sample_count > 0 {
         ai_state.invalidate_vector_cache();
     }

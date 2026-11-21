@@ -1,5 +1,7 @@
-import React from "react";
+import React, { useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Check, ChevronDown, Zap } from "lucide-react";
+import { Z_INDEX } from "../../constants/zIndex";
 import {
   AutoTagCategoryConfig,
   AutoTagPreviewResult,
@@ -196,6 +198,27 @@ export const TagRuleEditorPanel: React.FC<TagRuleEditorPanelProps> = ({
   const excludedKeywords = (activeInspectedRule.keywords || []).filter(
     (k) => k.startsWith("!") || k.startsWith("-")
   );
+  const categoryTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const [categoryMenuPos, setCategoryMenuPos] = useState({ top: 0, left: 0 });
+
+  useLayoutEffect(() => {
+    if (!isRuleCategoryDropdownOpen) return;
+    const update = () => {
+      const rect = categoryTriggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setCategoryMenuPos({
+        top: Math.min(rect.bottom + 4, window.innerHeight - 220),
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - 152)),
+      });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [isRuleCategoryDropdownOpen]);
 
   return (
     <>
@@ -212,6 +235,7 @@ export const TagRuleEditorPanel: React.FC<TagRuleEditorPanelProps> = ({
 
         <div className="relative shrink-0">
           <button
+            ref={categoryTriggerRef}
             type="button"
             onClick={() =>
               setIsRuleCategoryDropdownOpen(!isRuleCategoryDropdownOpen)
@@ -225,46 +249,55 @@ export const TagRuleEditorPanel: React.FC<TagRuleEditorPanelProps> = ({
             <ChevronDown className="w-2.5 h-2.5 text-fg-3 shrink-0" />
           </button>
 
-          {isRuleCategoryDropdownOpen && (
-            <>
-              <div
-                className="fixed inset-0 z-40"
-                onClick={() => setIsRuleCategoryDropdownOpen(false)}
-              />
-              <div
-                data-settings-dropdown-open="true"
-                className="absolute left-0 top-full mt-1 w-36 bg-surface-2 border border-line rounded-md shadow-2xl py-1 z-50 font-mono text-[10px] backdrop-blur-md"
-              >
-                {allAvailableCategories.map((c) => {
-                  const isCurrent =
-                    (activeInspectedRule.category || "SFX").toLowerCase() ===
-                    c.toLowerCase();
-                  return (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => {
-                        void updateAutoTagRule(activeInspectedRule.id, {
-                          category: c,
-                        });
-                        setIsRuleCategoryDropdownOpen(false);
-                      }}
-                      className={`w-full px-2.5 py-1 text-left flex items-center justify-between transition-colors cursor-pointer ${
-                        isCurrent
-                          ? "bg-accent-soft text-accent-fg font-bold"
-                          : "text-fg-2 hover:bg-surface-3 hover:text-fg"
-                      }`}
-                    >
-                      <span>{c}</span>
-                      {isCurrent && (
-                        <Check className="w-2.5 h-2.5 text-accent-fg shrink-0" />
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </>
-          )}
+          {isRuleCategoryDropdownOpen &&
+            createPortal(
+              <>
+                <div
+                  style={{ zIndex: Z_INDEX.contextMenu }}
+                  className="fixed inset-0"
+                  onClick={() => setIsRuleCategoryDropdownOpen(false)}
+                />
+                <div
+                  data-settings-dropdown-open="true"
+                  data-mica-overlay="true"
+                  style={{
+                    top: categoryMenuPos.top,
+                    left: categoryMenuPos.left,
+                    zIndex: Z_INDEX.floatingMenu,
+                  }}
+                  className="fixed w-36 max-h-[240px] overflow-y-auto bg-surface-2 border border-line rounded-md shadow-2xl py-1 font-mono text-[10px] backdrop-blur-md"
+                >
+                  {allAvailableCategories.map((c) => {
+                    const isCurrent =
+                      (activeInspectedRule.category || "SFX").toLowerCase() ===
+                      c.toLowerCase();
+                    return (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => {
+                          void updateAutoTagRule(activeInspectedRule.id, {
+                            category: c,
+                          });
+                          setIsRuleCategoryDropdownOpen(false);
+                        }}
+                        className={`w-full px-2.5 py-1 text-left flex items-center justify-between transition-colors cursor-pointer ${
+                          isCurrent
+                            ? "bg-accent-soft text-accent-fg font-bold"
+                            : "text-fg-2 hover:bg-surface-3 hover:text-fg"
+                        }`}
+                      >
+                        <span>{c}</span>
+                        {isCurrent && (
+                          <Check className="w-2.5 h-2.5 text-accent-fg shrink-0" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>,
+              document.body
+            )}
         </div>
 
         <div className="flex items-center space-x-1.5 bg-surface-soft border border-line px-1.5 h-[24px] rounded-xs ml-auto">

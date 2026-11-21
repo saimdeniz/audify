@@ -273,6 +273,8 @@ html[data-theme="contrast"] .audify-drop-overlay-backdrop {
   background-color: rgba(0, 0, 0, 0.88);
   --c-surface-2: #121212;
   --c-surface-3: #1C1C1C;
+  --c-line: #FFFFFF;
+  --c-line-strong: #FFFFFF;
   --c-fg: #FFFFFF;
   --c-fg-2: #E4E4E4;
   --c-fg-3: #BDBDBD;

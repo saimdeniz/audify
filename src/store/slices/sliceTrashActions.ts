@@ -106,17 +106,31 @@ export function createSliceTrashActions(
         : st.trashedSliceHistory.map((s) => s.id);
 
     if (candidateIds.length === 0) return [];
+    const epoch = ctx.getProfileEpoch();
     const idSet = new Set(candidateIds);
-    const affected = st.trashedSliceHistory.filter((s) => idSet.has(s.id));
+    const affected = [
+      ...st.trashedSliceHistory.filter((s) => idSet.has(s.id)),
+      ...st.sliceHistory.filter((s) => idSet.has(s.id)),
+    ];
+    const targetPaths = collectSliceMediaPaths(affected);
+    if (
+      st.selectedSample &&
+      st.selectedSample.id < 0 &&
+      idSet.has(-st.selectedSample.id) &&
+      st.selectedSample.file_path
+    ) {
+      targetPaths.push(st.selectedSample.file_path);
+    }
 
     set({
       trashOpStatus: { kind: "restoring", count: candidateIds.length },
     });
     try {
-      await stopAudioIfMatchesAnyPath(collectSliceMediaPaths(affected));
+      await stopAudioIfMatchesAnyPath(targetPaths);
       const restored = await invokeCommand("restore_trashed_slice_files", {
         sliceIds: candidateIds,
       });
+      if (epoch !== ctx.getProfileEpoch()) return [];
       const restoredIds = new Set(restored.map((r) => r.id));
 
       set((prev) => {
@@ -149,7 +163,10 @@ export function createSliceTrashActions(
         return {
           sliceHistory: nextHistory,
           trashedSliceHistory: nextTrashed,
-          trashedSliceCount: nextTrashed.length,
+          trashedSliceCount: Math.max(
+            nextTrashed.length,
+            prev.trashedSliceCount - restored.length
+          ),
           selectedSliceIds: nextSelectedIds,
           activeSliceId:
             prev.activeSliceId !== null && restoredIds.has(prev.activeSliceId)

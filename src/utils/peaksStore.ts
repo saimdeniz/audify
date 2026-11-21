@@ -57,8 +57,10 @@ async function flush() {
       rememberPeakJson(id, "");
     }
   } finally {
-    ids.forEach((id) => inflight.delete(id));
-    emit();
+    if (gen === generation) {
+      ids.forEach((id) => inflight.delete(id));
+      emit();
+    }
   }
 }
 

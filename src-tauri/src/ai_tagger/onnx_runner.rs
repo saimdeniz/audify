@@ -20,6 +20,7 @@ pub struct AiInferenceOutput {
 pub struct LoadedOnnxModel {
     pub model_id: String,
     pub model_path: PathBuf,
+    pub runtime_dll_path: PathBuf,
     pub input_name: String,
     pub scores_output_idx: usize,
     pub embeddings_output_idx: Option<usize>,
@@ -100,6 +101,7 @@ impl LoadedOnnxModel {
         Ok(Self {
             model_id: model_id.to_string(),
             model_path: model_path.to_path_buf(),
+            runtime_dll_path: runtime_dll_path.to_path_buf(),
             input_name,
             scores_output_idx,
             embeddings_output_idx,

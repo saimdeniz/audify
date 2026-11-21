@@ -1,7 +1,7 @@
 mod scope;
 
 use self::scope::{
-    are_pending_files_size_stable, compute_target_folder_scope, is_relevant_fs_path,
+    are_pending_files_size_stable, compute_target_folder_scope, is_relevant_fs_event_path,
     match_library_root, minimal_top_level_roots, normalize_match_key, PendingLibraryDirty,
     MAX_COALESCE_WAIT,
 };
@@ -13,6 +13,7 @@ use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
@@ -20,6 +21,7 @@ use tauri::{AppHandle, Emitter, Manager};
 const DEBOUNCE_DELAY: Duration = Duration::from_millis(1600);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const STABILITY_RECHECK_DELAY: Duration = Duration::from_millis(700);
+const UNATTACHED_ROOT_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LibraryFsChangedPayload {
@@ -46,6 +48,7 @@ enum WatcherMsg {
 pub struct LibraryWatcherState {
     sender: Arc<Mutex<Option<mpsc::Sender<WatcherMsg>>>>,
     last_config: Arc<Mutex<Option<WatcherConfig>>>,
+    has_unattached_roots: Arc<AtomicBool>,
 }
 
 impl LibraryWatcherState {
@@ -59,16 +62,19 @@ impl LibraryWatcherState {
         drop(sender_guard);
 
         let tx_worker = tx.clone();
+        let has_unattached = Arc::clone(&self.has_unattached_roots);
         std::thread::Builder::new()
             .name("audify-lib-watcher".to_string())
-            .spawn(move || run_watcher_loop(app, rx, tx_worker))
+            .spawn(move || run_watcher_loop(app, rx, tx_worker, has_unattached))
             .ok();
     }
 
     pub fn reconcile_from_conn(&self, conn: &Connection, user_dir: &Path) {
         let config = resolve_watcher_config_from_db(conn, user_dir);
         let mut cfg_guard = self.last_config.lock().unwrap_or_else(|e| e.into_inner());
-        if cfg_guard.as_ref() == Some(&config) {
+        if cfg_guard.as_ref() == Some(&config)
+            && !self.has_unattached_roots.load(Ordering::Relaxed)
+        {
             return;
         }
         *cfg_guard = Some(config.clone());
@@ -178,6 +184,7 @@ fn run_watcher_loop(
     app: AppHandle,
     rx: mpsc::Receiver<WatcherMsg>,
     tx_self: mpsc::Sender<WatcherMsg>,
+    has_unattached_roots: Arc<AtomicBool>,
 ) {
     let tx_notify = tx_self.clone();
     let mut watcher: Option<RecommendedWatcher> = notify::recommended_watcher(move |res| {
@@ -187,8 +194,10 @@ fn run_watcher_loop(
 
     let mut active_watches: BTreeSet<PathBuf> = BTreeSet::new();
     let mut roots_desc: Vec<PathBuf> = Vec::new();
+    let mut last_desired_cfg: Option<WatcherConfig> = None;
+    let mut last_reattach_attempt = Instant::now();
     let mut enabled = false;
-    let mut manual_scan_active = false;
+    let mut manual_scan_depth: usize = 0;
     let mut suppress_until: Option<Instant> = None;
     let mut pending_by_root: HashMap<PathBuf, PendingLibraryDirty> = HashMap::new();
     let mut in_flight_roots: HashSet<PathBuf> = HashSet::new();
@@ -201,8 +210,10 @@ fn run_watcher_loop(
                     &mut watcher,
                     &mut active_watches,
                     &mut roots_desc,
+                    &mut last_desired_cfg,
+                    &has_unattached_roots,
                     &mut enabled,
-                    &mut manual_scan_active,
+                    &mut manual_scan_depth,
                     &mut suppress_until,
                     &mut pending_by_root,
                     &mut in_flight_roots,
@@ -213,8 +224,10 @@ fn run_watcher_loop(
                         &mut watcher,
                         &mut active_watches,
                         &mut roots_desc,
+                        &mut last_desired_cfg,
+                        &has_unattached_roots,
                         &mut enabled,
-                        &mut manual_scan_active,
+                        &mut manual_scan_depth,
                         &mut suppress_until,
                         &mut pending_by_root,
                         &mut in_flight_roots,
@@ -225,11 +238,21 @@ fn run_watcher_loop(
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
 
-        if !enabled || manual_scan_active {
+        let now = Instant::now();
+        if enabled
+            && has_unattached_roots.load(Ordering::Relaxed)
+            && now.duration_since(last_reattach_attempt) >= UNATTACHED_ROOT_RETRY_INTERVAL
+        {
+            last_reattach_attempt = now;
+            if let Some(cfg) = last_desired_cfg.as_ref() {
+                apply_os_watch_diff(&mut watcher, &mut active_watches, cfg, &has_unattached_roots);
+            }
+        }
+
+        if !enabled || manual_scan_depth > 0 {
             continue;
         }
 
-        let now = Instant::now();
         if let Some(until) = suppress_until {
             if now < until {
                 continue;
@@ -254,8 +277,10 @@ fn process_watcher_msg(
     watcher: &mut Option<RecommendedWatcher>,
     active_watches: &mut BTreeSet<PathBuf>,
     roots_desc: &mut Vec<PathBuf>,
+    last_desired_cfg: &mut Option<WatcherConfig>,
+    has_unattached_roots: &Arc<AtomicBool>,
     enabled: &mut bool,
-    manual_scan_active: &mut bool,
+    manual_scan_depth: &mut usize,
     suppress_until: &mut Option<Instant>,
     pending_by_root: &mut HashMap<PathBuf, PendingLibraryDirty>,
     in_flight_roots: &mut HashSet<PathBuf>,
@@ -272,7 +297,8 @@ fn process_watcher_msg(
             } else {
                 pending_by_root.retain(|k, _| cfg.roots.contains(k));
             }
-            apply_os_watch_diff(watcher, active_watches, &cfg);
+            apply_os_watch_diff(watcher, active_watches, &cfg, has_unattached_roots);
+            *last_desired_cfg = Some(cfg);
         }
         WatcherMsg::Suppress(dur) => {
             let until = Instant::now() + dur;
@@ -283,18 +309,21 @@ fn process_watcher_msg(
             pending_by_root.clear();
         }
         WatcherMsg::SetManualScan(active) => {
-            *manual_scan_active = active;
             if active {
+                *manual_scan_depth = manual_scan_depth.saturating_add(1);
                 pending_by_root.clear();
             } else {
-                *suppress_until = Some(Instant::now() + Duration::from_millis(800));
+                *manual_scan_depth = manual_scan_depth.saturating_sub(1);
+                if *manual_scan_depth == 0 {
+                    *suppress_until = Some(Instant::now() + Duration::from_millis(800));
+                }
             }
         }
         WatcherMsg::SyncFinished(root) => {
             in_flight_roots.remove(&root);
         }
         WatcherMsg::FsEvent(Ok(event)) => {
-            if !*enabled || *manual_scan_active || matches!(event.kind, EventKind::Access(_)) {
+            if !*enabled || *manual_scan_depth > 0 || matches!(event.kind, EventKind::Access(_)) {
                 return;
             }
             let now = Instant::now();
@@ -303,7 +332,7 @@ fn process_watcher_msg(
             }
             for raw_path in event.paths {
                 let clean = strip_verbatim_prefix(&raw_path);
-                if !is_relevant_fs_path(&clean) {
+                if !is_relevant_fs_event_path(&clean, &event.kind) {
                     continue;
                 }
                 if let Some(root) = match_library_root(roots_desc, &clean) {
@@ -322,8 +351,10 @@ fn apply_os_watch_diff(
     watcher: &mut Option<RecommendedWatcher>,
     active_watches: &mut BTreeSet<PathBuf>,
     cfg: &WatcherConfig,
+    has_unattached_roots: &Arc<AtomicBool>,
 ) {
     let Some(w) = watcher.as_mut() else {
+        has_unattached_roots.store(cfg.enabled && !cfg.roots.is_empty(), Ordering::Relaxed);
         return;
     };
 
@@ -351,6 +382,11 @@ fn apply_os_watch_diff(
             active_watches.insert(path);
         }
     }
+
+    let unattached = desired_os_watches
+        .iter()
+        .any(|path| !active_watches.contains(path));
+    has_unattached_roots.store(unattached, Ordering::Relaxed);
 }
 
 fn flush_due_roots(
@@ -380,7 +416,8 @@ fn flush_due_roots(
             continue;
         }
         if !are_pending_files_size_stable(entry, now) {
-            entry.last_event_at = now - DEBOUNCE_DELAY + STABILITY_RECHECK_DELAY;
+            let recheck_backdate = DEBOUNCE_DELAY.saturating_sub(STABILITY_RECHECK_DELAY);
+            entry.last_event_at = now.checked_sub(recheck_backdate).unwrap_or(now);
             continue;
         }
         let Some(finished_entry) = pending_by_root.remove(&root) else {

@@ -274,7 +274,7 @@ export const BatchRenameControls: React.FC<BatchRenameControlsProps> = ({
                       caseSensitive: e.target.checked,
                     }))
                   }
-                  className="rounded-xs border-line bg-surface-2"
+                  className="rounded-xs border-line bg-surface-2 accent-[var(--signal-accent)]"
                 />
                 <span>Case sensitive</span>
               </label>
@@ -288,7 +288,7 @@ export const BatchRenameControls: React.FC<BatchRenameControlsProps> = ({
                       replaceAll: e.target.checked,
                     }))
                   }
-                  className="rounded-xs border-line bg-surface-2"
+                  className="rounded-xs border-line bg-surface-2 accent-[var(--signal-accent)]"
                 />
                 <span>Replace all matches</span>
               </label>

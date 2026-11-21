@@ -54,6 +54,7 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
   let initializedOnce = false;
   let sidebarSeq = 0;
   let folderStatsSeq = 0;
+  let reloadProfileSeq = 0;
 
   return {
     initialize: async () => {
@@ -69,6 +70,7 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
         get,
         applyProfileSettingsImmediately,
         bumpProfileEpoch,
+        getProfileEpoch,
         resetFiltersOnProfileChange,
       });
 
@@ -431,6 +433,7 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
       // Standalone Settings window only manages rules/metadata and never renders the sample table.
       if (isStandaloneSettingsWindow()) return;
       const epoch = getProfileEpoch();
+      const reqSeq = ++reloadProfileSeq;
       try {
         const allSamples = await invoke<SampleItem[]>("query_samples", {
           searchQuery: null,
@@ -443,8 +446,8 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
           includePeaks: false,
         });
 
-        // Abort if profile switched while hydration query was in flight
-        if (epoch !== getProfileEpoch()) return;
+        // Abort if profile switched or a newer reload request superseded this one
+        if (epoch !== getProfileEpoch() || reqSeq !== reloadProfileSeq) return;
 
         // Drop Bin entries that no longer exist (including when last library is removed!)
         const { knownIds, favCount } = summarizeSamplePool(allSamples);

@@ -120,7 +120,7 @@ const WallpaperTile: React.FC<WallpaperTileProps> = React.memo(
             evictThumbnailCache(filePath);
             onDelete(filePath);
           }}
-          className="absolute top-1 right-1 w-4 h-4 rounded-xs bg-surface-3 border border-line-strong hover:bg-danger hover:border-danger text-fg hover:text-danger-on flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+          className="absolute top-1 right-1 w-4 h-4 rounded-xs bg-surface-3 border border-line-strong hover:bg-accent hover:border-accent text-fg hover:text-accent-on flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
           title="Delete wallpaper"
         >
           <X className="w-2.5 h-2.5" />

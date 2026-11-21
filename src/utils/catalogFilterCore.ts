@@ -323,7 +323,12 @@ export function filterBaseSamplesInMemory(
       if ((s.genre || "").toLowerCase() !== targetGenreLower) return false;
     }
     if (activeLicenseGroup) {
-      if (!isSampleInLicenseGroup(s.file_path, activeLicenseGroup)) {
+      if (
+        !isSampleInLicenseGroup(
+          s.folder_path || s.file_path,
+          activeLicenseGroup
+        )
+      ) {
         return false;
       }
     }
@@ -334,21 +339,18 @@ export function filterBaseSamplesInMemory(
       }
     }
     if (selectedTagIds.length > 0) {
-      if (selectedTagIds.length === 1) {
-        const reqId = selectedTagIds[0];
+      const tags = s.tags;
+      if (tags.length < selectedTagIds.length) return false;
+      for (let r = 0; r < selectedTagIds.length; r++) {
+        const reqId = selectedTagIds[r];
         let found = false;
-        for (let i = 0; i < s.tags.length; i++) {
-          if (s.tags[i].id === reqId) {
+        for (let i = 0; i < tags.length; i++) {
+          if (tags[i].id === reqId) {
             found = true;
             break;
           }
         }
         if (!found) return false;
-      } else {
-        const sampleTagIdSet = new Set(s.tags.map((t) => t.id));
-        for (const reqTagId of selectedTagIds) {
-          if (!sampleTagIdSet.has(reqTagId)) return false;
-        }
       }
     }
     return true;

@@ -136,6 +136,34 @@ impl AiTaggerState {
         user_dir: &Path,
     ) -> Result<(Arc<LoadedOnnxModel>, ResolvedAiModelConfig), String> {
         self.touch_activity(None);
+        // Fast path: check already-loaded ONNX session BEFORE running disk SHA-256 verification
+        // on the ~15 MB runtime DLLs. Any model download/import/removal calls `clear_cached_runtime_state()`.
+        let (expected_id, _name, raw_model_path, _is_custom) =
+            model_manager::active_model_id_and_path(user_dir);
+        {
+            let guard = self
+                .loaded_model
+                .lock()
+                .map_err(|_| "AI model lock poisoned".to_string())?;
+            if let Some(ref existing) = *guard {
+                let path_matches = existing.model_id == expected_id
+                    && (existing.model_path == raw_model_path
+                        || raw_model_path
+                            .canonicalize()
+                            .ok()
+                            .as_deref()
+                            .is_some_and(|p| p == existing.model_path.as_path()));
+                if path_matches && existing.model_path.is_file() {
+                    let cfg = ResolvedAiModelConfig {
+                        model_id: existing.model_id.clone(),
+                        model_path: existing.model_path.clone(),
+                        runtime_dll_path: existing.runtime_dll_path.clone(),
+                    };
+                    return Ok((Arc::clone(existing), cfg));
+                }
+            }
+        }
+
         let cfg = resolve_ready_ai_config(user_dir)?;
         {
             let guard = self
@@ -351,10 +379,10 @@ mod tests {
         let conn = Connection::open_in_memory().expect("in-memory db");
         conn.execute_batch(
             "CREATE TABLE tags (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, color TEXT NOT NULL, is_manual INTEGER NOT NULL DEFAULT 0);
-             CREATE TABLE sample_tags (sample_id INTEGER NOT NULL, tag_id INTEGER NOT NULL, is_manual INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (sample_id, tag_id));
+             CREATE TABLE sample_tags (sample_id INTEGER NOT NULL, tag_id INTEGER NOT NULL, is_manual INTEGER NOT NULL DEFAULT 0, source TEXT NOT NULL DEFAULT 'auto', PRIMARY KEY (sample_id, tag_id));
              CREATE TABLE ai_tag_suggestions (id INTEGER PRIMARY KEY AUTOINCREMENT, sample_id INTEGER NOT NULL, tag_name TEXT NOT NULL, confidence REAL NOT NULL, model_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', UNIQUE(sample_id, tag_name));
              INSERT INTO tags (id, name, color, is_manual) VALUES (1, 'Explosion', '#FF5500', 1), (2, 'Fire', '#F97316', 0);
-             INSERT INTO sample_tags (sample_id, tag_id, is_manual) VALUES (10, 1, 1), (10, 2, 0);
+             INSERT INTO sample_tags (sample_id, tag_id, is_manual, source) VALUES (10, 1, 1, 'manual'), (10, 2, 0, 'auto');
              INSERT INTO ai_tag_suggestions (sample_id, tag_name, confidence, model_id, status) VALUES (10, 'Whoosh', 0.9, 'yamnet-audioset-v1', 'dismissed');",
         )
         .expect("schema");
@@ -406,6 +434,15 @@ mod tests {
             )
             .expect("dismissed skipped");
         assert_eq!(whoosh_applied, 0);
+
+        let impact_source: String = conn
+            .query_row(
+                "SELECT st.source FROM sample_tags st JOIN tags t ON t.id = st.tag_id WHERE st.sample_id = 10 AND t.name = 'Impact'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("ai auto tag persisted");
+        assert_eq!(impact_source, "ai_auto");
     }
 
     #[test]

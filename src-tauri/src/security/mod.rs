@@ -22,7 +22,7 @@ pub use path_guards::{
     collect_profile_slice_dirs, display_leaf, ensure_inside, ensure_not_inside_user_dir,
     ensure_safe_export_dir, has_ntfs_ads_colon, is_forbidden_os_or_root_path, is_safe_library_dir,
     is_unc_or_network_path, normalize_clean_path, sanitize_err, strip_verbatim_prefix,
-    validate_audio_path_in_scope, validate_path_in_libraries_or_cache,
+    validate_audio_path_in_scope, validate_path_in_libraries_or_cache, AuthorizedAudioScope,
 };
 
 #[cfg(test)]

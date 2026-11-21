@@ -1,3 +1,4 @@
+use super::inputs::is_dos_device_name;
 use super::path_guards::{
     display_leaf, has_ntfs_ads_colon, is_forbidden_os_or_root_normalized, is_unc_or_network_path,
     normalize_clean_path, strip_verbatim_prefix,
@@ -101,6 +102,12 @@ fn validate_basic_import_path(
     if !has_allowed_suffix(p, allowed_suffixes) {
         return Err(ext_error.to_string());
     }
+    if p.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(is_dos_device_name)
+    {
+        return Err("Reserved DOS device names are not allowed".to_string());
+    }
     if let Ok(sym) = fs::symlink_metadata(p) {
         if sym.file_type().is_symlink() {
             return Err("Symbolic links and junctions are not allowed".to_string());
@@ -192,6 +199,9 @@ fn validate_export_target_common(
     let file_name = p
         .file_name()
         .ok_or_else(|| "Invalid export file name".to_string())?;
+    if file_name.to_str().is_some_and(is_dos_device_name) {
+        return Err("Reserved DOS device names are not allowed".to_string());
+    }
     let target_path = clean_parent.join(file_name);
 
     if let Ok(sym_meta) = fs::symlink_metadata(&target_path) {

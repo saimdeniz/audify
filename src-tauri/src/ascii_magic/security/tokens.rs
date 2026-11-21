@@ -33,10 +33,23 @@ pub(super) fn scan_js_tokens(source: &str) -> Result<Vec<JsToken>, String> {
             i += 1;
             continue;
         }
-        // Line comment
+        // Line comment (stops on \n, \r, or ECMAScript \u{2028} / \u{2029} line terminators)
         if b == b'/' && i + 1 < len && bytes[i + 1] == b'/' {
             i += 2;
-            while i < len && bytes[i] != b'\n' {
+            while i < len {
+                let c = bytes[i];
+                if c == b'\n' || c == b'\r' {
+                    i += 1;
+                    break;
+                }
+                if c == 0xE2
+                    && i + 2 < len
+                    && bytes[i + 1] == 0x80
+                    && (bytes[i + 2] == 0xA8 || bytes[i + 2] == 0xA9)
+                {
+                    i += 3;
+                    break;
+                }
                 i += 1;
             }
             continue;

@@ -212,6 +212,12 @@ pub(crate) fn relink_library_with_conn(
         &old_prefix_lower,
         &norm_new_path,
     )?;
+    crate::commands::slices::relink_sample_slices_path_prefix(
+        &tx,
+        &old_prefix_slash,
+        &old_prefix_lower,
+        &norm_new_path,
+    )?;
     crate::commands::profiles::path_relink::relink_prefix_in_all_profiles_settings(
         &tx,
         &norm_old_path,
@@ -257,6 +263,9 @@ pub fn relink_library_folder(
     library_id: i64,
     new_path: String,
 ) -> Result<Library, String> {
+    crate::security::ensure_not_inside_user_dir(&state.user_dir, std::path::Path::new(&new_path))?;
+    let safe_root = is_safe_library_dir(&new_path).map_err(|e| sanitize_err(&state.user_dir, &e))?;
+    crate::security::ensure_not_inside_user_dir(&state.user_dir, &safe_root)?;
     let mut conn = state.lock_db();
     let (old_path, updated_lib) = relink_library_with_conn(&mut conn, library_id, &new_path)
         .map_err(|e| sanitize_err(&state.user_dir, &e))?;

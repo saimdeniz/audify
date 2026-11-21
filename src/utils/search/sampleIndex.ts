@@ -73,6 +73,25 @@ export function clearSmartSearchCache(): void {
   sampleIndexCache.clear();
 }
 
+/**
+ * Removes only entries whose sample IDs are no longer in the active catalog,
+ * preserving valid `IndexedSampleEntry` records across incremental updates.
+ */
+export function pruneSmartSearchCache(
+  validIds: ReadonlyMap<number, unknown>
+): void {
+  if (sampleIndexCache.size === 0) return;
+  if (validIds.size === 0) {
+    sampleIndexCache.clear();
+    return;
+  }
+  for (const id of sampleIndexCache.keys()) {
+    if (!validIds.has(id)) {
+      sampleIndexCache.delete(id);
+    }
+  }
+}
+
 function extractBpmFromStem(foldedStem: string): number | null {
   // Match patterns like "120bpm", "128.5bpm", "120_bpm", "bpm120", "bpm_95"
   const m1 = foldedStem.match(

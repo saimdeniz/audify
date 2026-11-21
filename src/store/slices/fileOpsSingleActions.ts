@@ -21,6 +21,7 @@ export interface FileOpsSingleDeps {
   set: StoreSet;
   get: StoreGet;
   emitNotice: (message: string, kind?: "info" | "success" | "error") => void;
+  getProfileEpoch: () => number;
   releaseMatchingAudioHandle: (
     targetSampleIds: number[]
   ) => Promise<AudioHandleReleaseSnapshot>;
@@ -29,7 +30,8 @@ export interface FileOpsSingleDeps {
 let isReplayingHistory = false;
 
 export function createFileOpsSingleActions(deps: FileOpsSingleDeps) {
-  const { set, get, emitNotice, releaseMatchingAudioHandle } = deps;
+  const { set, get, emitNotice, getProfileEpoch, releaseMatchingAudioHandle } =
+    deps;
 
   const replayFileOpItem = (
     item: FileOpHistoryItem,
@@ -39,6 +41,7 @@ export function createFileOpsSingleActions(deps: FileOpsSingleDeps) {
       set,
       get,
       emitNotice,
+      getProfileEpoch,
       releaseMatchingAudioHandle,
     });
 
@@ -167,9 +170,11 @@ export function createFileOpsSingleActions(deps: FileOpsSingleDeps) {
       const stack = get().fileOpUndoStack;
       if (stack.length > 0) {
         const item = stack[stack.length - 1];
+        const epoch = getProfileEpoch();
         isReplayingHistory = true;
         try {
           if (await replayFileOpItem(item, "undo")) {
+            if (epoch !== getProfileEpoch()) return true;
             set((state) => {
               const idx = state.fileOpUndoStack.lastIndexOf(item);
               if (idx < 0) return state;
@@ -215,10 +220,11 @@ export function createFileOpsSingleActions(deps: FileOpsSingleDeps) {
         return false;
       }
       const item = redoStack[redoStack.length - 1];
+      const epoch = getProfileEpoch();
       isReplayingHistory = true;
       try {
         const ok = await replayFileOpItem(item, "redo");
-        if (ok) {
+        if (ok && epoch === getProfileEpoch()) {
           set((state) => {
             const idx = state.fileOpRedoStack.lastIndexOf(item);
             if (idx < 0) return state;

@@ -63,17 +63,19 @@ export const FoldersTreeTab: React.FC<FoldersTreeTabProps> = ({
       ? s.trashedProfileSamples
       : s.rawSamples;
   });
-  const favoriteSamplesPool = useSampleStore((s) => {
-    if (!s.favoriteOnly) return EMPTY_SAMPLES;
-    return s.allProfileSamples.length > 0 ? s.allProfileSamples : s.rawSamples;
-  });
-  const favoriteSamples = useMemo(
-    () =>
-      favoriteOnly
-        ? favoriteSamplesPool.filter((item) => item.is_favorite)
-        : EMPTY_SAMPLES,
-    [favoriteOnly, favoriteSamplesPool]
-  );
+  const favoritesCount = useSampleStore((s) => s.favoritesCount);
+  const loadedPoolLength = useSampleStore((s) => s.allProfileSamples.length);
+  const favoriteSamples = useMemo(() => {
+    if (!favoriteOnly || (favoritesCount === 0 && loadedPoolLength > 0)) {
+      return EMPTY_SAMPLES;
+    }
+    const st = useSampleStore.getState();
+    const pool =
+      st.allProfileSamples.length > 0 ? st.allProfileSamples : st.rawSamples;
+    return folderStats.length >= 0
+      ? pool.filter((item) => item.is_favorite)
+      : EMPTY_SAMPLES;
+  }, [favoriteOnly, favoritesCount, loadedPoolLength, folderStats]);
   const duplicateSamples = useMemo((): FolderTreeSampleRef[] => {
     if (!duplicatesFilterActive || !duplicateScanResult) return [];
     const seenIds = new Set<number>();
@@ -94,11 +96,7 @@ export const FoldersTreeTab: React.FC<FoldersTreeTabProps> = ({
     return list;
   }, [duplicatesFilterActive, duplicateScanResult]);
   const fallbackSamplesForTree = useSampleStore((s) =>
-    s.folderStats.length > 0
-      ? EMPTY_SAMPLES
-      : s.allProfileSamples.length > 0
-      ? s.allProfileSamples
-      : s.rawSamples
+    s.folderStats.length > 0 ? EMPTY_SAMPLES : s.rawSamples
   );
   const selectedLicenseGroupId = useSampleStore(
     (s) => s.selectedLicenseGroupId

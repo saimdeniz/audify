@@ -79,8 +79,8 @@ pub(crate) struct DuplicateCandidate {
     pub is_favorite: bool,
     pub tag_count: i64,
     pub collection_count: i64,
-    pub peaks_json: String,
-    pub embedding_blob: Option<Vec<u8>>,
+    pub peaks_unit: Option<Vec<f32>>,
+    pub embedding_unit: Option<Vec<f32>>,
     pub cached_hash_size: Option<i64>,
     pub cached_hash_mtime: Option<i64>,
     pub cached_partial_hash: Option<[u8; 32]>,
@@ -317,7 +317,20 @@ pub(crate) fn load_duplicate_candidates(
         .map_err(|e| format!("Failed preparing duplicate candidate query: {}", e))?;
 
     let mut candidates = Vec::new();
+    let is_similar = mode == DuplicateScanMode::Similar;
     let row_mapper = |row: &rusqlite::Row<'_>| -> rusqlite::Result<DuplicateCandidate> {
+        let duration_ms: i64 = row.get(7)?;
+        let file_size: i64 = row.get(11)?;
+        let (peaks_unit, embedding_unit) = if is_similar && file_size > 0 && duration_ms >= 80 {
+            let raw_peaks: String = row.get(15)?;
+            let raw_blob: Option<Vec<u8>> = row.get(16)?;
+            (
+                similar_match::parse_normalized_peaks(&raw_peaks),
+                similar_match::blob_to_unit_embedding(raw_blob.as_deref()),
+            )
+        } else {
+            (None, None)
+        };
         Ok(DuplicateCandidate {
             sample_id: row.get(0)?,
             library_id: row.get(1)?,
@@ -326,16 +339,16 @@ pub(crate) fn load_duplicate_candidates(
             file_path: row.get(4)?,
             file_name: row.get(5)?,
             extension: row.get(6)?,
-            duration_ms: row.get(7)?,
+            duration_ms,
             sample_rate: row.get(8)?,
             channels: row.get(9)?,
             bit_depth: row.get(10)?,
-            file_size: row.get(11)?,
+            file_size,
             is_favorite: row.get(12)?,
             tag_count: row.get(13)?,
             collection_count: row.get(14)?,
-            peaks_json: row.get(15)?,
-            embedding_blob: row.get(16)?,
+            peaks_unit,
+            embedding_unit,
             cached_hash_size: row.get(17)?,
             cached_hash_mtime: row.get(18)?,
             cached_partial_hash: blob_to_hash32(row.get(19)?),

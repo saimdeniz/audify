@@ -61,7 +61,7 @@ export const ContextMenuTagSubmenu: React.FC<SubmenuBaseProps> = ({
               );
               setContextMenu(null);
             }}
-            className="w-[22px] h-[22px] rounded-xs bg-surface-3 hover:bg-danger/15 border border-line hover:border-danger text-fg-3 hover:text-danger flex items-center justify-center shrink-0 transition-colors"
+            className="w-[22px] h-[22px] rounded-xs bg-surface-3 hover:bg-accent-soft border border-line hover:border-accent text-fg-3 hover:text-accent-fg flex items-center justify-center shrink-0 transition-colors"
             title={
               isMultiContext
                 ? "Clear all tags on selected samples"
@@ -168,7 +168,7 @@ export const ContextMenuGenreSubmenu: React.FC<SubmenuBaseProps> = ({
               }
               setContextMenu(null);
             }}
-            className="w-[22px] h-[22px] rounded-xs bg-surface-3 hover:bg-danger/15 border border-line hover:border-danger text-fg-3 hover:text-danger flex items-center justify-center shrink-0 transition-colors"
+            className="w-[22px] h-[22px] rounded-xs bg-surface-3 hover:bg-accent-soft border border-line hover:border-accent text-fg-3 hover:text-accent-fg flex items-center justify-center shrink-0 transition-colors"
             title={
               isMultiContext
                 ? "Clear genre on selected samples"
@@ -313,7 +313,7 @@ export const ContextMenuBpmKeySubmenu: React.FC<SubmenuBaseProps> = ({
                 setBpmInput("");
                 setContextMenu(null);
               }}
-              className="w-[22px] h-[22px] rounded-xs bg-surface-3 hover:bg-danger/15 border border-line hover:border-danger text-fg-3 hover:text-danger flex items-center justify-center shrink-0 transition-colors"
+              className="w-[22px] h-[22px] rounded-xs bg-surface-3 hover:bg-accent-soft border border-line hover:border-accent text-fg-3 hover:text-accent-fg flex items-center justify-center shrink-0 transition-colors"
               title="Clear BPM"
             >
               <X className="w-3 h-3" />
@@ -374,7 +374,7 @@ export const ContextMenuBpmKeySubmenu: React.FC<SubmenuBaseProps> = ({
                 setKeyInput("");
                 setContextMenu(null);
               }}
-              className="w-[22px] h-[22px] rounded-xs bg-surface-3 hover:bg-danger/15 border border-line hover:border-danger text-fg-3 hover:text-danger flex items-center justify-center shrink-0 transition-colors"
+              className="w-[22px] h-[22px] rounded-xs bg-surface-3 hover:bg-accent-soft border border-line hover:border-accent text-fg-3 hover:text-accent-fg flex items-center justify-center shrink-0 transition-colors"
               title="Clear Musical Key"
             >
               <X className="w-3 h-3" />

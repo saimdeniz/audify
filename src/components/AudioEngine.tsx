@@ -427,6 +427,8 @@ export const AudioEngine: React.FC = () => {
       onError={async (e) => {
         const err = e.currentTarget.error;
         const currentSample = useSampleStore.getState().selectedSample;
+        const erroredSampleId = currentSample?.id ?? null;
+        const erroredFileName = currentSample?.file_name ?? "";
         if (
           currentSample &&
           err?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED &&
@@ -462,6 +464,15 @@ export const AudioEngine: React.FC = () => {
           }
         }
 
+        // Do not clobber playback or show a stale error if user already switched to another sample
+        const latestSample = useSampleStore.getState().selectedSample;
+        if (
+          erroredSampleId !== null &&
+          latestSample?.id !== erroredSampleId
+        ) {
+          return;
+        }
+
         let msg = "Failed to load audio file or access denied";
         if (err) {
           if (err.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
@@ -472,11 +483,10 @@ export const AudioEngine: React.FC = () => {
             msg = "Audio decode error (corrupt file)";
           }
         }
-        const latestSample = useSampleStore.getState().selectedSample;
         useSampleStore
           .getState()
           .setStatusMessage(
-            `Playback Error: ${msg} [${latestSample?.file_name ?? ""}]`
+            `Playback Error: ${msg} [${erroredFileName || latestSample?.file_name || ""}]`
           );
         setIsPlaying(false);
       }}

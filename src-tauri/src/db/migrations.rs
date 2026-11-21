@@ -489,6 +489,26 @@ pub(crate) fn run_schema_migrations(conn: &Connection) -> Result<(), String> {
         .map_err(|e| format!("Failed to apply v14 sample_hashes cache migration: {}", e))?;
     }
 
+    let ver_v15: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap_or(0);
+    if ver_v15 < 15 {
+        conn.execute_batch(
+            "
+            DROP INDEX IF EXISTS idx_samples_is_favorite;
+            DROP INDEX IF EXISTS idx_samples_fav_filename;
+            DROP INDEX IF EXISTS idx_samples_is_trashed;
+            DROP INDEX IF EXISTS idx_sample_tags_sample_id;
+            DROP INDEX IF EXISTS idx_sample_tags_tag_id;
+            DROP INDEX IF EXISTS idx_collection_items_collection_id;
+            DROP INDEX IF EXISTS idx_profile_libraries_profile_id;
+            DROP INDEX IF EXISTS idx_profile_favorites_profile_id;
+            PRAGMA user_version = 15;
+            ",
+        )
+        .map_err(|e| format!("Failed to apply v15 dead/redundant index cleanup migration: {}", e))?;
+    }
+
     Ok(())
 }
 
@@ -568,12 +588,12 @@ mod tests {
         )
         .expect("seed v1 db");
 
-        init_schema_on_conn(&conn).expect("migrate v1 schema to v14");
+        init_schema_on_conn(&conn).expect("migrate v1 schema to v15");
 
         let user_version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("read user_version");
-        assert_eq!(user_version, 14);
+        assert_eq!(user_version, 15);
 
         let migrated_fav_count: i64 = conn
             .query_row(
@@ -772,12 +792,12 @@ mod tests {
         )
         .expect("downgrade to v12 state");
 
-        run_schema_migrations(&conn).expect("migrate v12 -> v14");
+        run_schema_migrations(&conn).expect("migrate v12 -> v15");
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 14);
+        assert_eq!(version, 15);
 
         for idx_name in [
             "idx_collection_items_sample_id",

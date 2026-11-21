@@ -188,6 +188,214 @@ function scoreSingleTerm(
   return 0;
 }
 
+function evaluateSmartSearchStructural(
+  sample: SampleItem,
+  parsed: ParsedSearchQuery
+): IndexedSampleEntry | null {
+  // Fast structural operator checks first
+  if (parsed.requireLoop !== null && sample.is_loop !== parsed.requireLoop) {
+    return null;
+  }
+  if (
+    parsed.requireFav !== null &&
+    sample.is_favorite !== parsed.requireFav
+  ) {
+    return null;
+  }
+  if (
+    parsed.minDurationMs !== null &&
+    sample.duration_ms < parsed.minDurationMs
+  ) {
+    return null;
+  }
+  if (
+    parsed.maxDurationMs !== null &&
+    sample.duration_ms > parsed.maxDurationMs
+  ) {
+    return null;
+  }
+  if (!matchesTechnicalCriteria(sample, parsed)) {
+    return null;
+  }
+
+  const idx = getIndexedSample(sample);
+
+  if (parsed.minBpm !== null || parsed.maxBpm !== null) {
+    if (idx.detectedBpm === null) return null;
+    if (parsed.minBpm !== null && idx.detectedBpm < parsed.minBpm) return null;
+    if (parsed.maxBpm !== null && idx.detectedBpm > parsed.maxBpm) return null;
+  }
+  if (parsed.excludeBpmRanges.length > 0 && idx.detectedBpm !== null) {
+    const inExcluded = parsed.excludeBpmRanges.some(
+      (r) => idx.detectedBpm! >= r.min && idx.detectedBpm! <= r.max
+    );
+    if (inExcluded) return null;
+  }
+
+  if (parsed.keyAllowedGroups.length > 0) {
+    if (!idx.effectiveCamelotKey) return null;
+    const matchesAllKeySpecs = parsed.keyAllowedGroups.every((allowed) =>
+      allowed.includes(idx.effectiveCamelotKey)
+    );
+    if (!matchesAllKeySpecs) return null;
+  }
+  if (
+    parsed.excludeCamelotKeys.length > 0 &&
+    idx.effectiveCamelotKey &&
+    parsed.excludeCamelotKeys.includes(idx.effectiveCamelotKey)
+  ) {
+    return null;
+  }
+
+  if (parsed.extTerms.length > 0) {
+    if (!parsed.extTerms.some((e) => idx.foldedExt === e)) {
+      return null;
+    }
+  }
+  if (parsed.excludeExtTerms.length > 0) {
+    if (parsed.excludeExtTerms.some((e) => idx.foldedExt === e)) {
+      return null;
+    }
+  }
+
+  if (parsed.tagTerms.length > 0) {
+    const allTagsMatch = parsed.tagTerms.every((tt) =>
+      idx.tagNamesFolded.some((tn) => tn.includes(tt))
+    );
+    if (!allTagsMatch) return null;
+  }
+  if (parsed.excludeTagTerms.length > 0) {
+    const anyExcludedTag = parsed.excludeTagTerms.some((tt) =>
+      idx.tagNamesFolded.some((tn) => tn.includes(tt))
+    );
+    if (anyExcludedTag) return null;
+  }
+
+  if (parsed.genreTerms.length > 0) {
+    const allGenresMatch = parsed.genreTerms.every(
+      (gt) => idx.foldedGenre && idx.foldedGenre.includes(gt)
+    );
+    if (!allGenresMatch) return null;
+  }
+  if (parsed.excludeGenreTerms.length > 0) {
+    const anyExcludedGenre = parsed.excludeGenreTerms.some(
+      (gt) => idx.foldedGenre && idx.foldedGenre.includes(gt)
+    );
+    if (anyExcludedGenre) return null;
+  }
+
+  if (parsed.folderTerms.length > 0) {
+    const allFoldersMatch = parsed.folderTerms.every(
+      (ft) => idx.foldedParent.includes(ft) || idx.foldedFolder.includes(ft)
+    );
+    if (!allFoldersMatch) return null;
+  }
+  if (parsed.excludeFolderTerms.length > 0) {
+    const anyExcludedFolder = parsed.excludeFolderTerms.some(
+      (ft) => idx.foldedParent.includes(ft) || idx.foldedFolder.includes(ft)
+    );
+    if (anyExcludedFolder) return null;
+  }
+
+  if (parsed.artistTerms.length > 0) {
+    const allArtistsMatch = parsed.artistTerms.every(
+      (at) => idx.foldedArtist && idx.foldedArtist.includes(at)
+    );
+    if (!allArtistsMatch) return null;
+  }
+  if (parsed.excludeArtistTerms.length > 0) {
+    const anyExcludedArtist = parsed.excludeArtistTerms.some(
+      (at) => idx.foldedArtist && idx.foldedArtist.includes(at)
+    );
+    if (anyExcludedArtist) return null;
+  }
+
+  if (parsed.albumTerms.length > 0) {
+    const allAlbumsMatch = parsed.albumTerms.every(
+      (al) => idx.foldedAlbum && idx.foldedAlbum.includes(al)
+    );
+    if (!allAlbumsMatch) return null;
+  }
+
+  if (parsed.yearTerms.length > 0) {
+    const allYearsMatch = parsed.yearTerms.every(
+      (yr) => idx.foldedYear && idx.foldedYear.includes(yr)
+    );
+    if (!allYearsMatch) return null;
+  }
+
+  // Negative plain terms (`-loop`, `!vocal`) & negative phrases
+  if (parsed.negativeTerms.length > 0) {
+    for (const neg of parsed.negativeTerms) {
+      if (neg === "loop" && sample.is_loop) return null;
+      if (matchesTermInSample(idx, neg)) return null;
+    }
+  }
+  if (parsed.negativePhrases.length > 0) {
+    if (parsed.negativePhrases.some((np) => matchesPhraseInSample(idx, np))) {
+      return null;
+    }
+  }
+
+  return idx;
+}
+
+/**
+ * Counts how many samples satisfy a Smart Search query without allocating a result
+ * array or sorting matches — used for Smart Collection live badge counts.
+ */
+export function countSmartSearchMatches(
+  samples: SampleItem[],
+  rawQuery: string,
+  enableSynonyms = true
+): number {
+  const trimmed = rawQuery.trim();
+  if (!trimmed) return samples.length;
+
+  const parsed = parseSmartSearchQuery(trimmed);
+  const orGroups = parsed.positiveOrGroups;
+  const hasPositiveGroups = orGroups.length > 0;
+
+  let count = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const idx = evaluateSmartSearchStructural(samples[i], parsed);
+    if (!idx) continue;
+
+    if (!hasPositiveGroups) {
+      count += 1;
+      continue;
+    }
+
+    let matchedAllGroups = true;
+    for (let g = 0; g < orGroups.length; g++) {
+      const group = orGroups[g];
+      let matchedGroup = false;
+      for (let o = 0; o < group.length; o++) {
+        const opt = group[o];
+        const s = opt.isPhrase
+          ? scorePhraseCandidate(idx, opt.value)
+          : scoreSingleTerm(
+              idx,
+              opt.value,
+              enableSynonyms && !opt.exactQuoted
+            );
+        if (s > 0) {
+          matchedGroup = true;
+          break;
+        }
+      }
+      if (!matchedGroup) {
+        matchedAllGroups = false;
+        break;
+      }
+    }
+    if (matchedAllGroups) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 /**
  * Executes Smart Search v2 across a sample array with weighted relevance ranking,
  * camelCase & Turkish folding, quoted phrases, boolean OR, power operators
@@ -210,159 +418,8 @@ export function executeSmartSearch(
 
   for (let i = 0; i < samples.length; i++) {
     const sample = samples[i];
-
-    // Fast structural operator checks first
-    if (parsed.requireLoop !== null && sample.is_loop !== parsed.requireLoop) {
-      continue;
-    }
-    if (
-      parsed.requireFav !== null &&
-      sample.is_favorite !== parsed.requireFav
-    ) {
-      continue;
-    }
-    if (
-      parsed.minDurationMs !== null &&
-      sample.duration_ms < parsed.minDurationMs
-    ) {
-      continue;
-    }
-    if (
-      parsed.maxDurationMs !== null &&
-      sample.duration_ms > parsed.maxDurationMs
-    ) {
-      continue;
-    }
-    if (!matchesTechnicalCriteria(sample, parsed)) {
-      continue;
-    }
-
-    const idx = getIndexedSample(sample);
-
-    if (parsed.minBpm !== null || parsed.maxBpm !== null) {
-      if (idx.detectedBpm === null) continue;
-      if (parsed.minBpm !== null && idx.detectedBpm < parsed.minBpm) continue;
-      if (parsed.maxBpm !== null && idx.detectedBpm > parsed.maxBpm) continue;
-    }
-    if (parsed.excludeBpmRanges.length > 0 && idx.detectedBpm !== null) {
-      const inExcluded = parsed.excludeBpmRanges.some(
-        (r) => idx.detectedBpm! >= r.min && idx.detectedBpm! <= r.max
-      );
-      if (inExcluded) continue;
-    }
-
-    if (parsed.keyAllowedGroups.length > 0) {
-      if (!idx.effectiveCamelotKey) continue;
-      const matchesAllKeySpecs = parsed.keyAllowedGroups.every((allowed) =>
-        allowed.includes(idx.effectiveCamelotKey)
-      );
-      if (!matchesAllKeySpecs) continue;
-    }
-    if (
-      parsed.excludeCamelotKeys.length > 0 &&
-      idx.effectiveCamelotKey &&
-      parsed.excludeCamelotKeys.includes(idx.effectiveCamelotKey)
-    ) {
-      continue;
-    }
-
-    if (parsed.extTerms.length > 0) {
-      if (!parsed.extTerms.some((e) => idx.foldedExt === e)) {
-        continue;
-      }
-    }
-    if (parsed.excludeExtTerms.length > 0) {
-      if (parsed.excludeExtTerms.some((e) => idx.foldedExt === e)) {
-        continue;
-      }
-    }
-
-    if (parsed.tagTerms.length > 0) {
-      const allTagsMatch = parsed.tagTerms.every((tt) =>
-        idx.tagNamesFolded.some((tn) => tn.includes(tt))
-      );
-      if (!allTagsMatch) continue;
-    }
-    if (parsed.excludeTagTerms.length > 0) {
-      const anyExcludedTag = parsed.excludeTagTerms.some((tt) =>
-        idx.tagNamesFolded.some((tn) => tn.includes(tt))
-      );
-      if (anyExcludedTag) continue;
-    }
-
-    if (parsed.genreTerms.length > 0) {
-      const allGenresMatch = parsed.genreTerms.every(
-        (gt) => idx.foldedGenre && idx.foldedGenre.includes(gt)
-      );
-      if (!allGenresMatch) continue;
-    }
-    if (parsed.excludeGenreTerms.length > 0) {
-      const anyExcludedGenre = parsed.excludeGenreTerms.some(
-        (gt) => idx.foldedGenre && idx.foldedGenre.includes(gt)
-      );
-      if (anyExcludedGenre) continue;
-    }
-
-    if (parsed.folderTerms.length > 0) {
-      const allFoldersMatch = parsed.folderTerms.every(
-        (ft) => idx.foldedParent.includes(ft) || idx.foldedFolder.includes(ft)
-      );
-      if (!allFoldersMatch) continue;
-    }
-    if (parsed.excludeFolderTerms.length > 0) {
-      const anyExcludedFolder = parsed.excludeFolderTerms.some(
-        (ft) => idx.foldedParent.includes(ft) || idx.foldedFolder.includes(ft)
-      );
-      if (anyExcludedFolder) continue;
-    }
-
-    if (parsed.artistTerms.length > 0) {
-      const allArtistsMatch = parsed.artistTerms.every(
-        (at) => idx.foldedArtist && idx.foldedArtist.includes(at)
-      );
-      if (!allArtistsMatch) continue;
-    }
-    if (parsed.excludeArtistTerms.length > 0) {
-      const anyExcludedArtist = parsed.excludeArtistTerms.some(
-        (at) => idx.foldedArtist && idx.foldedArtist.includes(at)
-      );
-      if (anyExcludedArtist) continue;
-    }
-
-    if (parsed.albumTerms.length > 0) {
-      const allAlbumsMatch = parsed.albumTerms.every(
-        (al) => idx.foldedAlbum && idx.foldedAlbum.includes(al)
-      );
-      if (!allAlbumsMatch) continue;
-    }
-
-    if (parsed.yearTerms.length > 0) {
-      const allYearsMatch = parsed.yearTerms.every(
-        (yr) => idx.foldedYear && idx.foldedYear.includes(yr)
-      );
-      if (!allYearsMatch) continue;
-    }
-
-    // Negative plain terms (`-loop`, `!vocal`) & negative phrases
-    if (parsed.negativeTerms.length > 0) {
-      let excluded = false;
-      for (const neg of parsed.negativeTerms) {
-        if (neg === "loop" && sample.is_loop) {
-          excluded = true;
-          break;
-        }
-        if (matchesTermInSample(idx, neg)) {
-          excluded = true;
-          break;
-        }
-      }
-      if (excluded) continue;
-    }
-    if (parsed.negativePhrases.length > 0) {
-      if (parsed.negativePhrases.some((np) => matchesPhraseInSample(idx, np))) {
-        continue;
-      }
-    }
+    const idx = evaluateSmartSearchStructural(sample, parsed);
+    if (!idx) continue;
 
     if (!hasPositiveGroups) {
       scored.push({ sample, score: 1 });

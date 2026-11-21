@@ -315,7 +315,7 @@ export const SampleTableRow: React.FC<SampleTableRowProps> = React.memo(
                             [sample.id]
                           );
                       }}
-                      className="opacity-0 group-hover:opacity-100 w-[20px] h-[20px] flex items-center justify-center bg-surface-3 hover:bg-danger hover:text-danger-on border border-line text-fg-2 rounded-sm shrink-0"
+                      className="opacity-0 group-hover:opacity-100 w-[20px] h-[20px] flex items-center justify-center bg-surface-3 hover:bg-accent hover:text-accent-on hover:border-accent border border-line text-fg-2 rounded-sm shrink-0"
                       title="Remove from Collection (Del)"
                     >
                       <X className="w-3 h-3" />

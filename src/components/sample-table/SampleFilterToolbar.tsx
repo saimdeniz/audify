@@ -193,6 +193,8 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> = ({
     };
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
         setShowTagOverflow(false);
       }
     };
@@ -432,7 +434,7 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> = ({
                 title={`${tag.name} (${matchCount.toLocaleString()} in current view) — Click to toggle filter`}
               >
                 <span
-                  className="w-1.5 h-1.5 rounded-[1px] shrink-0"
+                  className="w-1.5 h-1.5 rounded-[2px] shrink-0"
                   style={{ backgroundColor: tag.color }}
                 />
                 <span className="truncate max-w-[96px]">{tag.name}</span>
@@ -510,7 +512,7 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> = ({
                         title={`${tag.name} (${matchCount.toLocaleString()} in current view) — Click to filter, Ctrl+Click for multi-tag`}
                       >
                         <span
-                          className="w-2 h-2 rounded-[1.5px] shrink-0"
+                          className="w-2 h-2 rounded-[2px] shrink-0"
                           style={{ backgroundColor: tag.color }}
                         />
                         <span className="truncate max-w-[130px]">{tag.name}</span>

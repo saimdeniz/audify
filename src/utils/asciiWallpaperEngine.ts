@@ -68,10 +68,17 @@ async function loadCategoryModule(
         return mod.renderStudioPreset;
       }
     }
-  })().then((renderer) => {
-    categoryModuleCache.set(category, renderer);
-    return renderer;
-  });
+  })()
+    .then((renderer) => {
+      categoryModuleCache.set(category, renderer);
+      return renderer;
+    })
+    .catch((err) => {
+      if (categoryModulePromises.get(category) === loaderPromise) {
+        categoryModulePromises.delete(category);
+      }
+      throw err;
+    });
 
   categoryModulePromises.set(category, loaderPromise);
   return loaderPromise;

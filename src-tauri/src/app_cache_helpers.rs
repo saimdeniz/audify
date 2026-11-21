@@ -221,6 +221,7 @@ pub fn reconcile_library_asset_scopes(
         state.user_dir.join("slices"),
         state.user_dir.join("trash"),
         state.user_dir.join("cache").join("slices"),
+        state.user_dir.join("cache").join("slice_trash"),
         state.user_dir.join("cache").join("playback_fallback"),
     ] {
         if !security::is_unc_or_network_path(&safe_sub.to_string_lossy()) {

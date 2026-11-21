@@ -1328,6 +1328,28 @@ mod audit_tests {
                 .expect("present");
         assert_eq!(without_peaks.peaks_json, "");
         assert!(without_peaks.is_favorite);
+
+        // Cross-profile sample (library 2 belongs only to profile 2) must NEVER leak even when both id and path are passed
+        let foreign_both = get_sample_by_id_or_path_with_conn(
+            &conn,
+            Some(13),
+            Some("D:/Priv/other_fav.wav".to_string()),
+            Some(true),
+        )
+        .expect("foreign lookup ok");
+        assert!(foreign_both.is_none());
+
+        // Quarantined slice_trash files must be allowed for preview/peaks/transcode
+        let slice_trash_dir = tmp.path().join("user").join("cache").join("slice_trash");
+        fs::create_dir_all(&slice_trash_dir).unwrap();
+        let trashed_slice = slice_trash_dir.join("1_slice.wav");
+        fs::write(&trashed_slice, b"RIFF0000WAVE").unwrap();
+        assert!(crate::security::validate_path_in_libraries_or_cache(
+            &conn,
+            &tmp.path().join("user"),
+            &trashed_slice.to_string_lossy()
+        )
+        .is_ok());
     }
 
     #[test]

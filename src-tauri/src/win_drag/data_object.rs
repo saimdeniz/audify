@@ -329,10 +329,58 @@ pub(super) unsafe fn create_sync_file_data_object(paths: &[PathBuf]) -> Result<I
     med.tymed = TYMED_HGLOBAL.0 as u32;
     med.u.hGlobal = windows::Win32::Foundation::HGLOBAL(hglobal as *mut c_void);
 
+    let mut entries = Vec::with_capacity(3);
+    entries.push(StoredMediumEntry { fmt, med });
+
+    // Advertise Explorer-standard `Preferred DropEffect = DROPEFFECT_COPY` so Shell/Qt/NLE
+    // targets immediately know COPY is preferred without risking accidental file moves.
+    if let Some(cf_pref) = register_clipboard_format("Preferred DropEffect") {
+        let copy_effect_bytes = 1u32.to_le_bytes(); // DROPEFFECT_COPY
+        if let Some(hpref) = alloc_hglobal_bytes(&copy_effect_bytes) {
+            let mut pref_med: STGMEDIUM = std::mem::zeroed();
+            pref_med.tymed = TYMED_HGLOBAL.0 as u32;
+            pref_med.u.hGlobal = windows::Win32::Foundation::HGLOBAL(hpref as *mut c_void);
+            entries.push(StoredMediumEntry {
+                fmt: FORMATETC {
+                    cfFormat: cf_pref,
+                    ptd: null_mut(),
+                    dwAspect: DVASPECT_CONTENT.0,
+                    lindex: -1,
+                    tymed: TYMED_HGLOBAL.0 as u32,
+                },
+                med: pref_med,
+            });
+        }
+    }
+
+    // Companion standard Windows Shell `FileNameW` format for single-file drops.
+    if paths.len() == 1 {
+        if let (Some(cf_fname), Some(fname_bytes)) = (
+            register_clipboard_format("FileNameW"),
+            build_filenamew_payload(&paths[0]),
+        ) {
+            if let Some(hfname) = alloc_hglobal_bytes(&fname_bytes) {
+                let mut fname_med: STGMEDIUM = std::mem::zeroed();
+                fname_med.tymed = TYMED_HGLOBAL.0 as u32;
+                fname_med.u.hGlobal = windows::Win32::Foundation::HGLOBAL(hfname as *mut c_void);
+                entries.push(StoredMediumEntry {
+                    fmt: FORMATETC {
+                        cfFormat: cf_fname,
+                        ptd: null_mut(),
+                        dwAspect: DVASPECT_CONTENT.0,
+                        lindex: -1,
+                        tymed: TYMED_HGLOBAL.0 as u32,
+                    },
+                    med: fname_med,
+                });
+            }
+        }
+    }
+
     let boxed = Box::new(SyncFileDataObject {
         vtbl: &DATA_OBJECT_VTBL,
         ref_count: AtomicU32::new(1),
-        entries: vec![StoredMediumEntry { fmt, med }],
+        entries,
     });
 
     Ok(IDataObject::from_raw(Box::into_raw(boxed) as *mut c_void))

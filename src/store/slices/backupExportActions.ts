@@ -180,12 +180,15 @@ export function createBackupExportActions(deps: BackupExportDeps) {
         });
         if (!selected || typeof selected !== "string") return;
 
+        await flushPendingPersist();
+        const epoch = getProfileEpoch();
         const updatedProfile = await invoke<Profile>(
           "import_settings_from_file",
           {
             filePath: selected,
           }
         );
+        if (epoch !== getProfileEpoch()) return;
         applyProfileSettingsImmediately(updatedProfile);
         await get().refreshAfterCatalogMutation();
         emitNotice(

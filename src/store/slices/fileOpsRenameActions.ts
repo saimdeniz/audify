@@ -29,21 +29,6 @@ export function createFileOpsBatchRenameActions(deps: FileOpsBatchRenameDeps) {
     deps;
 
   return {
-    openBatchRenameModal: (sampleIds: number[]) => {
-      if (!get().enableAdvancedFileOps || get().trashFilterActive) return;
-      const cleanIds = Array.from(
-        new Set(sampleIds.filter((id) => Number.isSafeInteger(id) && id > 0))
-      );
-      if (cleanIds.length === 0) return;
-      set({
-        batchRenameSampleIds: cleanIds,
-      });
-    },
-
-    closeBatchRenameModal: () => {
-      set({ batchRenameSampleIds: null });
-    },
-
     batchRenameSamples: async (
       entries: BatchRenameEntryInput[],
       opts?: { isHistoryReplay?: boolean }

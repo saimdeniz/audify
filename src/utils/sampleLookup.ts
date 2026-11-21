@@ -29,8 +29,8 @@ export function getCachedSampleByIdMap(
 }
 
 /**
- * Resolves ordered `SampleItem` records for a subset of IDs without cloning
- * or building a full Map over 50k+ profile samples (exits early on full match).
+ * Resolves ordered `SampleItem` records for a subset of IDs using the WeakMap
+ * `id -> SampleItem` cache on large pools to avoid O(N) scans over 50k+ samples.
  */
 export function resolveSamplesByIds(
   ids: readonly number[],
@@ -38,6 +38,18 @@ export function resolveSamplesByIds(
   fallback?: readonly SampleItem[]
 ): SampleItem[] {
   if (ids.length === 0) return EMPTY_SAMPLES;
+  if (primary.length >= 256 || profileSampleMapCache.has(primary)) {
+    const primaryMap = getCachedSampleByIdMap(primary);
+    const fallbackMap =
+      fallback && fallback.length > 0 ? getCachedSampleByIdMap(fallback) : null;
+    const out: SampleItem[] = [];
+    for (let i = 0; i < ids.length; i++) {
+      const hit = primaryMap.get(ids[i]) ?? fallbackMap?.get(ids[i]);
+      if (hit) out.push(hit);
+    }
+    return out;
+  }
+
   const wanted = new Set(ids);
   const found = new Map<number, SampleItem>();
 

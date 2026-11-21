@@ -6,11 +6,9 @@ import {
 } from "../../types";
 import { normalizePathForMatch } from "../../utils/pathHelpers";
 import { clearSmartSearchCache } from "../../utils/smartSearch";
-import { invokeCommand } from "../../utils/tauriCommands";
 import { resetPlayheadClock } from "../playheadClock";
 import { persistNavigationFilters } from "../storageHelpers";
 import type { StoreSliceContext } from "../types";
-import { upsertSliceEntryInList } from "./sliceHistoryActions";
 
 const MAX_SLICE_OP_HISTORY = 30;
 
@@ -61,6 +59,7 @@ export function createSliceUndoAndJumpActions(
         emitNotice("Nothing to undo in Slices", "info");
         return;
       }
+      const epoch = ctx.getProfileEpoch();
       sliceUndoRedoInFlight = true;
       try {
         if (last.kind === "rename") {
@@ -71,43 +70,37 @@ export function createSliceUndoAndJumpActions(
           const ok = await batchRenameSlices(reverseEntries, {
             isHistoryReplay: true,
           });
-          if (!ok) return;
+          if (!ok || epoch !== ctx.getProfileEpoch()) return;
         } else if (last.kind === "restore") {
           const ok = await trashSliceFiles(last.slice_ids, {
             isHistoryReplay: true,
           });
-          if (!ok) return;
+          if (!ok || epoch !== ctx.getProfileEpoch()) return;
         } else {
-          const restored = await invokeCommand("restore_trashed_slice_files", {
-            sliceIds: last.slice_ids,
+          const restored = await restoreTrashedSlices(last.slice_ids, {
+            isHistoryReplay: true,
           });
-          const restoredIds = new Set(restored.map((r) => r.id));
-          set((prev) => {
-            let nextHistory = [...prev.sliceHistory];
-            for (const entry of restored) {
-              nextHistory = upsertSliceEntryInList(nextHistory, entry);
-            }
-            const nextTrashed = prev.trashedSliceHistory.filter(
-              (item) => !restoredIds.has(item.id)
-            );
-            return {
-              sliceHistory: nextHistory,
-              trashedSliceHistory: nextTrashed,
-              trashedSliceCount: Math.max(
-                nextTrashed.length,
-                prev.trashedSliceCount - restored.length
-              ),
-              selectedSliceIds: restored.map((r) => r.id),
-              activeSliceId: restored[0]?.id ?? prev.activeSliceId,
-            };
-          });
-          void get().fetchSliceTrashStatus();
+          if (restored.length === 0 || epoch !== ctx.getProfileEpoch()) return;
+          set((prev) => ({
+            selectedSliceIds: restored.map((r) => r.id),
+            activeSliceId: restored[0]?.id ?? prev.activeSliceId,
+          }));
         }
         // Atomic pop/push ONLY after await completes cleanly
-        set((prev) => ({
-          sliceOpUndoStack: prev.sliceOpUndoStack.slice(0, -1),
-          sliceOpRedoStack: pushBoundedSliceHistory(prev.sliceOpRedoStack, last),
-        }));
+        set((prev) => {
+          const idx = prev.sliceOpUndoStack.lastIndexOf(last);
+          if (idx < 0) return {};
+          return {
+            sliceOpUndoStack: [
+              ...prev.sliceOpUndoStack.slice(0, idx),
+              ...prev.sliceOpUndoStack.slice(idx + 1),
+            ],
+            sliceOpRedoStack: pushBoundedSliceHistory(
+              prev.sliceOpRedoStack,
+              last
+            ),
+          };
+        });
         emitNotice(`Undid: ${last.summary}`, "success");
       } catch (err) {
         emitNotice(`Slice undo failed: ${String(err)}`, "error");
@@ -131,6 +124,7 @@ export function createSliceUndoAndJumpActions(
         emitNotice("Nothing to redo in Slices", "info");
         return;
       }
+      const epoch = ctx.getProfileEpoch();
       sliceUndoRedoInFlight = true;
       try {
         if (item.kind === "rename") {
@@ -141,22 +135,32 @@ export function createSliceUndoAndJumpActions(
           const ok = await batchRenameSlices(forwardEntries, {
             isHistoryReplay: true,
           });
-          if (!ok) return;
+          if (!ok || epoch !== ctx.getProfileEpoch()) return;
         } else if (item.kind === "restore") {
           const restored = await restoreTrashedSlices(item.slice_ids, {
             isHistoryReplay: true,
           });
-          if (restored.length === 0) return;
+          if (restored.length === 0 || epoch !== ctx.getProfileEpoch()) return;
         } else {
           const ok = await trashSliceFiles(item.slice_ids, {
             isHistoryReplay: true,
           });
-          if (!ok) return;
+          if (!ok || epoch !== ctx.getProfileEpoch()) return;
         }
-        set((prev) => ({
-          sliceOpRedoStack: prev.sliceOpRedoStack.slice(0, -1),
-          sliceOpUndoStack: pushBoundedSliceHistory(prev.sliceOpUndoStack, item),
-        }));
+        set((prev) => {
+          const idx = prev.sliceOpRedoStack.lastIndexOf(item);
+          if (idx < 0) return {};
+          return {
+            sliceOpRedoStack: [
+              ...prev.sliceOpRedoStack.slice(0, idx),
+              ...prev.sliceOpRedoStack.slice(idx + 1),
+            ],
+            sliceOpUndoStack: pushBoundedSliceHistory(
+              prev.sliceOpUndoStack,
+              item
+            ),
+          };
+        });
         emitNotice(`Redid: ${item.summary}`, "success");
       } catch (err) {
         emitNotice(`Slice redo failed: ${String(err)}`, "error");

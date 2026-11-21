@@ -49,34 +49,57 @@ unsafe fn is_primary_mouse_button_down() -> bool {
     (GetAsyncKeyState(vkey) as u16 & 0x8000) != 0
 }
 
-/// Releases both cross-process WebView2 child window capture (`msedgewebview2.exe`'s
-/// `Chrome_RenderWidgetHostHWND`) and local STA thread capture right before `DoDragDrop`.
+unsafe extern "system" fn cancel_mode_child_proc(hwnd: HWND, _lparam: isize) -> i32 {
+    let mut dummy_res: usize = 0;
+    let _ = SendMessageTimeoutW(
+        hwnd,
+        WM_CANCELMODE_MSG,
+        0,
+        0,
+        SMTO_ABORTIFHUNG_FLAG,
+        30,
+        &mut dummy_res,
+    );
+    1
+}
+
+/// Unconditionally releases cross-process WebView2 child window capture (`msedgewebview2.exe`'s
+/// `Chrome_RenderWidgetHostHWND` & `Chrome_WidgetWin_*`) and local STA thread capture right before
+/// `DoDragDrop`, even if fast mouse movement has already moved the cursor over an external NLE.
 unsafe fn release_webview_and_local_capture(owner_hwnd: HWND) {
-    let mut pt = POINT { x: 0, y: 0 };
-    if GetCursorPos(&mut pt) != 0 {
-        let hit_hwnd = WindowFromPoint(pt);
-        if hit_hwnd.0 != 0 {
-            let root_hwnd = GetAncestor(hit_hwnd, GA_ROOT_FLAG);
-            let check_root = if root_hwnd.0 != 0 { root_hwnd } else { hit_hwnd };
-            let belongs_to_owner = if owner_hwnd.0 != 0 {
-                check_root == owner_hwnd || hit_hwnd == owner_hwnd
-            } else {
+    if owner_hwnd.0 != 0 {
+        let _ = EnumChildWindows(owner_hwnd, cancel_mode_child_proc, 0);
+        let mut dummy_res: usize = 0;
+        let _ = SendMessageTimeoutW(
+            owner_hwnd,
+            WM_CANCELMODE_MSG,
+            0,
+            0,
+            SMTO_ABORTIFHUNG_FLAG,
+            30,
+            &mut dummy_res,
+        );
+    } else {
+        let mut pt = POINT { x: 0, y: 0 };
+        if GetCursorPos(&mut pt) != 0 {
+            let hit_hwnd = WindowFromPoint(pt);
+            if hit_hwnd.0 != 0 {
+                let root_hwnd = GetAncestor(hit_hwnd, GA_ROOT_FLAG);
+                let check_root = if root_hwnd.0 != 0 { root_hwnd } else { hit_hwnd };
                 let mut pid: u32 = 0;
                 GetWindowThreadProcessId(check_root, &mut pid);
-                pid != 0 && pid == GetCurrentProcessId()
-            };
-
-            if belongs_to_owner {
-                let mut dummy_res: usize = 0;
-                let _ = SendMessageTimeoutW(
-                    hit_hwnd,
-                    WM_CANCELMODE_MSG,
-                    0,
-                    0,
-                    SMTO_ABORTIFHUNG_FLAG,
-                    50,
-                    &mut dummy_res,
-                );
+                if pid != 0 && pid == GetCurrentProcessId() {
+                    let mut dummy_res: usize = 0;
+                    let _ = SendMessageTimeoutW(
+                        hit_hwnd,
+                        WM_CANCELMODE_MSG,
+                        0,
+                        0,
+                        SMTO_ABORTIFHUNG_FLAG,
+                        30,
+                        &mut dummy_res,
+                    );
+                }
             }
         }
     }
@@ -202,6 +225,17 @@ pub fn start_explorer_file_drag(
             return Ok(false);
         }
 
+        let owner_hwnd = window
+            .hwnd()
+            .ok()
+            .map(|h| HWND(h.0 as isize))
+            .unwrap_or(HWND(0));
+
+        // Release WebView2 cross-process capture unconditionally BEFORE creating drag image or
+        // entering OLE's modal drag loop so fast drags across window boundaries never leave
+        // Chrome_RenderWidgetHostHWND holding stale capture.
+        release_webview_and_local_capture(owner_hwnd);
+
         let data_object = create_sync_file_data_object(&files)?;
         let drop_source = create_sync_drop_source();
 
@@ -210,15 +244,6 @@ pub fn start_explorer_file_drag(
                 attach_drag_badge(&data_object, bytes);
             }
         }
-
-        let owner_hwnd = window
-            .hwnd()
-            .ok()
-            .map(|h| HWND(h.0 as isize))
-            .unwrap_or(HWND(0));
-
-        // Release WebView2 cross-process capture (`WM_CANCELMODE`) + STA thread capture
-        release_webview_and_local_capture(owner_hwnd);
 
         if !is_primary_mouse_button_down() {
             return Ok(false);
@@ -275,6 +300,38 @@ mod tests {
             assert!(GlobalSize(med1.u.hGlobal.0 as isize) >= payload.len());
             ReleaseStgMedium(&mut med1);
             ReleaseStgMedium(&mut med2);
+
+            // Preferred DropEffect must advertise DROPEFFECT_COPY (1)
+            if let Some(cf_pref) = register_clipboard_format("Preferred DropEffect") {
+                let pref_req = FORMATETC {
+                    cfFormat: cf_pref,
+                    ptd: null_mut(),
+                    dwAspect: DVASPECT_CONTENT.0,
+                    lindex: -1,
+                    tymed: TYMED_HGLOBAL.0 as u32,
+                };
+                assert!(data_obj.QueryGetData(&pref_req).is_ok());
+                let mut pref_med = data_obj.GetData(&pref_req).expect("Preferred DropEffect");
+                let ptr = GlobalLock(pref_med.u.hGlobal.0 as isize) as *const u32;
+                assert!(!ptr.is_null());
+                assert_eq!(*ptr, DROPEFFECT_COPY.0);
+                let _ = GlobalUnlock(pref_med.u.hGlobal.0 as isize);
+                ReleaseStgMedium(&mut pref_med);
+            }
+
+            // Single-file IDataObject should also expose FileNameW
+            let single_obj = create_sync_file_data_object(&paths[..1])
+                .expect("single-file COM IDataObject should construct");
+            if let Some(cf_fname) = register_clipboard_format("FileNameW") {
+                let fname_req = FORMATETC {
+                    cfFormat: cf_fname,
+                    ptd: null_mut(),
+                    dwAspect: DVASPECT_CONTENT.0,
+                    lindex: -1,
+                    tymed: TYMED_HGLOBAL.0 as u32,
+                };
+                assert!(single_obj.QueryGetData(&fname_req).is_ok());
+            }
         }
     }
 }

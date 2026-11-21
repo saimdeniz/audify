@@ -1,6 +1,7 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Pause, Play, Star } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import { useSampleStore } from "../../store/useSampleStore";
 import {
   formatDuplicateModeLabel,
@@ -43,19 +44,16 @@ export const MiniDockList: React.FC<MiniDockListProps> = ({
   const collections = useSampleStore((s) => s.collections);
   const selectedSample = useSampleStore((s) => s.selectedSample);
   const selectedSampleIds = useSampleStore((s) => s.selectedSampleIds);
-  const selectedSamplesPool = useSampleStore((s) =>
-    s.selectedSampleIds.length <= 1
-      ? EMPTY_SAMPLES
-      : s.allProfileSamples.length > 0
-      ? s.allProfileSamples
-      : s.samples
-  );
-  const selectedSampleObjects = useMemo(
-    () =>
-      selectedSampleIds.length <= 1
+  const selectedSampleObjects = useSampleStore(
+    useShallow((s) =>
+      s.selectedSampleIds.length <= 1
         ? EMPTY_SAMPLES
-        : resolveSamplesByIds(selectedSampleIds, selectedSamplesPool, samples),
-    [selectedSampleIds, selectedSamplesPool, samples]
+        : resolveSamplesByIds(
+            s.selectedSampleIds,
+            s.allProfileSamples.length > 0 ? s.allProfileSamples : s.samples,
+            s.samples
+          )
+    )
   );
   const isPlaying = useSampleStore((s) => s.isPlaying);
   const libraries = useSampleStore((s) => s.libraries);

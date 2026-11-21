@@ -392,7 +392,7 @@ export const FilterDrawerPanel: React.FC<FilterDrawerPanelProps> = ({
                 title={`${t.name} (${t.sample_count.toLocaleString()})`}
               >
                 <span
-                  className="w-2 h-2 rounded-[1.5px] shrink-0"
+                  className="w-2 h-2 rounded-[2px] shrink-0"
                   style={{ backgroundColor: t.color }}
                 />
                 <span>{t.name}</span>

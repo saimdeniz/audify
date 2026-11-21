@@ -109,7 +109,7 @@ pub(super) fn pick_collision_safe_wav_path(export_dir: &Path, stem: &str) -> Pat
     ))
 }
 
-pub(super) fn format_os_display_path(p: &Path) -> String {
+pub(crate) fn format_os_display_path(p: &Path) -> String {
     let clean = strip_verbatim_prefix(p);
     let s = clean.to_string_lossy().to_string();
     #[cfg(target_os = "windows")]
@@ -120,6 +120,28 @@ pub(super) fn format_os_display_path(p: &Path) -> String {
     {
         s
     }
+}
+
+pub(crate) fn ensure_slice_not_in_readonly_library(
+    conn: &Connection,
+    slice_pb: &Path,
+) -> Result<(), String> {
+    let target_norm = crate::security::normalize_clean_path(&slice_pb.to_string_lossy());
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT path, name FROM libraries WHERE COALESCE(is_read_only, 0) = 1",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
+            for (lib_path, lib_name) in rows.flatten() {
+                if crate::commands::strip_lib_prefix(&target_norm, lib_path.trim()).is_some() {
+                    return Err(format!(
+                        "Library '{}' is locked as a Protected Read-Only Vault. Unlock it before modifying or trashing files inside it.",
+                        lib_name
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn compute_exported_duration_ms(
@@ -401,7 +423,7 @@ pub async fn promote_slice_to_export(
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn record_slice_export(
+pub async fn record_slice_export(
     state: State<'_, AppState>,
     slice_path: String,
     source_sample_id: Option<i64>,
@@ -414,29 +436,44 @@ pub fn record_slice_export(
     if !start_sec.is_finite() || !end_sec.is_finite() || start_sec < 0.0 || end_sec <= start_sec {
         return Err("Invalid slice time bounds".to_string());
     }
-    let conn = state.lock_db();
-    let resolved_slice = ensure_existing_slice_in_scope(&conn, &state.user_dir, &slice_path)
-        .map_err(|e| sanitize_err(&state.user_dir, &e))?;
-    let resolved_src = validate_audio_path_in_scope(&conn, &state.user_dir, &source_file_path)
-        .map_err(|e| sanitize_err(&state.user_dir, &e))?;
-    ensure_source_not_a_slice(&conn, &resolved_src)
-        .map_err(|e| sanitize_err(&state.user_dir, &e))?;
-    let profile_id = get_active_profile_id(&conn);
+    let state_owned = state.inner().clone();
+    let user_dir_err = state.user_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (resolved_slice, resolved_src, profile_id) = with_read_conn(&state_owned, |conn| {
+            let slice_pb = ensure_existing_slice_in_scope(conn, &state_owned.user_dir, &slice_path)
+                .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
+            let src_pb =
+                validate_audio_path_in_scope(conn, &state_owned.user_dir, &source_file_path)
+                    .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
+            ensure_source_not_a_slice(conn, &src_pb)
+                .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
+            let pid = get_active_profile_id(conn);
+            Ok((slice_pb, src_pb, pid))
+        })?;
 
-    upsert_slice_history_with_conn(
-        &conn,
-        &SliceHistoryUpsert {
-            profile_id,
-            slice_path: &resolved_slice,
-            source_sample_id,
-            source_file_path: &resolved_src,
-            start_sec,
-            end_sec,
-            pitch_semitones: pitch_semitones.unwrap_or(0.0) as f64,
-            micro_fade: apply_micro_fade.unwrap_or(false),
-        },
-    )
-    .map_err(|e| sanitize_err(&state.user_dir, &e))
+        let pitch_f64 = pitch_semitones.unwrap_or(0.0) as f64;
+        let fallback_dur = compute_exported_duration_ms(start_sec, end_sec, pitch_f64);
+        let decoded_meta = history::decode_slice_audio_meta(&resolved_slice, fallback_dur);
+
+        let conn = state_owned.lock_db();
+        history::upsert_slice_history_with_meta(
+            &conn,
+            &SliceHistoryUpsert {
+                profile_id,
+                slice_path: &resolved_slice,
+                source_sample_id,
+                source_file_path: &resolved_src,
+                start_sec,
+                end_sec,
+                pitch_semitones: pitch_f64,
+                micro_fade: apply_micro_fade.unwrap_or(false),
+            },
+            Some(decoded_meta),
+        )
+        .map_err(|e| sanitize_err(&state_owned.user_dir, &e))
+    })
+    .await
+    .map_err(|e| sanitize_err(&user_dir_err, &format!("Record slice task error: {}", e)))?
 }
 
 #[tauri::command]
@@ -493,8 +530,13 @@ pub async fn save_slice_to_export(
             },
         )?;
 
+        let pitch_f64 = pitch_semitones.unwrap_or(0.0) as f64;
+        let fallback_dur = compute_exported_duration_ms(start_sec, end_sec, pitch_f64);
+        let decoded_meta =
+            history::decode_slice_audio_meta(Path::new(&promoted.slice_path), fallback_dur);
+
         let conn = state_owned.lock_db();
-        upsert_slice_history_with_conn(
+        history::upsert_slice_history_with_meta(
             &conn,
             &SliceHistoryUpsert {
                 profile_id,
@@ -503,9 +545,10 @@ pub async fn save_slice_to_export(
                 source_file_path: &source_path,
                 start_sec,
                 end_sec,
-                pitch_semitones: pitch_semitones.unwrap_or(0.0) as f64,
+                pitch_semitones: pitch_f64,
                 micro_fade: apply_micro_fade.unwrap_or(false),
             },
+            Some(decoded_meta),
         )
         .map_err(|e| sanitize_err(&state_owned.user_dir, &e))
     })

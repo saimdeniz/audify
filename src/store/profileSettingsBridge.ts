@@ -391,12 +391,16 @@ export function applyProfileSettingsToStore(
     resolvedFields.themeTintIntensity
   );
 
+  const preserveDirtyRules = isRemoteSync && cur.autoTagRulesDirty;
+
   set({
     activeProfile: { ...profile, color: resolvedFields.accentColor },
     ...resolvedFields,
-    autoTagRules,
-    autoTagCategories,
-    autoTagRulesDirty: false,
+    autoTagRules: preserveDirtyRules ? cur.autoTagRules : autoTagRules,
+    autoTagCategories: preserveDirtyRules
+      ? cur.autoTagCategories
+      : autoTagCategories,
+    autoTagRulesDirty: preserveDirtyRules ? true : false,
   });
 
   if (resolvedFields.wallpaperKind !== cur.wallpaperKind) {

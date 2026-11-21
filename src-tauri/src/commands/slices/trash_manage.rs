@@ -14,9 +14,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
 
-fn verify_quarantined_slice_file(
+fn verify_quarantined_slice_file_with_canon(
     raw_path: &str,
-    trash_dir: &Path,
+    trash_canon: Option<&Path>,
 ) -> Result<Option<(PathBuf, u64)>, String> {
     let trimmed = raw_path.trim();
     if trimmed.is_empty() {
@@ -35,14 +35,14 @@ fn verify_quarantined_slice_file(
             display_leaf(&pb)
         ));
     }
-    let Ok(trash_canon) = trash_dir.canonicalize() else {
+    let Some(base_canon) = trash_canon else {
         return Ok(None);
     };
     let target_canon = pb
         .canonicalize()
         .map_err(|_| "Failed resolving quarantined slice path".to_string())?;
     if is_unc_or_network_path(&target_canon.to_string_lossy())
-        || !target_canon.starts_with(&trash_canon)
+        || !target_canon.starts_with(base_canon)
     {
         return Err("Refusing access outside slice trash quarantine".to_string());
     }
@@ -68,10 +68,12 @@ pub(crate) fn query_slice_trash_status_with_conn(
         .flatten()
         .collect();
 
-    let trash_dir = resolve_slice_trash_dir(user_dir);
+    let trash_canon = resolve_slice_trash_dir(user_dir).canonicalize().ok();
     let mut total_bytes: u64 = 0;
     for (_, trash_p) in &rows {
-        if let Ok(Some((_, bytes))) = verify_quarantined_slice_file(trash_p, &trash_dir) {
+        if let Ok(Some((_, bytes))) =
+            verify_quarantined_slice_file_with_canon(trash_p, trash_canon.as_deref())
+        {
             total_bytes = total_bytes.saturating_add(bytes);
         }
     }
@@ -105,12 +107,14 @@ pub(crate) fn list_trashed_slices_with_conn(
         .flatten()
         .collect();
 
-    let trash_dir = resolve_slice_trash_dir(user_dir);
+    let trash_canon = resolve_slice_trash_dir(user_dir).canonicalize().ok();
     for rec in &mut records {
         let verified = rec
             .trash_file_path
             .as_deref()
-            .and_then(|p| verify_quarantined_slice_file(p, &trash_dir).ok())
+            .and_then(|p| {
+                verify_quarantined_slice_file_with_canon(p, trash_canon.as_deref()).ok()
+            })
             .flatten();
         if let Some((clean_pb, _)) = verified {
             rec.file_exists = true;
@@ -123,19 +127,16 @@ pub(crate) fn list_trashed_slices_with_conn(
     Ok(records)
 }
 
-pub(crate) fn empty_trashed_slices_with_conn(
-    conn: &mut Connection,
-    user_dir: &Path,
+fn collect_trashed_slice_targets(
+    conn: &Connection,
+    profile_id: i64,
     slice_ids: Option<&[i64]>,
-    use_os_recycle_bin: bool,
-) -> Result<SliceTrashSummary, String> {
-    let profile_id = get_active_profile_id(conn);
+) -> Result<Vec<(i64, String)>, String> {
     let mut rows: Vec<(i64, String)> = Vec::new();
-
     if let Some(raw_ids) = slice_ids {
         let clean_ids = dedup_positive_ids(raw_ids);
         if clean_ids.is_empty() {
-            return query_slice_trash_status_with_conn(conn, user_dir);
+            return Ok(rows);
         }
         for chunk in clean_ids.chunks(450) {
             let placeholders: Vec<String> = (2..=chunk.len() + 1).map(|i| format!("?{i}")).collect();
@@ -176,19 +177,23 @@ pub(crate) fn empty_trashed_slices_with_conn(
             .flatten()
             .collect();
     }
+    Ok(rows)
+}
 
-    if rows.is_empty() {
-        return query_slice_trash_status_with_conn(conn, user_dir);
-    }
-
-    let trash_dir = resolve_slice_trash_dir(user_dir);
+fn verify_and_delete_trashed_slice_files(
+    rows: &[(i64, String)],
+    user_dir: &Path,
+    use_os_recycle_bin: bool,
+) -> Result<(), String> {
+    let trash_canon = resolve_slice_trash_dir(user_dir).canonicalize().ok();
     let mut disk_files: Vec<PathBuf> = Vec::with_capacity(rows.len());
-    for (_, trash_p) in &rows {
-        if let Some((clean_pb, _)) = verify_quarantined_slice_file(trash_p, &trash_dir)? {
+    for (_, trash_p) in rows {
+        if let Some((clean_pb, _)) =
+            verify_quarantined_slice_file_with_canon(trash_p, trash_canon.as_deref())?
+        {
             disk_files.push(clean_pb);
         }
     }
-
     if !disk_files.is_empty() {
         if use_os_recycle_bin {
             move_files_to_os_recycle_bin(&disk_files).map_err(|e| sanitize_err(user_dir, &e))?;
@@ -204,8 +209,15 @@ pub(crate) fn empty_trashed_slices_with_conn(
             }
         }
     }
+    Ok(())
+}
 
-    let affected_ids: Vec<i64> = rows.iter().map(|(id, _)| *id).collect();
+fn delete_trashed_slice_rows(
+    conn: &mut Connection,
+    profile_id: i64,
+    user_dir: &Path,
+    affected_ids: Vec<i64>,
+) -> Result<SliceTrashSummary, String> {
     let tx = conn
         .transaction()
         .map_err(|e| format!("Failed starting empty slice trash transaction: {}", e))?;
@@ -238,6 +250,23 @@ pub(crate) fn empty_trashed_slices_with_conn(
     })
 }
 
+#[cfg(test)]
+pub(crate) fn empty_trashed_slices_with_conn(
+    conn: &mut Connection,
+    user_dir: &Path,
+    slice_ids: Option<&[i64]>,
+    use_os_recycle_bin: bool,
+) -> Result<SliceTrashSummary, String> {
+    let profile_id = get_active_profile_id(conn);
+    let rows = collect_trashed_slice_targets(conn, profile_id, slice_ids)?;
+    if rows.is_empty() {
+        return query_slice_trash_status_with_conn(conn, user_dir);
+    }
+    verify_and_delete_trashed_slice_files(&rows, user_dir, use_os_recycle_bin)?;
+    let affected_ids: Vec<i64> = rows.iter().map(|(id, _)| *id).collect();
+    delete_trashed_slice_rows(conn, profile_id, user_dir, affected_ids)
+}
+
 #[tauri::command]
 pub fn get_slice_trash_status(state: State<'_, AppState>) -> Result<SliceTrashSummary, String> {
     with_read_conn(&state, |conn| query_slice_trash_status_with_conn(conn, &state.user_dir))
@@ -259,8 +288,22 @@ pub async fn empty_trashed_slices(
     crate::library_watcher::suppress_watcher_if_managed(&app, 2500);
     let state_owned = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        // Read targets outside the write lock, execute slow OS Recycle Bin I/O lock-free,
+        // then acquire the write lock only for the brief SQLite DELETE transaction.
+        let (profile_id, rows) = with_read_conn(&state_owned, |conn| {
+            let pid = get_active_profile_id(conn);
+            let targets = collect_trashed_slice_targets(conn, pid, slice_ids.as_deref())?;
+            Ok((pid, targets))
+        })?;
+        if rows.is_empty() {
+            return with_read_conn(&state_owned, |conn| {
+                query_slice_trash_status_with_conn(conn, &state_owned.user_dir)
+            });
+        }
+        verify_and_delete_trashed_slice_files(&rows, &state_owned.user_dir, true)?;
+        let affected_ids: Vec<i64> = rows.iter().map(|(id, _)| *id).collect();
         let mut conn = state_owned.lock_db();
-        empty_trashed_slices_with_conn(&mut conn, &state_owned.user_dir, slice_ids.as_deref(), true)
+        delete_trashed_slice_rows(&mut conn, profile_id, &state_owned.user_dir, affected_ids)
     })
     .await
     .map_err(|e| sanitize_err(&state.user_dir, &e.to_string()))?

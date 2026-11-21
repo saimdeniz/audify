@@ -58,6 +58,7 @@ interface ListenerSetupContext {
     opts?: { isInitialBoot?: boolean; isRemoteSync?: boolean }
   ) => void;
   bumpProfileEpoch: () => number;
+  getProfileEpoch: () => number;
   resetFiltersOnProfileChange: (statusMessage: string) => void;
 }
 
@@ -267,6 +268,7 @@ export function registerStoreListenersOnce({
   get,
   applyProfileSettingsImmediately,
   bumpProfileEpoch,
+  getProfileEpoch,
   resetFiltersOnProfileChange,
 }: ListenerSetupContext): void {
   if (listenersRegistered) return;
@@ -325,8 +327,12 @@ export function registerStoreListenersOnce({
     if (prevTs !== undefined && now - prevTs < 120) return;
     lastHandledSyncByKind.set(kind, now);
     isHandlingRemoteSync = true;
+    const startEpoch = getProfileEpoch();
     void invoke<Profile[]>("get_profiles")
       .then(async (profiles) => {
+        if (startEpoch !== getProfileEpoch()) {
+          return;
+        }
         const prevActiveId = get().activeProfile?.id ?? null;
         const active = profiles.find((p) => p.is_active) || profiles[0] || null;
         const didSwitchProfile =

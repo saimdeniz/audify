@@ -1,7 +1,7 @@
 use crate::security::is_unc_or_network_path;
 use lofty::file::TaggedFileExt;
 use lofty::probe::Probe;
-use lofty::tag::{Accessor, ItemKey};
+use lofty::tag::ItemKey;
 use std::path::Path;
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -258,34 +258,50 @@ pub fn extract_fast_bpm_and_key(path: Option<&Path>, file_name: &str) -> BpmKeyR
     let mut out = BpmKeyResult::default();
 
     if let Some(p) = path {
-        if !is_unc_or_network_path(&p.to_string_lossy()) {
+        let raw = p.to_string_lossy();
+        let is_safe_regular = !is_unc_or_network_path(&raw)
+            && !crate::security::has_ntfs_ads_colon(&raw)
+            && std::fs::symlink_metadata(p)
+                .map(|m| !m.file_type().is_symlink() && m.is_file())
+                .unwrap_or(false);
+        if is_safe_regular {
             if let Ok(probed) = Probe::open(p) {
                 if let Ok(tagged) = probed.read() {
-                    for tag in tagged.tags() {
-                        if out.bpm.is_none() {
-                            if let Some(raw_bpm) = tag
-                                .get_string(&ItemKey::Bpm)
-                                .or_else(|| tag.get_string(&ItemKey::IntegerBpm))
-                            {
-                                out.bpm = parse_bpm_value(raw_bpm);
-                            }
-                        }
-                        if out.musical_key.is_empty() {
-                            if let Some(raw_key) = tag.get_string(&ItemKey::InitialKey) {
-                                if let Some((mkey, cam)) = normalize_musical_or_camelot_key(raw_key)
-                                {
-                                    out.musical_key = mkey;
-                                    out.camelot_key = cam;
-                                }
-                            }
-                        }
-                        let _ = Accessor::title(tag);
-                    }
+                    extract_bpm_key_from_tagged_file(&tagged, &mut out);
                 }
             }
         }
     }
 
+    fill_bpm_key_from_filename(file_name, &mut out);
+    out
+}
+
+pub(crate) fn extract_bpm_key_from_tagged_file(
+    tagged: &lofty::file::TaggedFile,
+    out: &mut BpmKeyResult,
+) {
+    for tag in tagged.tags() {
+        if out.bpm.is_none() {
+            if let Some(raw_bpm) = tag
+                .get_string(&ItemKey::Bpm)
+                .or_else(|| tag.get_string(&ItemKey::IntegerBpm))
+            {
+                out.bpm = parse_bpm_value(raw_bpm);
+            }
+        }
+        if out.musical_key.is_empty() {
+            if let Some(raw_key) = tag.get_string(&ItemKey::InitialKey) {
+                if let Some((mkey, cam)) = normalize_musical_or_camelot_key(raw_key) {
+                    out.musical_key = mkey;
+                    out.camelot_key = cam;
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn fill_bpm_key_from_filename(file_name: &str, out: &mut BpmKeyResult) {
     let name_bpm = detect_bpm_from_filename(file_name);
     if out.bpm.is_none() {
         out.bpm = name_bpm;
@@ -296,7 +312,5 @@ pub fn extract_fast_bpm_and_key(path: Option<&Path>, file_name: &str) -> BpmKeyR
             out.camelot_key = cam;
         }
     }
-
-    out
 }
 

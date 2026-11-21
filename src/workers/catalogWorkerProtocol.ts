@@ -39,11 +39,24 @@ export interface CatalogFilterQueryParams {
   similarity: CatalogWorkerSimilarityFilter | null;
 }
 
+export interface CatalogPoolPatchEntry {
+  index: number;
+  sample: SampleItem;
+}
+
 export type CatalogWorkerRequest =
   | {
       type: "set_pool";
       poolEpoch: number;
       samples: SampleItem[];
+    }
+  | {
+      type: "patch_pool";
+      poolEpoch: number;
+      updates: CatalogPoolPatchEntry[];
+    }
+  | {
+      type: "clear_search_cache";
     }
   | {
       type: "filter_query";

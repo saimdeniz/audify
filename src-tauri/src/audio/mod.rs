@@ -15,8 +15,8 @@ pub use export::{
     transcode_audio_to_pcm_wav,
 };
 pub use metadata::{
-    detect_audio_genre, extract_embedded_audio_meta, extract_embedded_meta_batch,
-    resolve_metadata_titles_validated,
+    detect_audio_genre, extract_embedded_audio_meta, extract_embedded_meta_and_bpm_key,
+    extract_embedded_meta_batch, resolve_metadata_titles_validated,
 };
 pub use pcm_ops::write_wav_i16;
 

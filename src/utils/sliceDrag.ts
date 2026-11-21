@@ -15,9 +15,12 @@ import { invokeCommand } from "./tauriCommands";
 const MAX_SLICE_CACHE = 200;
 const slicePathCache = new Map<string, string>();
 const sliceInFlightPromises = new Map<string, Promise<string | null>>();
+let sliceCacheGeneration = 0;
 
 export function clearSlicePathCache(): void {
+  sliceCacheGeneration += 1;
   slicePathCache.clear();
+  sliceInFlightPromises.clear();
 }
 
 function getActiveCustomSliceDir(): string {
@@ -112,6 +115,7 @@ export async function preExportAudioSlice(
   }
 
   const customDir = cacheOnly ? "" : getActiveCustomSliceDir();
+  const gen = sliceCacheGeneration;
   const promise = (async () => {
     try {
       const slicedWavPath = await invoke<string>("export_audio_slice", {
@@ -125,7 +129,9 @@ export async function preExportAudioSlice(
       });
       if (slicedWavPath && slicedWavPath.trim().length > 0) {
         const normalized = normalizeOsPath(slicedWavPath);
-        rememberSlicePath(key, normalized);
+        if (gen === sliceCacheGeneration) {
+          rememberSlicePath(key, normalized);
+        }
         return normalized;
       }
       return null;
@@ -133,7 +139,9 @@ export async function preExportAudioSlice(
       console.error("Pre-export audio slice error:", err);
       return null;
     } finally {
-      sliceInFlightPromises.delete(key);
+      if (gen === sliceCacheGeneration) {
+        sliceInFlightPromises.delete(key);
+      }
     }
   })();
 

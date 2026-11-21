@@ -265,6 +265,7 @@ describe("Slices UI Unification, Favorites, Undo/Redo & Guards", () => {
     expect(await screen.findByText("WolfBark")).toBeTruthy();
     expect(screen.getByText(".wav")).toBeTruthy();
     expect(screen.getByText("wolf_rztowy_01.wav")).toBeTruthy();
+    expect(screen.getByText("00:01.47")).toBeTruthy();
     expect(screen.getByText("48k/24b")).toBeTruthy();
     expect(screen.getByText("1.20–2.85s")).toBeTruthy();
     expect(screen.getByText("+2st")).toBeTruthy();

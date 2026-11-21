@@ -126,7 +126,7 @@ interface LicenseTreeRowProps {
   setLicenseContextMenu: (menu: SidebarFolderContextMenuState | null) => void;
 }
 
-export const LicenseTreeRow: React.FC<LicenseTreeRowProps> = ({
+export const LicenseTreeRow: React.FC<LicenseTreeRowProps> = React.memo(({
   row,
   virtualStart,
   virtualSize,
@@ -351,4 +351,4 @@ export const LicenseTreeRow: React.FC<LicenseTreeRowProps> = ({
       </span>
     </div>
   );
-};
+});

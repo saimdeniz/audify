@@ -133,15 +133,11 @@ pub async fn download_ai_model(app: AppHandle) -> Result<AiModelStatus, String> 
         let state = app.state::<AppState>();
         let ai_state = app.state::<AiTaggerState>();
 
-        if ai_state
-            .download_running
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            return Err("AI asset download is already in progress".to_string());
-        }
+        let _guards = claim_exclusive_ai_guards(
+            &ai_state,
+            "Stop running AI tasks before downloading model files",
+        )?;
         ai_state.download_cancel.store(false, Ordering::SeqCst);
-        let _guard = AtomicFlagGuard(&ai_state.download_running);
 
         ai_state.clear_cached_runtime_state();
         download_default_ai_bundle(&app, &state.user_dir, &ai_state.download_cancel)

@@ -234,4 +234,55 @@ describe("Catalog Web Worker Kernel (50k & 150k scale)", () => {
       expect(res.response.filteredIds.length).toBe(4500);
     }
   });
+
+  it("supports incremental patch_pool updates and clear_search_cache without full pool replacement", () => {
+    const kernel = createCatalogWorkerKernel();
+    const pool = buildSyntheticPool(200);
+    kernel.handleMessage({ type: "set_pool", poolEpoch: 1, samples: pool });
+
+    const target = pool[5];
+    expect(target.is_favorite).toBe(false);
+    const patched = { ...target, is_favorite: true };
+    const patchAck = kernel.handleMessage({
+      type: "patch_pool",
+      poolEpoch: 2,
+      updates: [{ index: 5, sample: patched }],
+    });
+    expect(patchAck.response).toEqual({ type: "pool_ack", poolEpoch: 2 });
+
+    const favRes = kernel.handleMessage({
+      type: "filter_query",
+      requestSeq: 1,
+      poolEpoch: 2,
+      params: {
+        folderFilter: null,
+        favoriteOnly: true,
+        recentOnly: false,
+        recentSampleIds: [],
+        selectedTagIds: [],
+        selectedGenre: null,
+        selectedLicenseGroupId: null,
+        licenseGroups: [],
+        binFilterActive: false,
+        binSampleIds: [],
+        duplicateOrderIds: null,
+        smartQuery: "",
+        searchQuery: "",
+        smartSearchSynonyms: false,
+        typeFilter: "all",
+        srFilter: null,
+        sortKey: null,
+        sortDir: "asc",
+        similarity: null,
+      },
+    });
+    expect(favRes.response.type).toBe("filter_result");
+    if (favRes.response.type === "filter_result") {
+      expect(favRes.response.matched).toBe(true);
+      expect(Array.from(favRes.response.filteredIds)).toContain(target.id);
+    }
+
+    const clearAck = kernel.handleMessage({ type: "clear_search_cache" });
+    expect(clearAck.response).toEqual({ type: "pool_ack", poolEpoch: 2 });
+  });
 });

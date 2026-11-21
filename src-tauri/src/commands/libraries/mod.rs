@@ -11,6 +11,7 @@ pub use sync::*;
 
 use crate::commands::Library;
 use crate::db::{get_active_profile_id, run_read_query, AppState};
+use crate::security::sanitize_err;
 use rusqlite::{params, Connection};
 use std::path::Path;
 use tauri::{AppHandle, State};
@@ -101,6 +102,7 @@ pub fn set_library_read_only(
 pub fn set_library_profile_scope(
     app: AppHandle,
     state: State<'_, AppState>,
+    ai_state: State<'_, crate::ai_tagger::AiTaggerState>,
     library_id: i64,
     is_global: bool,
     assigned_to_profile: bool,
@@ -126,6 +128,7 @@ pub fn set_library_profile_scope(
         );
     }
     crate::reconcile_library_asset_scopes(&app, &conn, None);
+    ai_state.invalidate_vector_cache();
     Ok(())
 }
 
@@ -183,32 +186,50 @@ pub(crate) fn remove_library_with_conn(
         }
     }
 
-    conn.execute("DELETE FROM libraries WHERE id = ?1", params![library_id])
+    // Drop per-row sample_tags FTS trigger during cascade delete (otherwise deleting a 50k-sample
+    // library triggers ~150k redundant FTS updates on rows that `trg_samples_ad` is deleting anyway).
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("Failed starting library delete transaction: {}", e))?;
+    let _ = tx.execute_batch("DROP TRIGGER IF EXISTS trg_sample_tags_ad;");
+    tx.execute("DELETE FROM libraries WHERE id = ?1", params![library_id])
         .map_err(|e| format!("Failed to remove library: {}", e))?;
+    tx.execute_batch(crate::db::SAMPLE_TAGS_FTS_TRIGGERS_SQL)
+        .map_err(|e| format!("Failed restoring tag FTS triggers after library removal: {}", e))?;
 
     // Clean up orphaned auto-tags and auto-genres while preserving user-created ones!
-    let _ = conn.execute(
+    let _ = tx.execute(
         "DELETE FROM tags WHERE is_manual = 0 AND id NOT IN (SELECT DISTINCT tag_id FROM sample_tags)",
         [],
     );
-    let _ = conn.execute(
+    let _ = tx.execute(
         "DELETE FROM genres WHERE is_manual = 0 AND LOWER(name) NOT IN (SELECT DISTINCT LOWER(genre) FROM samples WHERE genre != '')",
         [],
     );
+    tx.commit()
+        .map_err(|e| format!("Failed committing library removal: {}", e))?;
 
     Ok(removed_path)
 }
 
 #[tauri::command]
-pub fn remove_library(
+pub async fn remove_library(
     app: AppHandle,
     state: State<'_, AppState>,
     ai_state: State<'_, crate::ai_tagger::AiTaggerState>,
     library_id: i64,
 ) -> Result<(), String> {
-    let mut conn = state.lock_db();
-    let removed_path = remove_library_with_conn(&mut conn, &state.user_dir, library_id)?;
-    crate::reconcile_library_asset_scopes(&app, &conn, removed_path.as_deref());
+    let state_owned = state.inner().clone();
+    let app_clone = app.clone();
+    let user_dir_err = state.user_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = state_owned.lock_db();
+        let removed_path = remove_library_with_conn(&mut conn, &state_owned.user_dir, library_id)?;
+        crate::reconcile_library_asset_scopes(&app_clone, &conn, removed_path.as_deref());
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|e| sanitize_err(&user_dir_err, &format!("Library removal task failed: {}", e)))??;
     ai_state.invalidate_vector_cache();
     Ok(())
 }

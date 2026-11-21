@@ -199,7 +199,7 @@ pub(crate) fn preview_license_group_samples_with_conn(
                AND (l.is_global = 1 OR s.library_id IN (
                    SELECT library_id FROM profile_libraries WHERE profile_id = ?1
                ))
-             ORDER BY s.file_name ASC",
+             ORDER BY s.file_name COLLATE NOCASE ASC",
         )
         .map_err(|e| format!("Preview query prepare error: {}", e))?;
 

@@ -93,36 +93,6 @@ export function createCollectionTemplateActions(ctx: StoreSliceContext) {
       await get().persistActiveProfileSettings(true);
     },
 
-    setAutoCreateCollectionSubfolders: (
-      autoCreateCollectionSubfolders: boolean
-    ) => {
-      safeSetItem(
-        AUDIFY_STORAGE_KEYS.autoCreateSubfolders,
-        String(autoCreateCollectionSubfolders)
-      );
-      set({
-        autoCreateCollectionSubfolders,
-        statusMessage: autoCreateCollectionSubfolders
-          ? "Auto-create sub-folders on new collections enabled"
-          : "Auto-create sub-folders on new collections disabled",
-      });
-      void get().persistActiveProfileSettings();
-    },
-
-    setAutoRouteCollectionDrops: (autoRouteCollectionDrops: boolean) => {
-      safeSetItem(
-        AUDIFY_STORAGE_KEYS.autoRouteCollectionDrops,
-        String(autoRouteCollectionDrops)
-      );
-      set({
-        autoRouteCollectionDrops,
-        statusMessage: autoRouteCollectionDrops
-          ? "Smart path routing on collection drop enabled"
-          : "Smart path routing on collection drop disabled",
-      });
-      void get().persistActiveProfileSettings();
-    },
-
     applyTemplatesToExistingCollection: async (collectionId: number) => {
       const { collections, collectionTemplates } = get();
       const targetCol = collections.find((c) => c.id === collectionId);

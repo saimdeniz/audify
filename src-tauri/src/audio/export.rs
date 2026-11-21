@@ -202,14 +202,14 @@ pub fn export_wav_slice_to_path(
     let mut decoder = opened.decoder;
     let track_id = opened.track_id;
     let mut sample_rate = opened.sample_rate;
-    let out_channels = opened.channels.max(1).clamp(1, 2);
+    let mut out_channels = opened.channels.clamp(0, 2);
 
     let init_sr = if sample_rate > 0 { sample_rate } else { 48000 };
     let max_init_frames = (10.0 * init_sr as f64) as usize;
     let requested_init_frames = ((end_sec - start_sec) * init_sr as f64).ceil() as usize;
     let init_cap = requested_init_frames
         .min(max_init_frames)
-        .saturating_mul(out_channels);
+        .saturating_mul(if out_channels > 0 { out_channels } else { 2 });
 
     let max_wav_samples = ((u32::MAX as usize).saturating_sub(44) / 2).min(MAX_PCM_BUFFER_SAMPLES);
     let mut pcm_samples: Vec<i16> = Vec::with_capacity(init_cap);
@@ -234,6 +234,10 @@ pub fn export_wav_slice_to_path(
             if sample_rate == 0 {
                 sample_rate = spec.rate;
             }
+            let ch = spec.channels.count();
+            if out_channels == 0 {
+                out_channels = ch.clamp(1, 2);
+            }
             let start_frame = (start_sec * sample_rate as f64).floor() as u64;
             let end_frame = (end_sec * sample_rate as f64).ceil() as u64;
             if current_frame >= end_frame {
@@ -247,7 +251,6 @@ pub fn export_wav_slice_to_path(
                 continue;
             }
 
-            let ch = spec.channels.count();
             let slice_start_frame = start_frame.saturating_sub(current_frame) as usize;
             let slice_end_frame = ((end_frame - current_frame).min(frames)) as usize;
 
@@ -268,7 +271,7 @@ pub fn export_wav_slice_to_path(
         }
     }
 
-    if sample_rate == 0 || pcm_samples.is_empty() {
+    if sample_rate == 0 || out_channels == 0 || pcm_samples.is_empty() {
         return Err("No audio frames could be decoded in the selected slice range".to_string());
     }
 
@@ -370,7 +373,7 @@ pub fn transcode_audio_to_pcm_wav(
     let mut decoder = opened.decoder;
     let track_id = opened.track_id;
     let mut sample_rate = opened.sample_rate;
-    let out_channels = opened.channels.max(1).clamp(1, 2);
+    let mut out_channels = opened.channels.clamp(0, 2);
 
     let mut pcm_samples: Vec<i16> = Vec::new();
     let mut sample_buf_slot: Option<(SignalSpec, usize, SampleBuffer<f32>)> = None;
@@ -394,6 +397,9 @@ pub fn transcode_audio_to_pcm_wav(
                 sample_rate = spec.rate;
             }
             let ch = spec.channels.count();
+            if out_channels == 0 {
+                out_channels = ch.clamp(1, 2);
+            }
             let mut hit_cap = false;
             for f_idx in 0..frames {
                 if pcm_samples.len().saturating_add(out_channels) > MAX_PCM_BUFFER_SAMPLES {
@@ -409,7 +415,7 @@ pub fn transcode_audio_to_pcm_wav(
         }
     }
 
-    if sample_rate == 0 || pcm_samples.is_empty() {
+    if sample_rate == 0 || out_channels == 0 || pcm_samples.is_empty() {
         return Err("No audio frames could be decoded from file".to_string());
     }
 

@@ -30,11 +30,7 @@ export const LicensesTreeTab: React.FC = () => {
   const libraries = useSampleStore((s) => s.libraries);
   const folderStats = useSampleStore((s) => s.folderStats);
   const fallbackSamplesForTree = useSampleStore((s) =>
-    s.folderStats.length > 0
-      ? EMPTY_SAMPLES
-      : s.allProfileSamples.length > 0
-      ? s.allProfileSamples
-      : s.rawSamples
+    s.folderStats.length > 0 ? EMPTY_SAMPLES : s.rawSamples
   );
   const licenseGroups = useSampleStore((s) => s.licenseGroups);
   const selectedLicenseGroupId = useSampleStore(

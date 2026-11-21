@@ -276,6 +276,10 @@ pub(super) fn commit_restore_db(
             ));
         }
 
+        let _ = crate::commands::slices::relink_sample_slices_source_by_sample_id(
+            &tx, *sid, norm_dst, final_name,
+        );
+
         let _ = tx.execute(
             "INSERT INTO file_ops_journal (sample_id, op_type, old_path, new_path, old_name, new_name)
              VALUES (?1, 'RESTORE', ?2, ?3, ?4, ?4)",

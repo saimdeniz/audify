@@ -1,4 +1,5 @@
 import { SampleItem } from "../types";
+import { computeSmartCollectionCounts } from "../utils/smartCollectionCounts";
 import {
   hydrateSamplesFromIds,
   runCatalogWorkerFilter,
@@ -21,7 +22,7 @@ export function scheduleWorkerSmartCollectionCounts(
   getState: () => SampleStoreState,
   applyCountsRaw: (partial: Partial<SampleStoreState>) => void
 ): void {
-  const poolEpoch = syncCatalogWorkerPool(nextPool);
+  syncCatalogWorkerPool(nextPool);
   if (smartCountsDispatchQueued) return;
   smartCountsDispatchQueued = true;
 
@@ -34,21 +35,28 @@ export function scheduleWorkerSmartCollectionCounts(
       return;
     }
     const currentEpoch = syncCatalogWorkerPool(live.allProfileSamples);
-    if (currentEpoch !== poolEpoch && live.allProfileSamples !== nextPool) {
-      return;
-    }
     void runCatalogWorkerSmartCounts(
       currentEpoch,
       live.collections,
       live.smartSearchSynonyms
     ).then((counts) => {
-      if (!counts) return;
       const now = getState();
       if (
         now.allProfileSamples !== live.allProfileSamples ||
         now.collections !== live.collections ||
         now.smartSearchSynonyms !== live.smartSearchSynonyms
       ) {
+        return;
+      }
+      if (!counts) {
+        // Worker crashed/disabled mid-request: fall back synchronously so counts never freeze stale
+        applyCountsRaw({
+          smartCollectionCounts: computeSmartCollectionCounts(
+            now.allProfileSamples,
+            now.collections,
+            now.smartSearchSynonyms
+          ),
+        });
         return;
       }
       applyCountsRaw({ smartCollectionCounts: counts });
@@ -66,6 +74,7 @@ export function dispatchWorkerInstantMemoryFilter(params: {
   getProfileEpoch: () => number;
   getState: () => SampleStoreState;
   set: (partial: Partial<SampleStoreState>) => void;
+  onSyncFallback: () => void;
 }): void {
   const {
     snapshotState,
@@ -77,6 +86,7 @@ export function dispatchWorkerInstantMemoryFilter(params: {
     getProfileEpoch,
     getState,
     set,
+    onSyncFallback,
   } = params;
 
   const {
@@ -137,7 +147,6 @@ export function dispatchWorkerInstantMemoryFilter(params: {
       : null,
   }).then((res) => {
     if (
-      !res ||
       memSeq !== latestMemFilterSeq ||
       fetchSeq !== getFetchSeq() ||
       profileEpoch !== getProfileEpoch()
@@ -147,6 +156,12 @@ export function dispatchWorkerInstantMemoryFilter(params: {
 
     const live = getState();
     if (live.allProfileSamples !== allProfileSamples || live.trashFilterActive) {
+      return;
+    }
+
+    if (!res) {
+      // Worker failed/terminated unexpectedly: run main-thread fallback so table never stalls
+      onSyncFallback();
       return;
     }
 

@@ -210,7 +210,7 @@ export const ContextMenuCollectionSubmenu: React.FC<
                       >
                         <span className="flex items-center space-x-1.5 truncate min-w-0">
                           <CornerDownRight className="w-3 h-3 text-fg-3 shrink-0" />
-                          <span className="w-2 h-2 rounded-full shrink-0 shadow-xs bg-accent" />
+                          <span className="w-2 h-2 rounded-[2px] shrink-0 shadow-xs bg-accent" />
                           <span className="truncate">{child.name}</span>
                         </span>
                         <span className="font-mono text-[9px] text-fg-3 shrink-0 ml-1">

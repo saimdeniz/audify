@@ -324,10 +324,7 @@ pub fn init_schema_on_conn(conn: &Connection) -> Result<(), String> {
         PRAGMA foreign_keys = ON;
 
         CREATE INDEX IF NOT EXISTS idx_samples_library_id ON samples(library_id);
-        CREATE INDEX IF NOT EXISTS idx_samples_is_favorite ON samples(is_favorite);
-        CREATE INDEX IF NOT EXISTS idx_samples_fav_filename ON samples(is_favorite, file_name COLLATE NOCASE);
         CREATE INDEX IF NOT EXISTS idx_samples_is_loop ON samples(is_loop);
-        CREATE INDEX IF NOT EXISTS idx_samples_is_trashed ON samples(is_trashed);
         CREATE INDEX IF NOT EXISTS idx_samples_trashed_lib ON samples(is_trashed, library_id);
         CREATE INDEX IF NOT EXISTS idx_samples_file_path_nocase ON samples(file_path COLLATE NOCASE);
         CREATE INDEX IF NOT EXISTS idx_samples_genre ON samples(genre COLLATE NOCASE);
@@ -337,8 +334,6 @@ pub fn init_schema_on_conn(conn: &Connection) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_samples_lib_filename ON samples(library_id, file_name COLLATE NOCASE);
         CREATE INDEX IF NOT EXISTS idx_samples_file_modified_at ON samples(file_modified_at);
         CREATE INDEX IF NOT EXISTS idx_samples_created_at ON samples(created_at);
-        CREATE INDEX IF NOT EXISTS idx_sample_tags_sample_id ON sample_tags(sample_id);
-        CREATE INDEX IF NOT EXISTS idx_sample_tags_tag_id ON sample_tags(tag_id);
         CREATE INDEX IF NOT EXISTS idx_collections_profile_id ON collections(profile_id);
         CREATE INDEX IF NOT EXISTS idx_sample_slices_profile_created
             ON sample_slices(profile_id, created_at DESC, id DESC);
@@ -348,9 +343,6 @@ pub fn init_schema_on_conn(conn: &Connection) -> Result<(), String> {
             ON collections(profile_id, COALESCE(parent_id, 0), name);
         CREATE INDEX IF NOT EXISTS idx_collections_parent_id
             ON collections(parent_id);
-        CREATE INDEX IF NOT EXISTS idx_collection_items_collection_id ON collection_items(collection_id);
-        CREATE INDEX IF NOT EXISTS idx_profile_libraries_profile_id ON profile_libraries(profile_id);
-        CREATE INDEX IF NOT EXISTS idx_profile_favorites_profile_id ON profile_favorites(profile_id);
         CREATE INDEX IF NOT EXISTS idx_profile_favorites_sample_id ON profile_favorites(sample_id);
         CREATE INDEX IF NOT EXISTS idx_file_ops_journal_sample_id ON file_ops_journal(sample_id);
         CREATE INDEX IF NOT EXISTS idx_ai_embeddings_model ON sample_embeddings(model_id);

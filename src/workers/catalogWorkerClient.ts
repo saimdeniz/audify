@@ -3,9 +3,12 @@ import { getCachedSampleByIdMap } from "../utils/sampleLookup";
 import {
   CATALOG_WORKER_THRESHOLD,
   type CatalogFilterQueryParams,
+  type CatalogPoolPatchEntry,
   type CatalogWorkerRequest,
   type CatalogWorkerResponse,
 } from "./catalogWorkerProtocol";
+
+const MAX_INCREMENTAL_PATCH_UPDATES = 256;
 
 let workerInstance: Worker | null = null;
 let workerFailed = false;
@@ -101,24 +104,94 @@ export function shouldUseCatalogWorker(sampleCount: number): boolean {
   );
 }
 
+export function clearCatalogWorkerPool(): void {
+  if (lastPoolRef === null && !workerInstance) return;
+  lastPoolRef = null;
+  currentPoolEpoch += 1;
+  if (pendingFilter) {
+    const res = pendingFilter.resolve;
+    pendingFilter = null;
+    res(null);
+  }
+  if (pendingCounts) {
+    const res = pendingCounts.resolve;
+    pendingCounts = null;
+    res(null);
+  }
+  if (workerInstance) {
+    const msg: CatalogWorkerRequest = {
+      type: "set_pool",
+      poolEpoch: currentPoolEpoch,
+      samples: [],
+    };
+    workerInstance.postMessage(msg);
+  }
+}
+
+export function clearCatalogWorkerSearchCache(): void {
+  if (!workerInstance) return;
+  const msg: CatalogWorkerRequest = { type: "clear_search_cache" };
+  workerInstance.postMessage(msg);
+}
+
+function stripPeaksIfPresent(sample: SampleItem): SampleItem {
+  return sample.peaks_json ? { ...sample, peaks_json: "" } : sample;
+}
+
 export function syncCatalogWorkerPool(pool: SampleItem[]): number {
   if (pool === lastPoolRef && currentPoolEpoch > 0) {
     return currentPoolEpoch;
   }
+  const prevPool = lastPoolRef;
   lastPoolRef = pool;
   currentPoolEpoch += 1;
 
   const w = ensureCatalogWorker();
   if (!w) return currentPoolEpoch;
 
+  // Incremental diff when only a small set of rows changed (favorite, tag, BPM, rename)
+  // so single-row edits never structuredClone 50k–150k samples into the worker!
+  if (
+    prevPool &&
+    prevPool.length === pool.length &&
+    pool.length >= CATALOG_WORKER_THRESHOLD
+  ) {
+    const updates: CatalogPoolPatchEntry[] = [];
+    let exceeded = false;
+    for (let i = 0; i < pool.length; i++) {
+      if (pool[i] !== prevPool[i]) {
+        if (updates.length >= MAX_INCREMENTAL_PATCH_UPDATES) {
+          exceeded = true;
+          break;
+        }
+        updates.push({ index: i, sample: stripPeaksIfPresent(pool[i]) });
+      }
+    }
+    if (!exceeded) {
+      if (updates.length > 0) {
+        const msg: CatalogWorkerRequest = {
+          type: "patch_pool",
+          poolEpoch: currentPoolEpoch,
+          updates,
+        };
+        w.postMessage(msg);
+      } else {
+        // Identical element references: keep worker epoch synced with an empty patch
+        const msg: CatalogWorkerRequest = {
+          type: "patch_pool",
+          poolEpoch: currentPoolEpoch,
+          updates: [],
+        };
+        w.postMessage(msg);
+      }
+      return currentPoolEpoch;
+    }
+  }
+
   const hasAnyPeaks = pool.some(
     (s) => typeof s.peaks_json === "string" && s.peaks_json.length > 0
   );
-  const slimSamples = hasAnyPeaks
-    ? pool.map((s) =>
-        s.peaks_json ? { ...s, peaks_json: "" } : s
-      )
-    : pool;
+  const slimSamples = hasAnyPeaks ? pool.map(stripPeaksIfPresent) : pool;
 
   const msg: CatalogWorkerRequest = {
     type: "set_pool",

@@ -9,12 +9,14 @@ import {
   safeSetItem,
 } from "../storageHelpers";
 import type { MainFilterRequest, StoreSliceContext } from "../types";
+import { bumpMemoryFilterSeq } from "../workerBridge";
 
 export function createFilterSlice(
   ctx: StoreSliceContext,
   opts: {
     setSearchDebounceTimer: (t: ReturnType<typeof setTimeout> | null) => void;
     clearSearchDebounceTimer: () => void;
+    bumpFetchSeq: () => number;
   }
 ) {
   const { set, get, applyInstantMemoryFilter } = ctx;
@@ -286,6 +288,8 @@ export function createFilterSlice(
     },
 
     setTypeFilter: (typeFilter: TypeFilter) => {
+      bumpMemoryFilterSeq();
+      opts.bumpFetchSeq();
       const {
         rawSamples,
         srFilter,
@@ -319,6 +323,8 @@ export function createFilterSlice(
     },
 
     setSrFilter: (srFilter: SampleRateFilter) => {
+      bumpMemoryFilterSeq();
+      opts.bumpFetchSeq();
       const {
         rawSamples,
         typeFilter,
@@ -353,6 +359,8 @@ export function createFilterSlice(
 
     // Header click cycles: asc -> desc -> default (or desc -> asc -> default for date columns).
     cycleSort: (key: SortKey) => {
+      bumpMemoryFilterSeq();
+      opts.bumpFetchSeq();
       const {
         sortKey,
         sortDir,

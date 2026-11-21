@@ -106,6 +106,7 @@ export function createFileOpsSlice(ctx: StoreSliceContext) {
         set,
         get,
         emitNotice,
+        getProfileEpoch: ctx.getProfileEpoch,
         releaseMatchingAudioHandle,
       });
     }

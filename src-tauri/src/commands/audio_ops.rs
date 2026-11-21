@@ -1,13 +1,12 @@
-use super::{strip_lib_prefix, with_read_conn};
+use super::with_read_conn;
 use crate::audio::{
     compute_hires_peaks, compute_preview_norm_gain, export_wav_slice_with_options,
     resolve_metadata_titles_validated, transcode_audio_to_pcm_wav,
 };
 use crate::db::AppState;
 use crate::security::{
-    collect_profile_slice_dirs, ensure_not_inside_user_dir, ensure_safe_export_dir,
-    has_ntfs_ads_colon, is_unc_or_network_path, open_directory_in_shell, sanitize_err,
-    validate_audio_path_in_scope,
+    ensure_not_inside_user_dir, ensure_safe_export_dir, has_ntfs_ads_colon,
+    open_directory_in_shell, sanitize_err, validate_audio_path_in_scope,
 };
 use rusqlite::{params_from_iter, Connection};
 use std::collections::HashMap;
@@ -27,8 +26,11 @@ pub(crate) fn resolve_slice_export_dir(
     if let Some(dir) = custom_dir {
         let trimmed = dir.trim();
         if !trimmed.is_empty() {
-            let safe_dir = ensure_safe_export_dir(trimmed).map_err(|e| sanitize_err(user_dir, &e))?;
+            ensure_not_inside_user_dir(user_dir, Path::new(trimmed))?;
+            let safe_dir =
+                ensure_safe_export_dir(trimmed).map_err(|e| sanitize_err(user_dir, &e))?;
             ensure_not_inside_user_dir(user_dir, &safe_dir)?;
+            crate::commands::slices::ensure_slice_not_in_readonly_library(conn, &safe_dir)?;
             return Ok(safe_dir);
         }
     }
@@ -44,9 +46,16 @@ pub(crate) fn resolve_slice_export_dir(
                 .and_then(|v| v.as_str())
             {
                 let trimmed = custom_path.trim();
-                if !trimmed.is_empty() {
+                if !trimmed.is_empty()
+                    && ensure_not_inside_user_dir(user_dir, Path::new(trimmed)).is_ok()
+                {
                     if let Ok(safe_dir) = ensure_safe_export_dir(trimmed) {
-                        if ensure_not_inside_user_dir(user_dir, &safe_dir).is_ok() {
+                        if ensure_not_inside_user_dir(user_dir, &safe_dir).is_ok()
+                            && crate::commands::slices::ensure_slice_not_in_readonly_library(
+                                conn, &safe_dir,
+                            )
+                            .is_ok()
+                        {
                             return Ok(safe_dir);
                         }
                     }
@@ -169,41 +178,6 @@ pub async fn transcode_to_pcm_cache(
     .map_err(|e| sanitize_err(&user_dir_err, &format!("Transcode fallback error: {}", e)))?
 }
 
-fn is_missing_path_within_scope_prefix(conn: &Connection, user_dir: &Path, raw: &str) -> bool {
-    if raw.contains("..") {
-        return false;
-    }
-    for cache_sub in [
-        user_dir.join("slices"),
-        user_dir.join("cache").join("slices"),
-        user_dir.join("cache").join("playback_fallback"),
-    ] {
-        if strip_lib_prefix(raw, &cache_sub.to_string_lossy()).is_some() {
-            return true;
-        }
-    }
-    let active_id = crate::db::get_active_profile_id(conn);
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT path FROM libraries
-         WHERE is_global = 1
-            OR id IN (SELECT library_id FROM profile_libraries WHERE profile_id = ?1)",
-    ) {
-        if let Ok(rows) = stmt.query_map([active_id], |r| r.get::<_, String>(0)) {
-            for lp in rows.flatten() {
-                if !is_unc_or_network_path(&lp) && strip_lib_prefix(raw, &lp).is_some() {
-                    return true;
-                }
-            }
-        }
-    }
-    for sd in collect_profile_slice_dirs(conn, true) {
-        if strip_lib_prefix(raw, &sd.to_string_lossy()).is_some() {
-            return true;
-        }
-    }
-    false
-}
-
 #[tauri::command]
 pub async fn resolve_metadata_titles(
     state: State<'_, AppState>,
@@ -216,41 +190,22 @@ pub async fn resolve_metadata_titles(
     let state_owned = state.inner().clone();
     let user_dir_err = state.user_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let validated_pairs: Vec<(String, PathBuf)> = with_read_conn(&state_owned, |conn| {
-            let mut pairs = Vec::with_capacity(file_paths.len());
-            for fp in file_paths {
-                let trimmed = fp.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                if is_unc_or_network_path(trimmed) || has_ntfs_ads_colon(trimmed) {
-                    return Err(
-                        "Network/UNC paths and alternate data streams are not allowed".to_string(),
-                    );
-                }
-                // Check registered library / cache / slice scope BEFORE touching filesystem metadata
-                // so out-of-scope paths can never act as an existence/symlink oracle.
-                if !is_missing_path_within_scope_prefix(conn, &state_owned.user_dir, trimmed) {
-                    return Err(
-                        "Access denied: path is outside registered libraries and audio cache"
-                            .to_string(),
-                    );
-                }
-                match fs::symlink_metadata(trimmed) {
-                    Ok(sym) if sym.file_type().is_symlink() => {
-                        return Err("Symbolic links and junctions are not allowed".to_string());
-                    }
-                    Err(_) => {
-                        continue;
-                    }
-                    Ok(_) => {}
-                }
-                let canon = validate_audio_path_in_scope(conn, &state_owned.user_dir, trimmed)
-                    .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
-                pairs.push((fp, canon));
-            }
-            Ok(pairs)
+        let scope = with_read_conn(&state_owned, |conn| {
+            Ok(crate::security::AuthorizedAudioScope::from_conn(
+                conn,
+                &state_owned.user_dir,
+            ))
         })?;
+
+        let mut validated_pairs: Vec<(String, PathBuf)> = Vec::with_capacity(file_paths.len());
+        for fp in file_paths {
+            if let Some(canon) = scope
+                .validate_existing_audio_file(&fp)
+                .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?
+            {
+                validated_pairs.push((fp, canon));
+            }
+        }
 
         if validated_pairs.is_empty() {
             return Ok(HashMap::new());

@@ -59,8 +59,17 @@ fn find_existing_library_id(tx: &Transaction<'_>, canonical_norm_path: &str) -> 
     None
 }
 
+#[cfg(test)]
 pub(crate) fn import_profile_from_file_with_conn(
     conn: &mut Connection,
+    file_path: &str,
+) -> Result<ImportProfileResult, String> {
+    import_profile_from_file_with_user_dir(conn, None, file_path)
+}
+
+pub(crate) fn import_profile_from_file_with_user_dir(
+    conn: &mut Connection,
+    user_dir: Option<&std::path::Path>,
     file_path: &str,
 ) -> Result<ImportProfileResult, String> {
     let validated_path = validate_archive_import_path(
@@ -154,6 +163,11 @@ pub(crate) fn import_profile_from_file_with_conn(
     // Security Hardening: ONLY insert libraries that pass `is_safe_library_dir` locally!
     for lib in &pkg.libraries {
         if let Ok(safe_dir) = is_safe_library_dir(&lib.path) {
+            if let Some(ud) = user_dir {
+                if crate::security::ensure_not_inside_user_dir(ud, &safe_dir).is_err() {
+                    continue;
+                }
+            }
             let norm_path = normalize_clean_path(&safe_dir.to_string_lossy());
             let lib_name = {
                 let t = lib.name.trim();
@@ -213,14 +227,12 @@ pub(crate) fn import_profile_from_file_with_conn(
     let (report, resolved_bin_ids) =
         restore_imported_profile_relations(&tx, new_profile_id, &pkg, &current_lib_paths)?;
 
-    if !pkg.bin_sample_indices.is_empty() {
-        if let Some(obj) = imported_settings.as_object_mut() {
-            obj.insert(
-                "binSampleIds".to_string(),
-                serde_json::to_value(&resolved_bin_ids).unwrap_or_default(),
-            );
-            updated_settings = true;
-        }
+    if let Some(obj) = imported_settings.as_object_mut() {
+        obj.insert(
+            "binSampleIds".to_string(),
+            serde_json::to_value(&resolved_bin_ids).unwrap_or_default(),
+        );
+        updated_settings = true;
     }
 
     if updated_settings {

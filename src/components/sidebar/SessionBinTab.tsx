@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   ExternalLink,
   Eye,
@@ -24,17 +25,15 @@ export const SessionBinTab: React.FC<SessionBinTabProps> = ({
   dragHoverTarget,
   setDragHoverTarget,
 }) => {
-  const binSampleIds = useSampleStore((s) => s.binSampleIds);
-  const binSamplesPool = useSampleStore((s) =>
-    s.binSampleIds.length === 0
-      ? EMPTY_SAMPLES
-      : s.allProfileSamples.length > 0
-      ? s.allProfileSamples
-      : s.rawSamples
-  );
-  const binSamples = useMemo(
-    () => resolveSamplesByIds(binSampleIds, binSamplesPool),
-    [binSampleIds, binSamplesPool]
+  const binSamples = useSampleStore(
+    useShallow((s) =>
+      s.binSampleIds.length === 0
+        ? EMPTY_SAMPLES
+        : resolveSamplesByIds(
+            s.binSampleIds,
+            s.allProfileSamples.length > 0 ? s.allProfileSamples : s.rawSamples
+          )
+    )
   );
   const binFilterActive = useSampleStore((s) => s.binFilterActive);
   const autoBinOnNleDrag = useSampleStore((s) => s.autoBinOnNleDrag);
@@ -175,7 +174,7 @@ export const SessionBinTab: React.FC<SessionBinTabProps> = ({
             type="button"
             onClick={() => clearBin()}
             disabled={binSamples.length === 0}
-            className="w-[20px] h-[20px] rounded-xs bg-surface-3 hover:bg-danger hover:text-danger-on hover:border-danger border border-line text-fg-3 flex items-center justify-center shrink-0 transition-colors disabled:opacity-35"
+            className="w-[20px] h-[20px] rounded-xs bg-surface-3 hover:bg-accent-soft hover:text-accent-fg hover:border-accent border border-line text-fg-3 flex items-center justify-center shrink-0 transition-colors disabled:opacity-35"
             title="Clear Session Bin"
           >
             <Trash2 className="w-3 h-3" />
@@ -253,7 +252,7 @@ export const SessionBinTab: React.FC<SessionBinTabProps> = ({
                     e.stopPropagation();
                     removeSampleFromBin(s.id);
                   }}
-                  className="opacity-0 group-hover:opacity-100 w-[18px] h-[18px] rounded-xs flex items-center justify-center text-fg-2 hover:text-danger hover:bg-line shrink-0 ml-1"
+                  className="opacity-0 group-hover:opacity-100 w-[18px] h-[18px] rounded-xs flex items-center justify-center text-fg-2 hover:text-accent-fg hover:bg-line shrink-0 ml-1"
                   title="Remove from Bin"
                 >
                   <X className="w-3 h-3" />

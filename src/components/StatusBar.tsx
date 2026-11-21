@@ -389,7 +389,7 @@ export const BottomStatusBar: React.FC = React.memo(() => {
         {activeCol && (
           <span className="inline-flex items-center space-x-1 text-accent-fg">
             {activeCol.parent_id ? (
-              <span className="w-2 h-2 rounded-full shrink-0 shadow-xs mr-0.5 bg-accent" />
+              <span className="w-2 h-2 rounded-[2px] shrink-0 shadow-xs mr-0.5 bg-accent" />
             ) : (
               <CollectionIcon icon={activeCol.icon} className="w-3 h-3" />
             )}

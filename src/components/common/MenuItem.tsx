@@ -8,7 +8,7 @@ export interface MenuItemProps {
   onClick?: () => void;
   onMouseEnter?: () => void;
   disabled?: boolean;
-  tone?: "default" | "accent" | "danger" | "ok";
+  tone?: "default" | "accent";
   compactHeight?: boolean;
   title?: string;
   className?: string;
@@ -73,11 +73,7 @@ export const MenuItem: React.FC<MenuItemProps> = ({
   className = "",
 }) => {
   const toneClasses =
-    tone === "danger"
-      ? "text-fg-2 hover:bg-danger/20 hover:text-danger focus-visible:bg-danger/20 focus-visible:text-danger"
-      : tone === "ok"
-      ? "text-ok hover:bg-ok/20 focus-visible:bg-ok/20"
-      : tone === "accent"
+    tone === "accent"
       ? "text-fg hover:bg-accent-soft hover:text-accent-fg focus-visible:bg-accent-soft focus-visible:text-accent-fg"
       : "text-fg hover:bg-surface-hover focus-visible:bg-surface-hover";
 

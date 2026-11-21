@@ -6,15 +6,19 @@ import { invoke } from "@tauri-apps/api/core";
  *
  * The library DB only stores 600 bins per track (~180 ms each on a 108 s file).
  * The deck asks the backend for ~30 bins/sec for the selected track only, which
- * keeps transients aligned with the audio. Requests are debounced (95ms) during
- * rapid arrow-key scrubbing so holding ArrowDown does not flood the backend with
- * dozens of concurrent full-file Symphonia decode tasks.
+ * keeps transients aligned with the audio. Uses adaptive debounce: single clicks
+ * after idle (>= 200ms) fire immediately (0ms), while rapid scrubbing (< 200ms
+ * between track changes, e.g. holding ArrowDown) applies a 95ms debounce so we
+ * never flood the backend with dozens of concurrent Symphonia decode tasks.
  */
 
 const MAX_ENTRIES = 32;
 const DEBOUNCE_MS = 95;
+const RAPID_SCRUB_WINDOW_MS = 200;
 const cache = new Map<string, number[]>();
 const inflight = new Map<string, Promise<number[] | null>>();
+let cacheGeneration = 0;
+let lastSelectionTimestamp = 0;
 
 function remember(path: string, peaks: number[]) {
   cache.delete(path);
@@ -34,16 +38,21 @@ function loadHiResPeaks(path: string): Promise<number[] | null> {
   const pending = inflight.get(path);
   if (pending) return pending;
 
+  const gen = cacheGeneration;
   const p = invoke<number[]>("get_hires_peaks", { filePath: path })
     .then((raw) => {
       if (!Array.isArray(raw) || raw.length === 0) return null;
       const peaks = raw.map((v) => Math.max(0, Math.min(1, v / 255)));
-      remember(path, peaks);
+      if (gen === cacheGeneration) {
+        remember(path, peaks);
+      }
       return peaks;
     })
     .catch(() => null)
     .finally(() => {
-      inflight.delete(path);
+      if (inflight.get(path) === p) {
+        inflight.delete(path);
+      }
     });
   inflight.set(path, p);
   return p;
@@ -51,7 +60,10 @@ function loadHiResPeaks(path: string): Promise<number[] | null> {
 
 /** Drop cached hi-res peaks (e.g. after files changed on disk or rescan). */
 export function clearHiResPeaksCache() {
+  cacheGeneration += 1;
   cache.clear();
+  inflight.clear();
+  lastSelectionTimestamp = 0;
 }
 
 /**
@@ -66,6 +78,14 @@ export function useHiResPeaks(filePath: string | undefined): number[] | null {
 
   useEffect(() => {
     if (!filePath) return;
+    const now = Date.now();
+    const elapsed = now - lastSelectionTimestamp;
+    const isRapidScrub =
+      lastSelectionTimestamp > 0 &&
+      elapsed >= 0 &&
+      elapsed < RAPID_SCRUB_WINDOW_MS;
+    lastSelectionTimestamp = now;
+
     const hit = cache.get(filePath);
     if (hit) {
       remember(filePath, hit);
@@ -74,14 +94,22 @@ export function useHiResPeaks(filePath: string | undefined): number[] | null {
     }
 
     let cancelled = false;
-    const timer = window.setTimeout(() => {
+    const runFetch = () => {
       loadHiResPeaks(filePath).then((peaks) => {
         if (!cancelled && peaks) {
           setState({ path: filePath, peaks });
         }
       });
-    }, DEBOUNCE_MS);
+    };
 
+    if (!isRapidScrub) {
+      runFetch();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const timer = window.setTimeout(runFetch, DEBOUNCE_MS);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);

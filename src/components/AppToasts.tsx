@@ -13,6 +13,8 @@ export const StatusNoticeToast: React.FC<{
 }> = ({ notice, onDismiss }) => (
   <div
     key={notice.seq}
+    role={notice.kind === "error" ? "alert" : "status"}
+    aria-live={notice.kind === "error" ? "assertive" : "polite"}
     style={{ zIndex: Z_INDEX.statusToast }}
     data-mica-overlay="true"
     className={`fixed bottom-5 right-5 max-w-[min(420px,92vw)] rounded-md bg-surface-2 backdrop-blur-md border px-3 py-2 shadow-2xl flex items-center space-x-2.5 ${
@@ -52,6 +54,8 @@ export const CreditToastBanner: React.FC<{
 }> = ({ toast, onDismiss, onPause, onResume }) => (
   <div
     key={toast.seq}
+    role="status"
+    aria-live="polite"
     onMouseEnter={onPause}
     onMouseLeave={onResume}
     style={{ zIndex: Z_INDEX.creditToast }}

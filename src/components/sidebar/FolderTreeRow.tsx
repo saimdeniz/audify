@@ -65,7 +65,7 @@ interface FolderTreeRowProps {
   setFolderContextMenu: (menu: SidebarFolderContextMenuState | null) => void;
 }
 
-export const FolderTreeRow: React.FC<FolderTreeRowProps> = ({
+export const FolderTreeRow: React.FC<FolderTreeRowProps> = React.memo(({
   row,
   virtualStart,
   virtualSize,
@@ -457,4 +457,4 @@ export const FolderTreeRow: React.FC<FolderTreeRowProps> = ({
       title={node.fullPath}
     />
   );
-};
+});

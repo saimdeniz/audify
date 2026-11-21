@@ -22,7 +22,7 @@ pub(super) fn query_empty_trash_rows(
                 let placeholders: Vec<String> =
                     (2..=chunk.len() + 1).map(|i| format!("?{i}")).collect();
                 let sql = format!(
-                    "SELECT s.id, COALESCE(s.trash_file_path, s.file_path), l.path
+                    "SELECT s.id, COALESCE(s.trash_file_path, s.file_path), l.path, COALESCE(l.is_read_only, 0), l.name
                      FROM samples s
                      INNER JOIN libraries l ON l.id = s.library_id
                      WHERE COALESCE(s.is_trashed, 0) = 1
@@ -43,9 +43,19 @@ pub(super) fn query_empty_trash_rows(
                             r.get::<_, i64>(0)?,
                             r.get::<_, String>(1)?,
                             r.get::<_, String>(2)?,
+                            r.get::<_, bool>(3)?,
+                            r.get::<_, String>(4)?,
                         ))
                     }) {
-                        list.extend(rows.flatten());
+                        for row in rows.flatten() {
+                            if row.3 {
+                                return Err(format!(
+                                    "Library '{}' is locked as a Protected Read-Only Vault. Unlock it in Settings > Libraries before permanently deleting files.",
+                                    row.4
+                                ));
+                            }
+                            list.push((row.0, row.1, row.2));
+                        }
                     }
                 }
             }
@@ -54,7 +64,7 @@ pub(super) fn query_empty_trash_rows(
         _ => {
             let mut stmt = conn
                 .prepare(
-                    "SELECT s.id, COALESCE(s.trash_file_path, s.file_path), l.path
+                    "SELECT s.id, COALESCE(s.trash_file_path, s.file_path), l.path, COALESCE(l.is_read_only, 0), l.name
                      FROM samples s
                      INNER JOIN libraries l ON l.id = s.library_id
                      WHERE COALESCE(s.is_trashed, 0) = 1
@@ -68,10 +78,22 @@ pub(super) fn query_empty_trash_rows(
                         r.get::<_, i64>(0)?,
                         r.get::<_, String>(1)?,
                         r.get::<_, String>(2)?,
+                        r.get::<_, bool>(3)?,
+                        r.get::<_, String>(4)?,
                     ))
                 })
                 .map_err(|_| "Failed to read trashed samples".to_string())?;
-            Ok(mapped.flatten().collect())
+            let mut list = Vec::new();
+            for row in mapped.flatten() {
+                if row.3 {
+                    return Err(format!(
+                        "Library '{}' is locked as a Protected Read-Only Vault. Unlock it in Settings > Libraries before permanently deleting files.",
+                        row.4
+                    ));
+                }
+                list.push((row.0, row.1, row.2));
+            }
+            Ok(list)
         }
     }
 }

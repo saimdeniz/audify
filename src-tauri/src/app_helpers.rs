@@ -122,14 +122,21 @@ pub async fn start_native_file_drag(
     let paths_for_check = paths.clone();
     let valid_paths: Vec<PathBuf> = tauri::async_runtime::spawn_blocking(move || {
         let validate_all = |conn: &rusqlite::Connection| -> Result<Vec<PathBuf>, String> {
+            let scope = security::AuthorizedAudioScope::from_conn(conn, &state_owned.user_dir);
             let mut out = Vec::with_capacity(paths_for_check.len());
             for p in &paths_for_check {
                 let trimmed = p.trim();
                 if trimmed.is_empty() {
                     continue;
                 }
-                let resolved =
-                    security::validate_audio_path_in_scope(conn, &state_owned.user_dir, trimmed)?;
+                let resolved = match scope.validate_existing_audio_file(trimmed) {
+                    Ok(Some(pb)) => pb,
+                    _ => security::validate_audio_path_in_scope(
+                        conn,
+                        &state_owned.user_dir,
+                        trimmed,
+                    )?,
+                };
                 #[cfg(target_os = "windows")]
                 let native_pb = PathBuf::from(resolved.to_string_lossy().replace('/', "\\"));
                 #[cfg(not(target_os = "windows"))]

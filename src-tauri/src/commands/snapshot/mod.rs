@@ -1,10 +1,11 @@
 mod restore;
 mod slices_bundle;
 
-use self::restore::restore_full_snapshot_with_conn;
+use self::restore::restore_full_snapshot_with_state;
 use self::slices_bundle::{
     collect_staged_snapshot_slices, is_safe_snapshot_image_entry, is_safe_snapshot_slice_entry,
-    MAX_SNAPSHOT_SLICES_COUNT, MAX_SNAPSHOT_SLICE_FILE_BYTES, MAX_SNAPSHOT_TOTAL_SLICES_BYTES,
+    is_safe_snapshot_slice_trash_entry, MAX_SNAPSHOT_SLICES_COUNT, MAX_SNAPSHOT_SLICE_FILE_BYTES,
+    MAX_SNAPSHOT_TOTAL_SLICES_BYTES,
 };
 use crate::ai_tagger::AiTaggerState;
 use crate::commands::{BackupFileInfo, FullSnapshotManifest, FullSnapshotRestoreResult};
@@ -132,6 +133,9 @@ fn read_manifest_from_zip(
 pub(super) fn validate_snapshot_zip_safety(
     archive: &mut ZipArchive<BufReader<File>>,
 ) -> Result<(), String> {
+    if archive.len() > MAX_SNAPSHOT_IMAGES_COUNT + MAX_SNAPSHOT_SLICES_COUNT + 64 {
+        return Err("Snapshot archive contains too many entries".to_string());
+    }
     let mut has_manifest = false;
     let mut has_db = false;
     let mut image_count = 0usize;
@@ -165,7 +169,9 @@ pub(super) fn validate_snapshot_zip_safety(
             if total_image_bytes > MAX_SNAPSHOT_TOTAL_IMAGES_BYTES {
                 return Err("Snapshot archive exceeds maximum total image size limit".to_string());
             }
-        } else if is_safe_snapshot_slice_entry(name).is_some() {
+        } else if is_safe_snapshot_slice_entry(name).is_some()
+            || is_safe_snapshot_slice_trash_entry(name).is_some()
+        {
             slice_count += 1;
             if slice_count > MAX_SNAPSHOT_SLICES_COUNT {
                 return Err("Snapshot archive exceeds maximum allowed slice count".to_string());
@@ -205,7 +211,9 @@ pub(super) fn copy_bounded_from_zip<R: Read, W: Write>(
     Ok(copied)
 }
 
-pub(crate) fn read_snapshot_manifest_summary(path: &Path) -> Result<FullSnapshotManifest, String> {
+pub(super) fn open_validated_snapshot_archive(
+    path: &Path,
+) -> Result<(ZipArchive<BufReader<File>>, FullSnapshotManifest), String> {
     let raw_str = path.to_string_lossy();
     if crate::security::is_unc_or_network_path(&raw_str) {
         return Err("Network and UNC paths are not allowed".to_string());
@@ -238,7 +246,12 @@ pub(crate) fn read_snapshot_manifest_summary(path: &Path) -> Result<FullSnapshot
     let mut archive = ZipArchive::new(BufReader::new(file))
         .map_err(|_| format!("Invalid ZIP snapshot {}", display_leaf(path)))?;
     validate_snapshot_zip_safety(&mut archive)?;
-    read_manifest_from_zip(&mut archive)
+    let manifest = read_manifest_from_zip(&mut archive)?;
+    Ok((archive, manifest))
+}
+
+pub(crate) fn read_snapshot_manifest_summary(path: &Path) -> Result<FullSnapshotManifest, String> {
+    open_validated_snapshot_archive(path).map(|(_, manifest)| manifest)
 }
 
 /// Captures a transactionally consistent compacted DB snapshot via `VACUUM INTO` while the
@@ -403,7 +416,7 @@ pub(super) fn write_staged_snapshot_zip(
 }
 
 #[tauri::command]
-pub fn export_full_snapshot_to_file(
+pub async fn export_full_snapshot_to_file(
     state: State<'_, AppState>,
     file_path: String,
 ) -> Result<FullSnapshotManifest, String> {
@@ -412,66 +425,81 @@ pub fn export_full_snapshot_to_file(
         SNAPSHOT_ARCHIVE_SUFFIXES,
         "Full snapshot export must end with .audify-backup.zip or .zip",
     )?;
-    let (staging_guard, mut manifest) = {
-        let conn = state.lock_db();
-        stage_snapshot_db_only(&conn, &state.user_dir)?
-    };
-    let asset_entries = collect_staged_snapshot_assets(&state.user_dir, &mut manifest);
-    write_staged_snapshot_zip(
-        &staging_guard.0,
-        &manifest,
-        &asset_entries,
-        &target_path,
-    )
-    .map_err(|e| sanitize_err(&state.user_dir, &e))?;
-    Ok(manifest)
+    let state_owned = state.inner().clone();
+    let user_dir_err = state.user_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (staging_guard, mut manifest) = {
+            let conn = state_owned.lock_db();
+            stage_snapshot_db_only(&conn, &state_owned.user_dir)?
+        };
+        let asset_entries = collect_staged_snapshot_assets(&state_owned.user_dir, &mut manifest);
+        write_staged_snapshot_zip(
+            &staging_guard.0,
+            &manifest,
+            &asset_entries,
+            &target_path,
+        )
+        .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
+        Ok(manifest)
+    })
+    .await
+    .map_err(|e| sanitize_err(&user_dir_err, &format!("Snapshot export task failed: {}", e)))?
 }
 
 #[tauri::command]
-pub fn create_full_snapshot_backup(state: State<'_, AppState>) -> Result<BackupFileInfo, String> {
-    let backups_dir = state.user_dir.join("backups");
-    fs::create_dir_all(&backups_dir).map_err(|e| sanitize_err(&state.user_dir, &e.to_string()))?;
+pub async fn create_full_snapshot_backup(
+    state: State<'_, AppState>,
+) -> Result<BackupFileInfo, String> {
+    let state_owned = state.inner().clone();
+    let user_dir_err = state.user_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let backups_dir = state_owned.user_dir.join("backups");
+        fs::create_dir_all(&backups_dir)
+            .map_err(|e| sanitize_err(&state_owned.user_dir, &e.to_string()))?;
 
-    let (staging_guard, mut manifest, ts_str) = {
-        let conn = state.lock_db();
-        let (guard, manifest) = stage_snapshot_db_only(&conn, &state.user_dir)?;
-        let ts: String = conn
-            .query_row(
-                "SELECT strftime('%Y-%m-%d_%H-%M-%S', 'now', 'localtime')",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap_or_else(|_| unique_nanos().to_string());
-        (guard, manifest, ts)
-    };
-    let asset_entries = collect_staged_snapshot_assets(&state.user_dir, &mut manifest);
+        let (staging_guard, mut manifest, ts_str) = {
+            let conn = state_owned.lock_db();
+            let (guard, manifest) = stage_snapshot_db_only(&conn, &state_owned.user_dir)?;
+            let ts: String = conn
+                .query_row(
+                    "SELECT strftime('%Y-%m-%d_%H-%M-%S', 'now', 'localtime')",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or_else(|_| unique_nanos().to_string());
+            (guard, manifest, ts)
+        };
+        let asset_entries = collect_staged_snapshot_assets(&state_owned.user_dir, &mut manifest);
 
-    let file_name = format!("snapshot_library_{}.audify-backup.zip", ts_str);
-    let file_path = backups_dir.join(&file_name);
-    let file_size = write_staged_snapshot_zip(
-        &staging_guard.0,
-        &manifest,
-        &asset_entries,
-        &file_path,
-    )
-    .map_err(|e| sanitize_err(&state.user_dir, &e))? as i64;
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
+        let file_name = format!("snapshot_library_{}.audify-backup.zip", ts_str);
+        let file_path = backups_dir.join(&file_name);
+        let file_size = write_staged_snapshot_zip(
+            &staging_guard.0,
+            &manifest,
+            &asset_entries,
+            &file_path,
+        )
+        .map_err(|e| sanitize_err(&state_owned.user_dir, &e))? as i64;
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
 
-    Ok(BackupFileInfo {
-        file_name,
-        file_path: file_path.to_string_lossy().to_string(),
-        profile_name: format!("All Profiles ({})", manifest.profile_count),
-        created_at: ts_str,
-        timestamp_ms: now_ms,
-        file_size,
-        is_auto: false,
-        kind: "snapshot".to_string(),
-        sample_count: manifest.sample_count,
-        includes_ai_tags: true,
+        Ok(BackupFileInfo {
+            file_name,
+            file_path: file_path.to_string_lossy().to_string(),
+            profile_name: format!("All Profiles ({})", manifest.profile_count),
+            created_at: ts_str,
+            timestamp_ms: now_ms,
+            file_size,
+            is_auto: false,
+            kind: "snapshot".to_string(),
+            sample_count: manifest.sample_count,
+            includes_ai_tags: true,
+        })
     })
+    .await
+    .map_err(|e| sanitize_err(&user_dir_err, &format!("Snapshot backup task failed: {}", e)))?
 }
 
 #[tauri::command]
@@ -485,7 +513,7 @@ pub fn inspect_full_snapshot_file(file_path: String) -> Result<FullSnapshotManif
 }
 
 #[tauri::command]
-pub fn restore_full_snapshot_from_file(
+pub async fn restore_full_snapshot_from_file(
     app: AppHandle,
     state: State<'_, AppState>,
     ai_state: State<'_, AiTaggerState>,
@@ -501,24 +529,24 @@ pub fn restore_full_snapshot_from_file(
         SNAPSHOT_ARCHIVE_SUFFIXES,
         "Full snapshot file must end with .audify-backup.zip or .zip",
     )?;
-    let _manifest_precheck = read_snapshot_manifest_summary(&validated)?;
+    let state_owned = state.inner().clone();
+    let app_clone = app.clone();
+    let user_dir_err = state.user_dir.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let res = restore_full_snapshot_with_state(&state_owned, &validated)
+            .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
 
-    let result = {
-        let mut conn = state.lock_db();
-        restore_full_snapshot_with_conn(&mut conn, &state.user_dir, &validated)
-            .map_err(|e| sanitize_err(&state.user_dir, &e))?
-    };
+        if let Ok(read_conn) = open_read_conn(&state_owned.user_dir) {
+            crate::reconcile_library_asset_scopes(&app_clone, &read_conn, None);
+        } else {
+            let conn = state_owned.lock_db();
+            crate::reconcile_library_asset_scopes(&app_clone, &conn, None);
+        }
+        Ok::<FullSnapshotRestoreResult, String>(res)
+    })
+    .await
+    .map_err(|e| sanitize_err(&user_dir_err, &format!("Snapshot restore task failed: {}", e)))??;
 
-    if let Ok(mut cache) = ai_state.vector_cache.lock() {
-        cache.clear();
-    }
-
-    if let Ok(read_conn) = open_read_conn(&state.user_dir) {
-        crate::reconcile_library_asset_scopes(&app, &read_conn, None);
-    } else {
-        let conn = state.lock_db();
-        crate::reconcile_library_asset_scopes(&app, &conn, None);
-    }
-
+    ai_state.invalidate_vector_cache();
     Ok(result)
 }

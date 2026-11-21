@@ -270,9 +270,11 @@ where
                 };
 
             let is_loop = detect_is_loop(&file_name, path_str, duration_ms);
-            let meta = extract_embedded_audio_meta(Some(path), &file_name, path_str);
-            let fast_bpm_key =
-                crate::dsp_analysis::extract_fast_bpm_and_key(Some(path), &file_name);
+            let (meta, fast_bpm_key) = crate::audio::extract_embedded_meta_and_bpm_key(
+                Some(path),
+                &file_name,
+                path_str,
+            );
             let auto_tags = match_auto_tags(
                 path_str,
                 &file_name,

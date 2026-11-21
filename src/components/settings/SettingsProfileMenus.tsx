@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
   ChevronDown,
@@ -10,6 +11,7 @@ import {
   Sparkles,
   Upload,
 } from "lucide-react";
+import { Z_INDEX } from "../../constants/zIndex";
 import { useSampleStore } from "../../store/useSampleStore";
 import { FullSnapshotRestoreModal } from "./FullSnapshotRestoreModal";
 
@@ -36,6 +38,32 @@ export const SettingsProfileMenus: React.FC<SettingsProfileMenusProps> = ({
   const [profileMenuOpen, setProfileMenuOpen] = useState<
     "import" | "export" | null
   >(null);
+  const importBtnRef = useRef<HTMLButtonElement | null>(null);
+  const exportBtnRef = useRef<HTMLButtonElement | null>(null);
+  const [menuPos, setMenuPos] = useState({ top: 0, right: 0 });
+
+  useLayoutEffect(() => {
+    if (!profileMenuOpen) return;
+    const update = () => {
+      const btn =
+        profileMenuOpen === "import"
+          ? importBtnRef.current
+          : exportBtnRef.current;
+      const rect = btn?.getBoundingClientRect();
+      if (!rect) return;
+      setMenuPos({
+        top: rect.bottom + 4,
+        right: Math.max(8, window.innerWidth - rect.right),
+      });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [profileMenuOpen]);
 
   useEffect(() => {
     setProfileMenuOpen(null);
@@ -58,6 +86,7 @@ export const SettingsProfileMenus: React.FC<SettingsProfileMenusProps> = ({
     <>
       <div className="relative">
         <button
+          ref={importBtnRef}
           type="button"
           onClick={() =>
             setProfileMenuOpen(profileMenuOpen === "import" ? null : "import")
@@ -70,85 +99,95 @@ export const SettingsProfileMenus: React.FC<SettingsProfileMenusProps> = ({
           <ChevronDown className="w-3 h-3 text-fg-3 shrink-0" />
         </button>
 
-        {profileMenuOpen === "import" && (
-          <>
-            <div
-              className="fixed inset-0 z-40"
-              onClick={() => setProfileMenuOpen(null)}
-            />
-            <div
-              data-settings-dropdown-open="true"
-              className="absolute right-0 top-full mt-1 w-60 bg-surface-2 backdrop-blur-md border border-line rounded-md shadow-2xl p-1 z-50 text-left"
-            >
-              <div className="px-2 pt-1 pb-0.5 text-[9px] font-mono font-semibold uppercase tracking-wider text-fg-3">
-                Workspace Profile
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setProfileMenuOpen(null);
-                  void importProfileJson();
+        {profileMenuOpen === "import" &&
+          createPortal(
+            <>
+              <div
+                style={{ zIndex: Z_INDEX.contextMenu }}
+                className="fixed inset-0"
+                onClick={() => setProfileMenuOpen(null)}
+              />
+              <div
+                data-settings-dropdown-open="true"
+                data-mica-overlay="true"
+                style={{
+                  top: menuPos.top,
+                  right: menuPos.right,
+                  zIndex: Z_INDEX.floatingMenu,
                 }}
-                className="w-full px-2.5 py-1.5 rounded-xs hover:bg-surface-3 flex items-start space-x-2 text-left transition-colors cursor-pointer"
+                className="fixed w-60 bg-surface-2 backdrop-blur-md border border-line rounded-md shadow-2xl p-1 text-left"
               >
-                <Upload className="w-3.5 h-3.5 text-accent-fg shrink-0 mt-0.5" />
-                <div className="min-w-0">
-                  <div className="text-[11px] font-medium text-fg">
-                    Import profile
-                  </div>
-                  <div className="text-[9.5px] font-mono text-fg-3">
-                    .audify-profile / .json
-                  </div>
+                <div className="px-2 pt-1 pb-0.5 text-[9px] font-mono font-semibold uppercase tracking-wider text-fg-3">
+                  Workspace Profile
                 </div>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setProfileMenuOpen(null);
-                  void importSettingsJson();
-                }}
-                className="w-full px-2.5 py-1.5 rounded-xs hover:bg-surface-3 flex items-start space-x-2 text-left transition-colors cursor-pointer"
-              >
-                <Sliders className="w-3.5 h-3.5 text-fg-2 shrink-0 mt-0.5" />
-                <div className="min-w-0">
-                  <div className="text-[11px] font-medium text-fg">
-                    Import settings only
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileMenuOpen(null);
+                    void importProfileJson();
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-xs hover:bg-surface-3 flex items-start space-x-2 text-left transition-colors cursor-pointer"
+                >
+                  <Upload className="w-3.5 h-3.5 text-accent-fg shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-medium text-fg">
+                      Import profile
+                    </div>
+                    <div className="text-[9.5px] font-mono text-fg-3">
+                      .audify-profile / .json
+                    </div>
                   </div>
-                  <div className="text-[9.5px] font-mono text-fg-3">
-                    .audify-settings.json
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileMenuOpen(null);
+                    void importSettingsJson();
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-xs hover:bg-surface-3 flex items-start space-x-2 text-left transition-colors cursor-pointer"
+                >
+                  <Sliders className="w-3.5 h-3.5 text-fg-2 shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-medium text-fg">
+                      Import settings only
+                    </div>
+                    <div className="text-[9.5px] font-mono text-fg-3">
+                      .audify-settings.json
+                    </div>
                   </div>
-                </div>
-              </button>
+                </button>
 
-              <div className="my-1 border-t border-line" />
-              <div className="px-2 pt-0.5 pb-0.5 text-[9px] font-mono font-semibold uppercase tracking-wider text-fg-3">
-                Full Backup (.db)
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setProfileMenuOpen(null);
-                  void openFullSnapshotRestorePrompt();
-                }}
-                className="w-full px-2.5 py-1.5 rounded-xs hover:bg-surface-3 flex items-start space-x-2 text-left transition-colors cursor-pointer"
-              >
-                <Database className="w-3.5 h-3.5 text-accent-fg shrink-0 mt-0.5" />
-                <div className="min-w-0">
-                  <div className="text-[11px] font-medium text-fg">
-                    Restore full snapshot
-                  </div>
-                  <div className="text-[9.5px] text-fg-3">
-                    .audify-backup.zip (All profiles &amp; DB)
-                  </div>
+                <div className="my-1 border-t border-line" />
+                <div className="px-2 pt-0.5 pb-0.5 text-[9px] font-mono font-semibold uppercase tracking-wider text-fg-3">
+                  Full Backup (.db)
                 </div>
-              </button>
-            </div>
-          </>
-        )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileMenuOpen(null);
+                    void openFullSnapshotRestorePrompt();
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-xs hover:bg-surface-3 flex items-start space-x-2 text-left transition-colors cursor-pointer"
+                >
+                  <Database className="w-3.5 h-3.5 text-accent-fg shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-medium text-fg">
+                      Restore full snapshot
+                    </div>
+                    <div className="text-[9.5px] text-fg-3">
+                      .audify-backup.zip (All profiles &amp; DB)
+                    </div>
+                  </div>
+                </button>
+              </div>
+            </>,
+            document.body
+          )}
       </div>
 
       <div className="relative">
         <button
+          ref={exportBtnRef}
           type="button"
           onClick={() =>
             setProfileMenuOpen(profileMenuOpen === "export" ? null : "export")
@@ -161,117 +200,126 @@ export const SettingsProfileMenus: React.FC<SettingsProfileMenusProps> = ({
           <ChevronDown className="w-3 h-3 text-fg-3 shrink-0" />
         </button>
 
-        {profileMenuOpen === "export" && (
-          <>
-            <div
-              className="fixed inset-0 z-40"
-              onClick={() => setProfileMenuOpen(null)}
-            />
-            <div
-              data-settings-dropdown-open="true"
-              className="absolute right-0 top-full mt-1 w-64 bg-surface-2 backdrop-blur-md border border-line rounded-md shadow-2xl p-1 z-50 text-left"
-            >
-              <div className="px-2 pt-1 pb-0.5 text-[9px] font-mono font-semibold uppercase tracking-wider text-fg-3">
-                Workspace Profile (Portable)
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setProfileMenuOpen(null);
-                  void exportProfileJson();
+        {profileMenuOpen === "export" &&
+          createPortal(
+            <>
+              <div
+                style={{ zIndex: Z_INDEX.contextMenu }}
+                className="fixed inset-0"
+                onClick={() => setProfileMenuOpen(null)}
+              />
+              <div
+                data-settings-dropdown-open="true"
+                data-mica-overlay="true"
+                style={{
+                  top: menuPos.top,
+                  right: menuPos.right,
+                  zIndex: Z_INDEX.floatingMenu,
                 }}
-                className="w-full px-2.5 py-1.5 rounded-xs hover:bg-surface-3 flex items-start space-x-2 text-left transition-colors cursor-pointer"
+                className="fixed w-64 bg-surface-2 backdrop-blur-md border border-line rounded-md shadow-2xl p-1 text-left"
               >
-                <Download className="w-3.5 h-3.5 text-accent-fg shrink-0 mt-0.5" />
-                <div className="min-w-0">
-                  <div className="text-[11px] font-medium text-fg">
-                    Workspace profile
-                  </div>
-                  <div className="text-[9.5px] text-fg-3">
-                    .audify-profile · Manual tags &amp; rules
-                  </div>
+                <div className="px-2 pt-1 pb-0.5 text-[9px] font-mono font-semibold uppercase tracking-wider text-fg-3">
+                  Workspace Profile (Portable)
                 </div>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setProfileMenuOpen(null);
-                  void exportProfileJson(undefined, { includeAiTags: true });
-                }}
-                className="w-full px-2.5 py-1.5 rounded-xs hover:bg-surface-3 flex items-start space-x-2 text-left transition-colors cursor-pointer"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-info shrink-0 mt-0.5" />
-                <div className="min-w-0">
-                  <div className="text-[11px] font-medium text-fg">
-                    Workspace + AI tags
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileMenuOpen(null);
+                    void exportProfileJson();
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-xs hover:bg-surface-3 flex items-start space-x-2 text-left transition-colors cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5 text-accent-fg shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-medium text-fg">
+                      Workspace profile
+                    </div>
+                    <div className="text-[9.5px] text-fg-3">
+                      .audify-profile · Manual tags &amp; rules
+                    </div>
                   </div>
-                  <div className="text-[9.5px] text-fg-3">
-                    .audify-profile · Includes approved AI tags
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileMenuOpen(null);
+                    void exportProfileJson(undefined, { includeAiTags: true });
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-xs hover:bg-surface-3 flex items-start space-x-2 text-left transition-colors cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-accent-fg shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-medium text-fg">
+                      Workspace + AI tags
+                    </div>
+                    <div className="text-[9.5px] text-fg-3">
+                      .audify-profile · Includes approved AI tags
+                    </div>
                   </div>
-                </div>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setProfileMenuOpen(null);
-                  void exportProfileJson(undefined, { shareSafe: true });
-                }}
-                className="w-full px-2.5 py-1.5 rounded-xs hover:bg-surface-3 flex items-start space-x-2 text-left transition-colors cursor-pointer"
-              >
-                <ShieldCheck className="w-3.5 h-3.5 text-accent-fg shrink-0 mt-0.5" />
-                <div className="min-w-0">
-                  <div className="text-[11px] font-medium text-fg">
-                    Share-safe profile
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileMenuOpen(null);
+                    void exportProfileJson(undefined, { shareSafe: true });
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-xs hover:bg-surface-3 flex items-start space-x-2 text-left transition-colors cursor-pointer"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 text-accent-fg shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-medium text-fg">
+                      Share-safe profile
+                    </div>
+                    <div className="text-[9.5px] text-fg-3">
+                      Without personal file paths
+                    </div>
                   </div>
-                  <div className="text-[9.5px] text-fg-3">
-                    Without personal file paths
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileMenuOpen(null);
+                    void exportSettingsJson();
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-xs hover:bg-surface-3 flex items-start space-x-2 text-left transition-colors cursor-pointer"
+                >
+                  <Sliders className="w-3.5 h-3.5 text-fg-2 shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-medium text-fg">
+                      Settings only
+                    </div>
+                    <div className="text-[9.5px] font-mono text-fg-3">
+                      .audify-settings.json
+                    </div>
                   </div>
-                </div>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setProfileMenuOpen(null);
-                  void exportSettingsJson();
-                }}
-                className="w-full px-2.5 py-1.5 rounded-xs hover:bg-surface-3 flex items-start space-x-2 text-left transition-colors cursor-pointer"
-              >
-                <Sliders className="w-3.5 h-3.5 text-fg-2 shrink-0 mt-0.5" />
-                <div className="min-w-0">
-                  <div className="text-[11px] font-medium text-fg">
-                    Settings only
-                  </div>
-                  <div className="text-[9.5px] font-mono text-fg-3">
-                    .audify-settings.json
-                  </div>
-                </div>
-              </button>
+                </button>
 
-              <div className="my-1 border-t border-line" />
-              <div className="px-2 pt-0.5 pb-0.5 text-[9px] font-mono font-semibold uppercase tracking-wider text-fg-3">
-                Full Backup (.db Snapshot)
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setProfileMenuOpen(null);
-                  void exportFullSnapshot();
-                }}
-                className="w-full px-2.5 py-1.5 rounded-xs hover:bg-surface-3 flex items-start space-x-2 text-left transition-colors cursor-pointer"
-              >
-                <Database className="w-3.5 h-3.5 text-accent-fg shrink-0 mt-0.5" />
-                <div className="min-w-0">
-                  <div className="text-[11px] font-medium text-fg">
-                    Full library snapshot
-                  </div>
-                  <div className="text-[9.5px] text-fg-3">
-                    .audify-backup.zip · DB, vectors &amp; images
-                  </div>
+                <div className="my-1 border-t border-line" />
+                <div className="px-2 pt-0.5 pb-0.5 text-[9px] font-mono font-semibold uppercase tracking-wider text-fg-3">
+                  Full Backup (.db Snapshot)
                 </div>
-              </button>
-            </div>
-          </>
-        )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileMenuOpen(null);
+                    void exportFullSnapshot();
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-xs hover:bg-surface-3 flex items-start space-x-2 text-left transition-colors cursor-pointer"
+                >
+                  <Database className="w-3.5 h-3.5 text-accent-fg shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-medium text-fg">
+                      Full library snapshot
+                    </div>
+                    <div className="text-[9.5px] text-fg-3">
+                      .audify-backup.zip · DB, vectors &amp; images
+                    </div>
+                  </div>
+                </button>
+              </div>
+            </>,
+            document.body
+          )}
       </div>
 
       <button

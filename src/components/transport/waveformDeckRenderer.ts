@@ -11,11 +11,21 @@ import {
   samplePeakRange,
 } from "../../utils/format";
 
+export const HIRES_CROSSFADE_MS = 110;
+
 export interface WaveLayerCache {
   key: string;
+  sampleId: number | null;
+  isHiRes: boolean;
+  styleSizeKey: string;
   base: HTMLCanvasElement;
   slice: HTMLCanvasElement;
   played: HTMLCanvasElement;
+}
+
+export interface WaveCrossfadeState {
+  from: WaveLayerCache;
+  progress: number;
 }
 
 export interface RenderWaveformDeckOptions {
@@ -33,6 +43,116 @@ export interface RenderWaveformDeckOptions {
   waveformStyle: WaveformStyle;
   logicalWidth: number;
   logicalHeight: number;
+  crossfade?: WaveCrossfadeState | null;
+}
+
+export function buildWaveLayerStyleKey(opts: {
+  logicalWidth: number;
+  logicalHeight: number;
+  waveformSensitivity: WaveformSensitivity;
+  waveformStyle: WaveformStyle;
+  themeMode: ThemeMode;
+  accentColor: string;
+  enableMica: boolean;
+}): string {
+  const width = Math.max(100, Math.floor(opts.logicalWidth));
+  const height = Math.max(40, Math.floor(opts.logicalHeight));
+  const dpr = window.devicePixelRatio || 1;
+  return [
+    `${width}x${height}@${dpr}`,
+    opts.waveformSensitivity,
+    opts.waveformStyle,
+    opts.themeMode,
+    opts.accentColor,
+    opts.enableMica ? "mica" : "flat",
+  ].join("|");
+}
+
+function drawClippedLayer(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLCanvasElement,
+  clipX: number,
+  clipW: number,
+  width: number,
+  height: number
+) {
+  if (clipW <= 0) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(clipX, 0, clipW, height);
+  ctx.clip();
+  ctx.drawImage(img, 0, 0, width, height);
+  ctx.restore();
+}
+
+function drawCompositeWaveLayers(
+  ctx: CanvasRenderingContext2D,
+  layers: WaveLayerCache,
+  width: number,
+  height: number,
+  sliceStartRatio: number | null,
+  sliceEndRatio: number | null,
+  playedX: number,
+  alpha: number
+) {
+  if (alpha <= 0.001) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  const hasSlice =
+    sliceStartRatio !== null &&
+    sliceEndRatio !== null &&
+    sliceEndRatio > sliceStartRatio;
+  const clampedPlayed = Math.max(0, Math.min(width, playedX));
+
+  if (clampedPlayed > 0) {
+    drawClippedLayer(ctx, layers.played, 0, clampedPlayed, width, height);
+  }
+
+  if (clampedPlayed < width) {
+    if (hasSlice) {
+      const sx = Math.max(clampedPlayed, Math.floor(sliceStartRatio * width));
+      const ex = Math.min(width, Math.ceil(sliceEndRatio * width));
+      if (ex > sx) {
+        if (sx > clampedPlayed) {
+          drawClippedLayer(
+            ctx,
+            layers.base,
+            clampedPlayed,
+            sx - clampedPlayed,
+            width,
+            height
+          );
+        }
+        drawClippedLayer(ctx, layers.slice, sx, ex - sx, width, height);
+        if (ex < width) {
+          drawClippedLayer(ctx, layers.base, ex, width - ex, width, height);
+        }
+      } else {
+        drawClippedLayer(
+          ctx,
+          layers.base,
+          clampedPlayed,
+          width - clampedPlayed,
+          width,
+          height
+        );
+      }
+    } else if (clampedPlayed === 0) {
+      ctx.drawImage(layers.base, 0, 0, width, height);
+    } else {
+      drawClippedLayer(
+        ctx,
+        layers.base,
+        clampedPlayed,
+        width - clampedPlayed,
+        width,
+        height
+      );
+    }
+  }
+
+  ctx.restore();
 }
 
 /**
@@ -169,15 +289,11 @@ export function renderWaveformDeck(
   const unplayedBarColor = palette.fg2;
   const sliceBarColor = palette.fg;
 
+  const styleSizeKey = buildWaveLayerStyleKey(opts);
   const layerKey = [
     opts.sampleId,
     opts.hiResPeaks ? `hi${opts.hiResPeaks.length}` : opts.peaksJson.length,
-    `${width}x${height}@${dpr}`,
-    opts.waveformSensitivity,
-    opts.waveformStyle,
-    opts.themeMode,
-    opts.accentColor,
-    opts.enableMica ? "mica" : "flat",
+    styleSizeKey,
     unplayedBarColor,
     sliceBarColor,
   ].join("|");
@@ -236,35 +352,68 @@ export function renderWaveformDeck(
 
     layers = {
       key: layerKey,
+      sampleId: opts.sampleId,
+      isHiRes: opts.hiResPeaks !== null,
+      styleSizeKey,
       base: buildLayer(unplayedBarColor),
       slice: buildLayer(sliceBarColor),
       played: buildLayer(opts.accentColor),
     };
   }
 
-  ctx.drawImage(layers.base, 0, 0, width, height);
-  if (
-    sliceStartRatio !== null &&
-    sliceEndRatio !== null &&
-    sliceEndRatio > sliceStartRatio
-  ) {
-    const sx = Math.floor(sliceStartRatio * width);
-    const ex = Math.ceil(sliceEndRatio * width);
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(sx, 0, Math.max(1, ex - sx), height);
-    ctx.clip();
-    ctx.drawImage(layers.slice, 0, 0, width, height);
-    ctx.restore();
-  }
   const playedX = Math.floor(playheadRatio * width);
-  if (playedX > 0) {
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(0, 0, playedX, height);
-    ctx.clip();
-    ctx.drawImage(layers.played, 0, 0, width, height);
-    ctx.restore();
+  const crossfade = opts.crossfade;
+  if (
+    crossfade &&
+    crossfade.from !== layers &&
+    crossfade.progress > 0 &&
+    crossfade.progress < 1
+  ) {
+    const t = crossfade.progress;
+    const alphaFrom = 1 - t * t;
+    const alphaTo = Math.sqrt(t);
+    drawCompositeWaveLayers(
+      ctx,
+      crossfade.from,
+      width,
+      height,
+      sliceStartRatio,
+      sliceEndRatio,
+      playedX,
+      alphaFrom
+    );
+    drawCompositeWaveLayers(
+      ctx,
+      layers,
+      width,
+      height,
+      sliceStartRatio,
+      sliceEndRatio,
+      playedX,
+      alphaTo
+    );
+  } else if (crossfade && crossfade.from !== layers && crossfade.progress <= 0) {
+    drawCompositeWaveLayers(
+      ctx,
+      crossfade.from,
+      width,
+      height,
+      sliceStartRatio,
+      sliceEndRatio,
+      playedX,
+      1
+    );
+  } else {
+    drawCompositeWaveLayers(
+      ctx,
+      layers,
+      width,
+      height,
+      sliceStartRatio,
+      sliceEndRatio,
+      playedX,
+      1
+    );
   }
 
   // 4. Playhead Line & Cap

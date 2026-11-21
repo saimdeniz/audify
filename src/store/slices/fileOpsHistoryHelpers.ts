@@ -144,19 +144,24 @@ export async function replayFileOpHistoryItem(
       message: string,
       kind?: "info" | "success" | "error"
     ) => void;
+    getProfileEpoch: () => number;
     releaseMatchingAudioHandle: (
       targetSampleIds: number[]
     ) => Promise<AudioHandleReleaseSnapshot>;
   }
 ): Promise<boolean> {
-  const { set, get, emitNotice, releaseMatchingAudioHandle } = deps;
+  const { set, get, emitNotice, getProfileEpoch, releaseMatchingAudioHandle } =
+    deps;
+  const startEpoch = getProfileEpoch();
   const isUndo = direction === "undo";
   const pushOppositeStack = (
     state: SampleStoreState
-  ): Partial<SampleStoreState> =>
-    isUndo
+  ): Partial<SampleStoreState> => {
+    if (startEpoch !== getProfileEpoch()) return {};
+    return isUndo
       ? { fileOpRedoStack: pushBoundedHistory(state.fileOpRedoStack, item) }
       : { fileOpUndoStack: pushBoundedHistory(state.fileOpUndoStack, item) };
+  };
 
   if (item.kind === "rename") {
     const targetStem = isUndo ? item.oldStem : item.newStem;
@@ -251,11 +256,18 @@ export async function replayFileOpHistoryItem(
       if (relocated.length > 0) {
         clearSmartSearchCache();
         clearSlicePathCache();
+        try {
+          await get().refreshAfterCatalogMutation({
+            refreshTrash: true,
+            syncCatalog: true,
+          });
+        } catch (refreshErr) {
+          console.warn(
+            "Catalog refresh after move replay failed:",
+            refreshErr
+          );
+        }
         set(pushOppositeStack);
-        await get().refreshAfterCatalogMutation({
-          refreshTrash: true,
-          syncCatalog: true,
-        });
         emitNotice(
           isUndo
             ? `Undo Move: Returned ${relocated.length} file(s) to previous folder`

@@ -95,6 +95,7 @@ impl AiVectorCache {
         }
     }
 
+    #[cfg(test)]
     pub fn ensure_hydrated(&mut self, conn: &Connection, model_id: &str) -> Result<(), String> {
         let active_profile_id: i64 = conn
             .query_row(

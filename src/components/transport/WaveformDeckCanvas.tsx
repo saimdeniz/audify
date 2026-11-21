@@ -7,7 +7,13 @@ import { useHiResPeaks } from "../../utils/hiResPeaks";
 import { usePeaksJson } from "../../utils/peaksStore";
 import { isSlicePreviewSample } from "../../utils/slicePreview";
 import { WaveformDeckHeader } from "./WaveformDeckHeader";
-import { renderWaveformDeck, WaveLayerCache } from "./waveformDeckRenderer";
+import {
+  buildWaveLayerStyleKey,
+  HIRES_CROSSFADE_MS,
+  renderWaveformDeck,
+  WaveCrossfadeState,
+  WaveLayerCache,
+} from "./waveformDeckRenderer";
 import { WaveformSimilarityDropOverlay } from "./WaveformSimilarityDropOverlay";
 
 type CanvasDragMode = "none" | "creating" | "resize-start" | "resize-end";
@@ -53,6 +59,21 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
     width: 0,
   });
   const waveLayersRef = useRef<WaveLayerCache | null>(null);
+  const crossfadeRef = useRef<{
+    sampleId: number;
+    from: WaveLayerCache;
+    styleSizeKey: string;
+    startMs: number;
+    rafId: number | null;
+  } | null>(null);
+
+  const cancelCrossfade = useCallback(() => {
+    const cf = crossfadeRef.current;
+    if (cf?.rafId !== null && cf?.rafId !== undefined) {
+      window.cancelAnimationFrame(cf.rafId);
+    }
+    crossfadeRef.current = null;
+  }, []);
 
   const [hoverRatio, setHoverRatio] = useState<number | null>(null);
   const [hoverZone, setHoverZone] = useState<
@@ -81,12 +102,13 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
 
   useEffect(() => {
     return () => {
+      cancelCrossfade();
       if (activeWindowCleanupRef.current) {
         activeWindowCleanupRef.current();
         activeWindowCleanupRef.current = null;
       }
     };
-  }, []);
+  }, [cancelCrossfade]);
 
   // Pre-export WAV slice in background whenever a valid sliceRange is idle
   useEffect(() => {
@@ -134,8 +156,76 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
       };
     }
 
-    waveLayersRef.current = renderWaveformDeck(canvas, waveLayersRef.current, {
-      sampleId: selectedSample?.id ?? null,
+    const currentSampleId = selectedSample?.id ?? null;
+    const currentStyleSizeKey = buildWaveLayerStyleKey({
+      logicalWidth: canvasSizeRef.current.width,
+      logicalHeight: canvasSizeRef.current.height,
+      waveformSensitivity,
+      waveformStyle,
+      themeMode,
+      accentColor,
+      enableMica,
+    });
+
+    if (
+      crossfadeRef.current &&
+      (crossfadeRef.current.sampleId !== currentSampleId ||
+        crossfadeRef.current.styleSizeKey !== currentStyleSizeKey ||
+        hiResPeaks === null)
+    ) {
+      cancelCrossfade();
+    }
+
+    const prevLayers = waveLayersRef.current;
+    const prefersReducedMotion =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (
+      !prefersReducedMotion &&
+      typeof window !== "undefined" &&
+      typeof window.requestAnimationFrame === "function" &&
+      currentSampleId !== null &&
+      hiResPeaks !== null &&
+      prevLayers !== null &&
+      prevLayers.sampleId === currentSampleId &&
+      !prevLayers.isHiRes &&
+      prevLayers.styleSizeKey === currentStyleSizeKey &&
+      crossfadeRef.current === null
+    ) {
+      crossfadeRef.current = {
+        sampleId: currentSampleId,
+        from: prevLayers,
+        styleSizeKey: currentStyleSizeKey,
+        startMs: performance.now(),
+        rafId: null,
+      };
+    }
+
+    let crossfadeParam: WaveCrossfadeState | null = null;
+    if (crossfadeRef.current) {
+      const elapsed = performance.now() - crossfadeRef.current.startMs;
+      if (elapsed >= HIRES_CROSSFADE_MS) {
+        cancelCrossfade();
+      } else {
+        crossfadeParam = {
+          from: crossfadeRef.current.from,
+          progress: Math.max(0, Math.min(1, elapsed / HIRES_CROSSFADE_MS)),
+        };
+        if (crossfadeRef.current.rafId === null) {
+          const activeCf = crossfadeRef.current;
+          activeCf.rafId = window.requestAnimationFrame(() => {
+            if (crossfadeRef.current === activeCf) {
+              activeCf.rafId = null;
+              drawWaveformRef.current();
+            }
+          });
+        }
+      }
+    }
+
+    waveLayersRef.current = renderWaveformDeck(canvas, prevLayers, {
+      sampleId: currentSampleId,
       peaksJson: selectedPeaksJson,
       hiResPeaks,
       effectiveDuration,
@@ -149,6 +239,7 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
       waveformStyle,
       logicalWidth: canvasSizeRef.current.width,
       logicalHeight: canvasSizeRef.current.height,
+      crossfade: crossfadeParam,
     });
   }, [
     selectedSample?.id,
@@ -163,6 +254,7 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
     enableMica,
     waveformSensitivity,
     waveformStyle,
+    cancelCrossfade,
   ]);
 
   const drawWaveformRef = useRef(drawWaveform);

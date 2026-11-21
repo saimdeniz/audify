@@ -1,22 +1,22 @@
 import { create } from "zustand";
-import { DEFAULT_AUTO_TAG_RULES } from "../constants/autoTagRules";
 import { Profile, SampleItem } from "../types";
 import { computeSmartCollectionCounts } from "../utils/smartCollectionCounts";
 import { clearSmartSearchCache, executeSmartSearch } from "../utils/smartSearch";
 import {
+  clearCatalogWorkerPool,
+  clearCatalogWorkerSearchCache,
   shouldUseCatalogWorker,
   syncCatalogWorkerPool,
 } from "../workers/catalogWorkerClient";
-import {
-  bumpMemoryFilterSeq,
-  dispatchWorkerInstantMemoryFilter,
-  scheduleWorkerSmartCollectionCounts,
-} from "./workerBridge";
 import {
   applyClientFacetFilters,
   filterBaseSamplesInMemory,
   reconcileSelectionAfterFilter,
 } from "./filterEngine";
+import {
+  createInitialStoreState,
+  EMPTY_SAMPLE_ID_SET,
+} from "./initialStoreState";
 import {
   applyProfileSettingsToStore,
   buildProfileSettingsJsonFromStore,
@@ -38,27 +38,7 @@ import {
   SettingsSliceTimers,
 } from "./slices/settingsAndBinSlice";
 import { createSliceHistorySlice } from "./slices/sliceHistorySlice";
-import {
-  AUDIFY_STORAGE_KEYS,
-  loadBootSettings,
-  loadSavedActiveFolder,
-  loadSavedActiveLicenseGroupId,
-  loadSavedAutoCreateCollectionSubfolders,
-  loadSavedAutoRouteCollectionDrops,
-  loadSavedBinSampleIds,
-  loadSavedCollectionId,
-  loadSavedCollectionTemplates,
-  loadSavedFavoriteOnly,
-  loadSavedFolderStats,
-  loadSavedLicenseGroups,
-  loadSavedRecentSampleIds,
-  loadSavedSettingsTab,
-  loadSavedShortcuts,
-  loadSavedSort,
-  loadSavedTrashStatus,
-  persistNavigationFilters,
-  safeGetItem,
-} from "./storageHelpers";
+import { persistNavigationFilters } from "./storageHelpers";
 import {
   CreditToastPayload,
   SampleStoreState,
@@ -66,6 +46,11 @@ import {
   StatusNoticePayload,
   StoreSliceContext,
 } from "./types";
+import {
+  bumpMemoryFilterSeq,
+  dispatchWorkerInstantMemoryFilter,
+  scheduleWorkerSmartCollectionCounts,
+} from "./workerBridge";
 
 export type {
   CreditToastPayload,
@@ -73,8 +58,6 @@ export type {
   SettingsTab,
   StatusNoticePayload,
 };
-
-const EMPTY_SAMPLE_ID_SET: ReadonlySet<number> = new Set();
 
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let noticeDismissTimer: ReturnType<typeof setTimeout> | null = null;
@@ -95,7 +78,26 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
       | Partial<SampleStoreState>
       | ((s: SampleStoreState) => Partial<SampleStoreState> | SampleStoreState)
   ): Partial<SampleStoreState> | SampleStoreState => {
-    const patch = typeof partial === "function" ? partial(state) : partial;
+    let patch = typeof partial === "function" ? partial(state) : partial;
+    if (
+      patch &&
+      typeof patch === "object" &&
+      patch.trashFilterActive === false &&
+      state.trashedProfileSamples.length > 0 &&
+      !("trashedProfileSamples" in patch)
+    ) {
+      patch = { ...patch, trashedProfileSamples: [] };
+    }
+    if (
+      patch &&
+      typeof patch === "object" &&
+      "searchQuery" in patch &&
+      typeof patch.searchQuery === "string" &&
+      patch.searchQuery.trim() === "" &&
+      state.searchQuery.trim() !== ""
+    ) {
+      clearCatalogWorkerSearchCache();
+    }
     if (
       patch &&
       typeof patch === "object" &&
@@ -108,8 +110,12 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
       const nextCollections = patch.collections ?? state.collections;
       const nextSynonyms =
         patch.smartSearchSynonyms ?? state.smartSearchSynonyms;
-      if ("allProfileSamples" in patch && shouldUseCatalogWorker(nextPool.length)) {
-        syncCatalogWorkerPool(nextPool);
+      if ("allProfileSamples" in patch) {
+        if (shouldUseCatalogWorker(nextPool.length)) {
+          syncCatalogWorkerPool(nextPool);
+        } else {
+          clearCatalogWorkerPool();
+        }
       }
       const hasSmartCollections = nextCollections.some((c) =>
         Boolean(c.smart_query?.trim())
@@ -154,9 +160,6 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
   };
   api.setState = set;
 
-  const boot = loadBootSettings();
-  const initialSort = loadSavedSort();
-  const initialTrashStatus = loadSavedTrashStatus();
   const settingsTimers: SettingsSliceTimers = {
     flushPendingTint: () => {},
     clearToastTimers: () => {},
@@ -259,30 +262,9 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
   }): boolean => {
     const {
       allProfileSamples,
-      searchQuery,
-      smartSearchSynonyms,
-      folderFilter,
-      favoriteOnly,
-      recentOnly,
-      recentSampleIds,
-      selectedTagIds,
-      selectedGenre,
       collections,
       selectedCollectionId,
-      selectedLicenseGroupId,
-      licenseGroups,
-      binFilterActive,
-      binSampleIds,
       trashFilterActive,
-      duplicatesFilterActive,
-      duplicateScanResult,
-      typeFilter,
-      srFilter,
-      sortKey,
-      sortDir,
-      similaritySession,
-      selectedSample,
-      selectedSampleIds,
     } = get();
 
     const activeCollection =
@@ -307,6 +289,67 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
     const fetchSeq = ++currentFetchSeq;
     const preserveMultiSelect = opts?.preserveMultiSelect ?? true;
 
+    const runSyncMemoryFilter = () => {
+      const live = get();
+      const baseResult = filterBaseSamplesInMemory(
+        live.allProfileSamples,
+        live.folderFilter,
+        live.favoriteOnly,
+        live.recentOnly,
+        live.recentSampleIds,
+        live.selectedTagIds,
+        live.selectedGenre,
+        live.selectedLicenseGroupId,
+        live.licenseGroups,
+        live.binFilterActive,
+        live.binSampleIds,
+        buildDuplicateOrderMap(
+          live.duplicatesFilterActive,
+          live.duplicateScanResult
+        )
+      );
+      const smartBaseResult = smartQuery
+        ? executeSmartSearch(baseResult, smartQuery, live.smartSearchSynonyms)
+        : baseResult;
+      const trimmedSearch = live.searchQuery.trim();
+      const searchedResult =
+        trimmedSearch !== ""
+          ? executeSmartSearch(
+              smartBaseResult,
+              live.searchQuery,
+              live.smartSearchSynonyms
+            )
+          : smartBaseResult;
+      if (!smartQuery && trimmedSearch === "") {
+        clearSmartSearchCache();
+      }
+      const filtered = applyClientFacetFilters(
+        searchedResult,
+        live.typeFilter,
+        live.srFilter,
+        live.sortKey,
+        live.sortDir,
+        live.similaritySession
+      );
+      const reconciled = reconcileSelectionAfterFilter(
+        filtered,
+        live.selectedSample,
+        live.selectedSampleIds,
+        preserveMultiSelect
+      );
+
+      set({
+        rawSamples: searchedResult,
+        samples: filtered,
+        selectedSample: reconciled.nextSelected,
+        selectedSampleIds: reconciled.nextSelectedIds,
+        lastSelectedIndex: reconciled.nextSelectedIndex,
+        durationSec: reconciled.nextSelected
+          ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
+          : live.durationSec,
+      });
+    };
+
     if (shouldUseCatalogWorker(allProfileSamples.length)) {
       dispatchWorkerInstantMemoryFilter({
         snapshotState: get(),
@@ -318,62 +361,13 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
         getProfileEpoch: () => currentProfileEpoch,
         getState: get,
         set,
+        onSyncFallback: runSyncMemoryFilter,
       });
       return true;
     }
 
     bumpMemoryFilterSeq();
-
-    const baseResult = filterBaseSamplesInMemory(
-      allProfileSamples,
-      folderFilter,
-      favoriteOnly,
-      recentOnly,
-      recentSampleIds,
-      selectedTagIds,
-      selectedGenre,
-      selectedLicenseGroupId,
-      licenseGroups,
-      binFilterActive,
-      binSampleIds,
-      buildDuplicateOrderMap(duplicatesFilterActive, duplicateScanResult)
-    );
-    const smartBaseResult = smartQuery
-      ? executeSmartSearch(baseResult, smartQuery, smartSearchSynonyms)
-      : baseResult;
-    const trimmedSearch = searchQuery.trim();
-    const searchedResult =
-      trimmedSearch !== ""
-        ? executeSmartSearch(smartBaseResult, searchQuery, smartSearchSynonyms)
-        : smartBaseResult;
-    if (!smartQuery && trimmedSearch === "") {
-      clearSmartSearchCache();
-    }
-    const filtered = applyClientFacetFilters(
-      searchedResult,
-      typeFilter,
-      srFilter,
-      sortKey,
-      sortDir,
-      similaritySession
-    );
-    const reconciled = reconcileSelectionAfterFilter(
-      filtered,
-      selectedSample,
-      selectedSampleIds,
-      preserveMultiSelect
-    );
-
-    set({
-      rawSamples: searchedResult,
-      samples: filtered,
-      selectedSample: reconciled.nextSelected,
-      selectedSampleIds: reconciled.nextSelectedIds,
-      lastSelectedIndex: reconciled.nextSelectedIndex,
-      durationSec: reconciled.nextSelected
-        ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
-        : get().durationSec,
-    });
+    runSyncMemoryFilter();
     return true;
   };
 
@@ -403,6 +397,7 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
       searchDebounceTimer = t;
     },
     clearSearchDebounceTimer,
+    bumpFetchSeq: () => ++currentFetchSeq,
   });
   const profileSlice = createProfileSlice(sliceCtx);
   const playbackSlice = createPlaybackSlice(sliceCtx);
@@ -414,174 +409,7 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
   const sliceHistorySlice = createSliceHistorySlice(sliceCtx);
 
   return {
-    hasInitialized: false,
-    profiles: [],
-    activeProfile: null,
-    libraries: [],
-    allProfileSamples: [],
-    trashedProfileSamples: [],
-    rawSamples: [],
-    samples: [],
-    favoritesCount: 0,
-    knownSampleIds: EMPTY_SAMPLE_ID_SET,
-    tags: [],
-    genres: [],
-    collections: [],
-    smartCollectionCounts: {},
-    folderStats: loadSavedFolderStats(),
-
-    searchQuery: "",
-    smartSearchSynonyms: boot.smartSearchSynonyms,
-    folderFilter: loadSavedActiveFolder(),
-    favoriteOnly: loadSavedFavoriteOnly(),
-    recentOnly: false,
-    recentSampleIds: loadSavedRecentSampleIds(),
-    selectedTagIds: [],
-    selectedGenre: null,
-    isDetectingGenres: false,
-    selectedCollectionId: loadSavedCollectionId(),
-    selectedLicenseGroupId: loadSavedActiveLicenseGroupId(),
-    binFilterActive: false,
-    trashFilterActive: false,
-    typeFilter: "all",
-    srFilter: null,
-
-    sortKey: initialSort.key,
-    sortDir: initialSort.dir,
-
-    binSampleIds: loadSavedBinSampleIds(),
-    autoBinOnNleDrag: boot.autoBinOnNleDrag,
-    customSliceExportPath: boot.customSliceExportPath,
-    slicesFilterActive: false,
-    sliceHistory: [],
-    trashedSliceHistory: [],
-    isLoadingSliceHistory: false,
-    sliceHideMissing: false,
-    sliceFavoriteOnly: false,
-    slicePitchOnly: false,
-    sliceSortKey: null,
-    sliceSortDir: "asc",
-    selectedSliceIds: [],
-    activeSliceId: null,
-    lastSelectedSliceIndex: null,
-    batchRenameSliceIds: null,
-    sliceOpUndoStack: [],
-    sliceOpRedoStack: [],
-    enableAdvancedFileOps: boot.enableAdvancedFileOps,
-    confirmBeforeTrash: boot.confirmBeforeTrash,
-    pendingTrashRequest: null,
-    pendingFileConflictPrompt: null,
-    trashedCount: initialTrashStatus.count,
-    trashedTotalBytes: initialTrashStatus.totalBytes,
-    trashedSliceCount: 0,
-    trashedSliceTotalBytes: 0,
-    trashViewTab: "tracks",
-    trashOpStatus: null,
-    fileOpJournal: [],
-    fileOpUndoStack: [],
-    fileOpRedoStack: [],
-    batchRenameSampleIds: null,
-    duplicatesFilterActive: false,
-    duplicateScanMode: "exact",
-    duplicateLibraryId: null,
-    duplicateMinSimilarityPct: 97,
-    duplicateExtrasMinPct: 98,
-    isScanningDuplicates: false,
-    duplicateScanProgress: null,
-    duplicateScanResult: null,
-    duplicateScanCache: {},
-    duplicateScanError: null,
-
-    selectedSample: null,
-    selectedSampleIds: [],
-    lastSelectedIndex: null,
-    isPlaying: false,
-    isLooping: boot.isLooping,
-    isShuffle: boot.isShuffle,
-    shuffleHistory: [],
-    autoPreview: boot.autoPreview,
-    volume: boot.volume,
-    preMuteVolume: boot.volume > 0.02 ? boot.volume : 0.9,
-    pitchSemitones: 0,
-    currentTimeSec: 0,
-    durationSec: 0,
-    sliceRange: null,
-    seekRequest: null,
-    playTriggerSeq: 0,
-
-    isSettingsOpen: false,
-    isSettingsWindowVisible: true,
-    settingsTab: loadSavedSettingsTab(),
-    themeMode: boot.themeMode,
-    accentColor: boot.accentColor,
-    accentAuto: boot.accentAuto,
-    waveformSensitivity: boot.waveformSensitivity,
-    waveformStyle: boot.waveformStyle,
-    playheadLatencyMs: boot.playheadLatencyMs,
-    audioOutputDeviceId: boot.audioOutputDeviceId,
-    sliceMicroFade: boot.sliceMicroFade,
-    normalizePreview: boot.normalizePreview,
-    autoAnalyzeBpmKey: boot.autoAnalyzeBpmKey,
-    enableLiveFolderWatch: boot.enableLiveFolderWatch,
-    isAnalyzingBpmKey: false,
-    bpmKeyProgress: null,
-    isMiniDock: false,
-    isMiniDockPinned: safeGetItem(AUDIFY_STORAGE_KEYS.miniDockPinned) !== "false",
-    enableMica: boot.enableMica,
-    themeTintIntensity: boot.themeTintIntensity,
-    customBgImage: boot.customBgImage,
-    customBgGallery: [],
-    customBgBlur: boot.customBgBlur,
-    customBgOpacity: boot.customBgOpacity,
-    wallpaperKind: boot.wallpaperKind,
-    asciiPreset: boot.asciiPreset,
-    asciiMagicSlug: boot.asciiMagicSlug,
-    asciiMagicLook: boot.asciiMagicLook,
-    asciiMagicFit: boot.asciiMagicFit,
-    asciiMotionSpeed: boot.asciiMotionSpeed,
-    shortcuts: loadSavedShortcuts(),
-    autoTagRules: [...DEFAULT_AUTO_TAG_RULES],
-    autoTagCategories: [
-      { name: "SFX", include_paths: [], exclude_paths: [] },
-      { name: "Ambience", include_paths: [], exclude_paths: [] },
-      { name: "Music", include_paths: [], exclude_paths: [] },
-    ],
-    autoTagRulesDirty: false,
-    localBackups: [],
-    pendingSnapshotRestore: null,
-    enableLicensesSystem: boot.enableLicenses,
-    licenseGroups: loadSavedLicenseGroups(),
-    creditToast: null,
-    statusNotice: null,
-    collectionTemplates: loadSavedCollectionTemplates(),
-    autoCreateCollectionSubfolders: loadSavedAutoCreateCollectionSubfolders(),
-    autoRouteCollectionDrops: loadSavedAutoRouteCollectionDrops(),
-
-    inAppDragSample: null,
-    inAppDragSamples: [],
-
-    isScanning: false,
-    scanProgress: null,
-    statusMessage: null,
-
-    aiModelStatus: null,
-    aiDownloadProgress: null,
-    isDownloadingAiModel: false,
-    isVerifyingAiModel: false,
-    aiAutoAnalyzeOnScan: boot.aiAutoAnalyzeOnScan,
-    aiTagConfidenceThreshold: boot.aiTagConfidenceThreshold,
-    aiTaggingMode: boot.aiTaggingMode,
-    aiKnnTagLearning: boot.aiKnnTagLearning,
-    aiSimilarityMinScore: boot.aiSimilarityMinScore,
-    aiSimilarityTopK: boot.aiSimilarityTopK,
-    aiSimilarityScope: boot.aiSimilarityScope,
-    aiSimilarityDurationMatch: boot.aiSimilarityDurationMatch,
-    isAnalyzingAi: false,
-    aiIndexProgress: null,
-    similaritySession: null,
-    aiSuggestionsBySampleId: {},
-    pendingAiSuggestionsCount: 0,
-
+    ...createInitialStoreState(),
     ...catalogSyncSlice,
     ...librarySyncSlice,
     ...filterSlice,

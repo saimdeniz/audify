@@ -1,7 +1,6 @@
 use super::{
     collect_authorized_slice_dirs, ensure_existing_slice_in_scope, format_os_display_path,
-    pick_collision_safe_wav_path, query_slice_record_by_id, resolve_slice_trash_dir,
-    SliceHistoryRecord,
+    query_slice_record_by_id, resolve_slice_trash_dir, SliceHistoryRecord,
 };
 use crate::commands::file_ops::{move_file_resilient, rollback_disk_moves};
 use crate::db::{get_active_profile_id, AppState};
@@ -10,7 +9,7 @@ use crate::security::{
     is_unc_or_network_path, normalize_clean_path, sanitize_err, strip_verbatim_prefix,
 };
 use rusqlite::{params, Connection};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -79,6 +78,7 @@ pub(crate) fn trash_slice_files_with_conn(
         }
 
         if let Ok(resolved) = ensure_existing_slice_in_scope(conn, user_dir, &slice_path) {
+            super::ensure_slice_not_in_readonly_library(conn, &resolved)?;
             let leaf = display_leaf(&resolved);
             let nonce = SLICE_TRASH_NONCE.fetch_add(1, Ordering::Relaxed);
             let trash_pb = trash_dir.join(format!("{}_{}_{}", slice_id, nonce, leaf));
@@ -218,6 +218,29 @@ pub(crate) fn restore_trashed_slice_files_with_conn(
         restore_name: String,
     }
 
+    let path_collision_key = |p: &Path| -> String {
+        let norm = normalize_clean_path(&strip_verbatim_prefix(p).to_string_lossy());
+        if cfg!(windows) {
+            norm.to_lowercase()
+        } else {
+            norm
+        }
+    };
+
+    let mut db_path_owner: HashMap<String, i64> = HashMap::new();
+    if let Ok(mut stmt) =
+        conn.prepare("SELECT id, slice_path FROM sample_slices WHERE profile_id = ?1")
+    {
+        if let Ok(rows) = stmt.query_map(params![profile_id], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        }) {
+            for row in rows.flatten() {
+                db_path_owner.insert(path_collision_key(Path::new(&row.1)), row.0);
+            }
+        }
+    }
+    let mut reserved_targets: HashSet<String> = HashSet::with_capacity(clean_ids.len());
+
     let mut planned: Vec<PlannedRestore> = Vec::with_capacity(clean_ids.len());
     for slice_id in clean_ids {
         let Ok((orig_path_str, trash_path_str)) = conn.query_row(
@@ -268,12 +291,36 @@ pub(crate) fn restore_trashed_slice_files_with_conn(
             .and_then(|s| s.to_str())
             .filter(|s| !s.is_empty())
             .unwrap_or("slice");
-        let candidate = safe_parent.join(format!("{}.wav", stem));
-        let restore_pb = if !candidate.exists() {
-            candidate
-        } else {
-            pick_collision_safe_wav_path(&safe_parent, stem)
+        let is_target_free = |cand: &Path| -> bool {
+            if cand.exists() {
+                return false;
+            }
+            let key = path_collision_key(cand);
+            if reserved_targets.contains(&key) {
+                return false;
+            }
+            db_path_owner
+                .get(&key)
+                .is_none_or(|&owner| owner == slice_id)
         };
+        let primary = safe_parent.join(format!("{}.wav", stem));
+        let restore_pb = if is_target_free(&primary) {
+            primary
+        } else {
+            let mut chosen = None;
+            for idx in 1..10000 {
+                let candidate = safe_parent.join(format!("{}_{:02}.wav", stem, idx));
+                if is_target_free(&candidate) {
+                    chosen = Some(candidate);
+                    break;
+                }
+            }
+            chosen.unwrap_or_else(|| {
+                let nonce = SLICE_TRASH_NONCE.fetch_add(1, Ordering::Relaxed);
+                safe_parent.join(format!("{}_{}_{}.wav", stem, slice_id, nonce))
+            })
+        };
+        reserved_targets.insert(path_collision_key(&restore_pb));
         let restore_name = restore_pb
             .file_name()
             .and_then(|n| n.to_str())

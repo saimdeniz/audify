@@ -6,12 +6,11 @@ use std::collections::HashMap;
 const MAX_CLUSTER_MEMBERS: usize = 24;
 const MAX_DURATION_WINDOW_NEIGHBORS: usize = 240;
 
-#[derive(Clone)]
 struct PreparedAudio<'a> {
     candidate: &'a DuplicateCandidate,
     clean_stem: String,
-    peaks_unit: Option<Vec<f32>>,
-    embedding: Option<Vec<f32>>,
+    peaks_unit: Option<&'a [f32]>,
+    embedding: Option<&'a [f32]>,
 }
 
 struct UnionFind {
@@ -97,7 +96,7 @@ pub(super) fn normalize_clean_stem(file_name: &str) -> String {
     trimmed
 }
 
-fn parse_normalized_peaks(peaks_json: &str) -> Option<Vec<f32>> {
+pub(super) fn parse_normalized_peaks(peaks_json: &str) -> Option<Vec<f32>> {
     let raw: Vec<f32> = serde_json::from_str(peaks_json).ok()?;
     if raw.len() < 8 || raw.iter().any(|v| !v.is_finite()) {
         return None;
@@ -129,7 +128,7 @@ fn parse_normalized_peaks(peaks_json: &str) -> Option<Vec<f32>> {
     Some(raw.into_iter().map(|v| v * inv_norm).collect())
 }
 
-fn blob_to_unit_embedding(blob: Option<&[u8]>) -> Option<Vec<f32>> {
+pub(super) fn blob_to_unit_embedding(blob: Option<&[u8]>) -> Option<Vec<f32>> {
     let bytes = blob?;
     if bytes.is_empty() || bytes.len() % 4 != 0 {
         return None;
@@ -203,12 +202,12 @@ fn compare_pair(a: &PreparedAudio<'_>, b: &PreparedAudio<'_>, min_pct: u8) -> Op
     }
 
     let dur_ratio = (dur_diff as f64) / (dur_a as f64);
-    let peak_cos = match (a.peaks_unit.as_deref(), b.peaks_unit.as_deref()) {
+    let peak_cos = match (a.peaks_unit, b.peaks_unit) {
         (Some(pa), Some(pb)) => cosine_equal_len(pa, pb),
         _ => None,
     };
 
-    if let (Some(ea), Some(eb)) = (a.embedding.as_deref(), b.embedding.as_deref()) {
+    if let (Some(ea), Some(eb)) = (a.embedding, b.embedding) {
         if let Some(emb_cos) = cosine_equal_len(ea, eb) {
             if emb_cos < 0.80 {
                 return None;
@@ -267,8 +266,8 @@ pub(super) fn find_similar_duplicate_groups_with_progress(
                 Some(PreparedAudio {
                     candidate: c,
                     clean_stem: normalize_clean_stem(&c.file_name),
-                    peaks_unit: parse_normalized_peaks(&c.peaks_json),
-                    embedding: blob_to_unit_embedding(c.embedding_blob.as_deref()),
+                    peaks_unit: c.peaks_unit.as_deref(),
+                    embedding: c.embedding_unit.as_deref(),
                 })
             } else {
                 None

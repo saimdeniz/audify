@@ -13,6 +13,7 @@ pub use filename_parser::{
     detect_bpm_from_filename, detect_key_from_filename, extract_fast_bpm_and_key,
     normalize_musical_or_camelot_key, parse_bpm_value, BpmKeyResult,
 };
+pub(crate) use filename_parser::{extract_bpm_key_from_tagged_file, fill_bpm_key_from_filename};
 
 use crate::audio::open_audio_decoder;
 use crate::security::{has_ntfs_ads_colon, is_unc_or_network_path};
@@ -41,7 +42,15 @@ fn decode_mono_for_dsp(path: &Path, max_seconds: f64) -> Option<(Vec<f32>, u32, 
     let n_frames_hint = opened.n_frames;
 
     let mut slot: Option<(SignalSpec, usize, SampleBuffer<f32>)> = None;
-    let mut mono: Vec<f32> = Vec::with_capacity(22050 * 30);
+    let max_cap = (max_seconds.clamp(1.0, 45.0) * 22050.0).ceil() as usize;
+    let hint_cap = n_frames_hint
+        .and_then(|nf| {
+            let sr = orig_sr.max(22050) as usize;
+            let stride = (sr / 22050).max(1);
+            usize::try_from(nf / (stride as u64)).ok()
+        })
+        .unwrap_or(22050 * 4);
+    let mut mono: Vec<f32> = Vec::with_capacity(hint_cap.min(max_cap).max(4096));
     let mut total_orig_frames: u64 = 0;
     let mut out_sr: u32 = 22050;
     let mut stride_phase: usize = 0;

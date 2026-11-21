@@ -1,5 +1,6 @@
 use crate::scanner::SUPPORTED_EXTENSIONS;
 use crate::security::{normalize_clean_path, strip_verbatim_prefix};
+use notify::event::{EventKind, ModifyKind, RemoveKind};
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -88,7 +89,16 @@ pub(super) fn are_pending_files_size_stable(
     !unstable
 }
 
-pub(crate) fn is_relevant_fs_path(path: &Path) -> bool {
+const NON_AUDIO_FILE_EXTENSIONS: &[&str] = &[
+    "tmp", "part", "crdownload", "partial", "download", "asd", "reapeaks", "pk", "pkf", "txt",
+    "md", "pdf", "jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "ico", "json", "xml", "yaml",
+    "yml", "ini", "cfg", "log", "csv", "nfo", "doc", "docx", "rtf", "zip", "rar", "7z", "tar",
+    "gz", "als", "flp", "rpp", "cpr", "ptx", "mid", "midi", "sfz", "nki", "fxp", "fxb", "vst",
+    "vst3", "dll", "exe", "lnk", "url", "html", "htm", "css", "js", "ts", "db", "sqlite",
+    "sqlite-wal", "sqlite-shm", "bak",
+];
+
+pub(crate) fn is_relevant_fs_event_path(path: &Path, kind: &EventKind) -> bool {
     let Some(name_os) = path.file_name() else {
         return false;
     };
@@ -104,6 +114,10 @@ pub(crate) fn is_relevant_fs_path(path: &Path) -> bool {
         return false;
     }
 
+    if matches!(kind, EventKind::Remove(RemoveKind::Folder)) {
+        return true;
+    }
+
     let Some(ext_os) = path.extension() else {
         return true;
     };
@@ -117,7 +131,22 @@ pub(crate) fn is_relevant_fs_path(path: &Path) -> bool {
     if path.is_dir() {
         return true;
     }
-    SUPPORTED_EXTENSIONS.contains(&ext_lower.as_str())
+    if SUPPORTED_EXTENSIONS.contains(&ext_lower.as_str()) {
+        return true;
+    }
+    // Deleted or moved dotted folders (e.g. "Pack v1.2", "SFX_Vol.1") no longer exist on disk so
+    // `is_dir()` returns false; treat non-existing remove/rename paths with non-file extensions as
+    // potential folder removals so stale DB rows are synced out instead of lingering as ghosts.
+    matches!(
+        kind,
+        EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
+    ) && !path.exists()
+        && !NON_AUDIO_FILE_EXTENSIONS.contains(&ext_lower.as_str())
+}
+
+#[cfg(test)]
+pub(crate) fn is_relevant_fs_path(path: &Path) -> bool {
+    is_relevant_fs_event_path(path, &EventKind::Any)
 }
 
 pub(super) fn normalize_match_key(path: &Path) -> String {
@@ -231,6 +260,19 @@ mod tests {
         )));
         assert!(!is_relevant_fs_path(Path::new("C:/SFX/Kicks/render.tmp")));
         assert!(!is_relevant_fs_path(Path::new("C:/SFX/Kicks/notes.txt")));
+        // Dotted folder names removed/renamed on disk must remain relevant
+        assert!(is_relevant_fs_event_path(
+            Path::new("C:/SFX/Pack v1.2"),
+            &EventKind::Remove(RemoveKind::Any)
+        ));
+        assert!(is_relevant_fs_event_path(
+            Path::new("C:/SFX/SFX_Vol.1"),
+            &EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::From))
+        ));
+        assert!(!is_relevant_fs_event_path(
+            Path::new("C:/SFX/notes.txt"),
+            &EventKind::Remove(RemoveKind::Any)
+        ));
     }
 
     #[test]

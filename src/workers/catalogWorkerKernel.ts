@@ -3,6 +3,7 @@ import {
   filterBaseSamplesInMemory,
 } from "../utils/catalogFilterCore";
 import { SampleItem, SimilaritySession } from "../types";
+import { pruneSmartSearchCache } from "../utils/search/sampleIndex";
 import { computeSmartCollectionCounts } from "../utils/smartCollectionCounts";
 import { clearSmartSearchCache, executeSmartSearch } from "../utils/smartSearch";
 import type {
@@ -70,6 +71,37 @@ export function createCatalogWorkerKernel(): CatalogWorkerKernel {
         for (let i = 0; i < pool.length; i++) {
           samplesById.set(pool[i].id, pool[i]);
         }
+        if (pool.length === 0) {
+          clearSmartSearchCache();
+        } else {
+          pruneSmartSearchCache(samplesById);
+        }
+        return {
+          response: { type: "pool_ack", poolEpoch },
+          transfer: [],
+        };
+      }
+
+      if (msg.type === "patch_pool") {
+        poolEpoch = msg.poolEpoch;
+        for (let i = 0; i < msg.updates.length; i++) {
+          const { index, sample } = msg.updates[i];
+          if (index >= 0 && index < pool.length) {
+            const prev = pool[index];
+            if (prev && prev.id !== sample.id && samplesById.get(prev.id) === prev) {
+              samplesById.delete(prev.id);
+            }
+            pool[index] = sample;
+            samplesById.set(sample.id, sample);
+          }
+        }
+        return {
+          response: { type: "pool_ack", poolEpoch },
+          transfer: [],
+        };
+      }
+
+      if (msg.type === "clear_search_cache") {
         clearSmartSearchCache();
         return {
           response: { type: "pool_ack", poolEpoch },

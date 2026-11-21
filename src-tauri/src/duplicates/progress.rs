@@ -54,7 +54,7 @@ impl PhaseTracker {
     }
 
     pub(crate) fn emit_start(&self, label_hint: &str) {
-        self.emit_snapshot(0, label_hint, true);
+        self.emit_snapshot(0, label_hint);
     }
 
     pub(crate) fn tick(&self, current_file: &str) {
@@ -63,7 +63,7 @@ impl PhaseTracker {
             return;
         }
         if done >= self.total {
-            self.emit_snapshot(done.min(self.total), current_file, true);
+            self.emit_snapshot(done.min(self.total), current_file);
             return;
         }
         if let Ok(mut guard) = self.last_emit.try_lock() {
@@ -74,16 +74,16 @@ impl PhaseTracker {
             if due {
                 *guard = Some(now);
                 drop(guard);
-                self.emit_snapshot(done, current_file, false);
+                self.emit_snapshot(done, current_file);
             }
         }
     }
 
     pub(crate) fn finish(&self, label_hint: &str) {
-        self.emit_snapshot(self.total, label_hint, true);
+        self.emit_snapshot(self.total, label_hint);
     }
 
-    fn emit_snapshot(&self, done: usize, current_file: &str, _force: bool) {
+    fn emit_snapshot(&self, done: usize, current_file: &str) {
         let Some(ref emit) = self.emit_fn else {
             return;
         };

@@ -79,7 +79,7 @@ export function renderGenreCell({
               e.stopPropagation();
               void useSampleStore.getState().assignGenre(sample.id, "");
             }}
-            className="hidden group-hover/genre:inline-flex items-center justify-center text-fg-2 hover:text-danger ml-0.5 shrink-0"
+            className="hidden group-hover/genre:inline-flex items-center justify-center text-fg-2 hover:text-accent-fg ml-0.5 shrink-0"
             title="Clear genre"
           >
             <X className="w-2.5 h-2.5" />
@@ -246,7 +246,7 @@ export function renderTagsCell({
                 e.stopPropagation();
                 void useSampleStore.getState().unassignTag(sample.id, badge.id);
               }}
-              className="hidden group-hover/tag:inline-flex items-center justify-center text-fg-2 hover:text-danger ml-0.5 shrink-0"
+              className="hidden group-hover/tag:inline-flex items-center justify-center text-fg-2 hover:text-accent-fg ml-0.5 shrink-0"
               title={`Remove ${badge.name}`}
             >
               <X className="w-2.5 h-2.5" />
@@ -314,7 +314,7 @@ export function renderTagsCell({
                 .getState()
                 .resolveAiTagSuggestion(sample.id, suggestion.tag_name, false);
             }}
-            className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-danger hover:bg-danger/15 shrink-0"
+            className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-accent-fg hover:bg-accent-soft shrink-0"
             title={`Dismiss AI tag "${suggestion.tag_name}"`}
           >
             <X className="w-2.5 h-2.5" />

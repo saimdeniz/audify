@@ -86,33 +86,54 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
     side: "left" | "right";
   } | null>(null);
   const suppressNextSortClickRef = useRef(false);
+  const activeDragCleanupRef = useRef<(() => void) | null>(null);
+
+  React.useEffect(() => {
+    return () => {
+      activeDragCleanupRef.current?.();
+    };
+  }, []);
 
   const startColResize = (colKey: ResizableColKey, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    activeDragCleanupRef.current?.();
     const { min: minW, max: maxW } = COL_WIDTH_BOUNDS[colKey];
     const startX = e.clientX;
     const startW = colWidths[colKey];
+    let latestWidths = colWidths;
 
     const onMove = (moveEvt: MouseEvent) => {
       const delta = moveEvt.clientX - startX;
       const nextW = Math.max(minW, Math.min(maxW, Math.round(startW + delta)));
       setColWidths((prev) => {
+        if (prev[colKey] === nextW) return prev;
         const updated = { ...prev, [colKey]: nextW };
-        safeSetItem(AUDIFY_STORAGE_KEYS.columnWidthsV3, JSON.stringify(updated), {
-          broadcast: false,
-          markEdited: false,
-        });
+        latestWidths = updated;
         return updated;
       });
     };
 
-    const onUp = () => {
+    const cleanup = () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
       document.body.style.cursor = "";
+      activeDragCleanupRef.current = null;
     };
 
+    const onUp = () => {
+      cleanup();
+      safeSetItem(
+        AUDIFY_STORAGE_KEYS.columnWidthsV3,
+        JSON.stringify(latestWidths),
+        {
+          broadcast: false,
+          markEdited: false,
+        }
+      );
+    };
+
+    activeDragCleanupRef.current = cleanup;
     document.body.style.cursor = "col-resize";
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -122,6 +143,7 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
     if (target.closest("[data-col-resize]")) return;
+    activeDragCleanupRef.current?.();
 
     const startX = e.clientX;
     const startY = e.clientY;
@@ -134,6 +156,7 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
       setDropTarget(null);
       dropTargetRef.current = null;
       document.body.style.cursor = "";
+      activeDragCleanupRef.current = null;
     };
 
     const onMove = (moveEvt: MouseEvent) => {

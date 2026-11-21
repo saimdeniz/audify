@@ -43,7 +43,7 @@ const CONTEXT_SENSITIVE_GLOBALS: &[&str] = &["top", "parent", "frames", "locatio
 
 /// Validates a bare ASCII Magic slug (`^[a-z0-9][a-z0-9-]{0,95}$`).
 pub fn is_valid_slug(slug: &str) -> bool {
-    if slug.is_empty() || slug.len() > 96 {
+    if slug.is_empty() || slug.len() > 96 || crate::security::is_dos_device_name(slug) {
         return false;
     }
     let bytes = slug.as_bytes();
@@ -519,6 +519,13 @@ mod tests {
         // 4. Postfix ++ / -- before `/` must not swallow code as regex
         assert!(validate_piece_source_js(r#"let x = 1; const z = x++ / eval("1") / 2;"#).is_err());
         assert!(validate_piece_source_js(r#"let x = 1; const z = x-- / eval("1") / 2;"#).is_err());
+
+        // 5. CR / U+2028 / U+2029 inside line comments must terminate the comment so hidden calls are caught
+        assert!(validate_piece_source_js("// safe\rfetch('https://evil.test');").is_err());
+        assert!(validate_piece_source_js("// safe\u{2028}fetch('https://evil.test');").is_err());
+        assert!(validate_piece_source_js("// safe\u{2029}eval('1');").is_err());
+        assert!(!is_valid_slug("con"));
+        assert!(!is_valid_slug("nul"));
 
         // Benign array literal containing template strings and UTF-8 box art must still pass
         let benign = r#"

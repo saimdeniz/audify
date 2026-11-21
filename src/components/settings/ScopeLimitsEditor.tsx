@@ -193,7 +193,7 @@ export const ScopeLimitsEditor: React.FC<ScopeLimitsEditorProps> = ({
                     <button
                       type="button"
                       onClick={() => onRemoveIncludePath(p)}
-                      className="hover:text-danger ml-0.5 cursor-pointer"
+                      className="hover:text-accent-fg ml-0.5 cursor-pointer"
                       title={`Remove "${p}"`}
                     >
                       <X className="w-2.5 h-2.5" />

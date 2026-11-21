@@ -41,7 +41,7 @@ export interface SliceTableRowProps {
     entry: SliceHistoryEntry,
     index: number
   ) => void;
-  onRowDragStart: (e: React.DragEvent, entry: SliceHistoryEntry) => void;
+  onRowMouseDown: (e: React.MouseEvent, entry: SliceHistoryEntry) => void;
 }
 
 export const SliceTableRow: React.FC<SliceTableRowProps> = React.memo(
@@ -59,7 +59,7 @@ export const SliceTableRow: React.FC<SliceTableRowProps> = React.memo(
     onRowClick,
     onRowDoubleClick,
     onRowContextMenu,
-    onRowDragStart,
+    onRowMouseDown,
   }) => {
     const { stem: sliceStem, ext: sliceExt } = splitFileNameAndExt(
       entry.slice_name
@@ -75,8 +75,8 @@ export const SliceTableRow: React.FC<SliceTableRowProps> = React.memo(
       <div
         role="row"
         aria-selected={isSelected}
-        draggable={!isTrashMode && entry.file_exists}
-        onDragStart={(e) => onRowDragStart(e, entry)}
+        draggable={false}
+        onMouseDown={(e) => onRowMouseDown(e, entry)}
         onClick={(e) => onRowClick(e, entry, index)}
         onDoubleClick={() => onRowDoubleClick(entry, index)}
         onContextMenu={(e) => onRowContextMenu(e, entry, index)}
@@ -229,7 +229,7 @@ export const SliceTableRow: React.FC<SliceTableRowProps> = React.memo(
 
         {/* 6. Duration / Time (78px) */}
         <div className="w-[78px] h-full px-1.5 flex items-center justify-center text-center font-mono tabular-nums text-[11px] text-fg-2 shrink-0 overflow-hidden whitespace-nowrap border-r border-line">
-          {formatDuration(entry.duration_ms / 1000)}
+          {formatDuration(entry.duration_ms)}
         </div>
 
         {/* 7. Format / Sample Rate (84px) */}

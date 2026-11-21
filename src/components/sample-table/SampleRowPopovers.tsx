@@ -245,7 +245,7 @@ export const SampleRowPopovers: React.FC<SampleRowPopoversProps> = ({
                         onClick={() => {
                           void unassignTag(livePopoverSample.id, badge.id);
                         }}
-                        className="text-fg-2 hover:text-danger pl-0.5 flex items-center justify-center cursor-pointer"
+                        className="text-fg-2 hover:text-accent-fg pl-0.5 flex items-center justify-center cursor-pointer"
                         title={`Remove "${badge.name}" from file`}
                       >
                         <X className="w-3 h-3" />
@@ -291,7 +291,7 @@ export const SampleRowPopovers: React.FC<SampleRowPopoversProps> = ({
                         key={c}
                         type="button"
                         onClick={() => setPopoverNewTagColor(c)}
-                        className={`w-3 h-3 border shrink-0 ${
+                        className={`w-3 h-3 rounded-[2px] border shrink-0 ${
                           popoverNewTagColor === c
                             ? "border-fg ring-1 ring-line-strong scale-110"
                             : "border-transparent"
@@ -516,7 +516,7 @@ export const SampleRowPopovers: React.FC<SampleRowPopoversProps> = ({
                 await assignGenre(liveGenrePopoverSample.id, "");
                 setRowGenrePopover(null);
               }}
-              className="w-full h-[22px] rounded-xs bg-surface-3 hover:bg-danger/15 border border-line hover:border-danger text-fg-2 hover:text-danger font-mono text-[10px] flex items-center justify-center space-x-1 transition-colors"
+              className="w-full h-[22px] rounded-xs bg-surface-3 hover:bg-accent-soft border border-line hover:border-accent text-fg-2 hover:text-accent-fg font-mono text-[10px] flex items-center justify-center space-x-1 transition-colors"
             >
               <X className="w-3 h-3" />
               <span>Clear Genre ({liveGenrePopoverSample.genre})</span>

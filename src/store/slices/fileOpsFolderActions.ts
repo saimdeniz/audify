@@ -112,6 +112,17 @@ export function createFileOpsFolderActions(deps: FileOpsFolderDeps) {
       folderPath: string,
       newFolderName: string
     ) => {
+      const prefixNorm = normalizePathForMatch(folderPath);
+      const activeSample = get().selectedSample;
+      if (
+        activeSample &&
+        normalizePathForMatch(activeSample.file_path).startsWith(
+          `${prefixNorm}/`
+        )
+      ) {
+        await releaseMatchingAudioHandle([activeSample.id]);
+      }
+
       try {
         const summary = await invoke<SubfolderRenameSummary>(
           "rename_physical_subfolder",

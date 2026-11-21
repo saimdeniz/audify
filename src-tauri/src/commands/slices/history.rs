@@ -61,9 +61,10 @@ pub(crate) fn ensure_source_not_a_slice(conn: &Connection, source_path: &Path) -
     Ok(())
 }
 
-pub(crate) fn upsert_slice_history_with_conn(
+pub(crate) fn upsert_slice_history_with_meta(
     conn: &Connection,
     entry: &SliceHistoryUpsert<'_>,
+    predecoded: Option<(i64, i64, i64, i64, String)>,
 ) -> Result<SliceHistoryRecord, String> {
     let slice_path_str = format_os_display_path(entry.slice_path);
     let slice_name = entry
@@ -79,15 +80,42 @@ pub(crate) fn upsert_slice_history_with_conn(
         .and_then(|n| n.to_str())
         .unwrap_or("sample")
         .to_string();
-    let fallback_dur =
-        compute_exported_duration_ms(entry.start_sec, entry.end_sec, entry.pitch_semitones);
-    let (dur_ms, sample_rate, channels, bit_depth, peaks_json) =
-        decode_slice_audio_meta(entry.slice_path, fallback_dur);
+    let (dur_ms, sample_rate, channels, bit_depth, peaks_json) = match predecoded {
+        Some(meta) => meta,
+        None => {
+            let fallback_dur =
+                compute_exported_duration_ms(entry.start_sec, entry.end_sec, entry.pitch_semitones);
+            decode_slice_audio_meta(entry.slice_path, fallback_dur)
+        }
+    };
     let pitch_clean = if entry.pitch_semitones.is_finite() {
         entry.pitch_semitones.clamp(-24.0, 24.0)
     } else {
         0.0
     };
+
+    if let Ok(Some(old_trash_path)) = conn.query_row(
+        "SELECT trash_file_path FROM sample_slices
+         WHERE profile_id = ?1 AND slice_path = ?2 AND COALESCE(is_trashed, 0) = 1
+         LIMIT 1",
+        params![entry.profile_id, slice_path_str],
+        |r| r.get::<_, Option<String>>(0),
+    ) {
+        let tp = old_trash_path.trim();
+        if !tp.is_empty()
+            && !crate::security::is_unc_or_network_path(tp)
+            && !crate::security::has_ntfs_ads_colon(tp)
+            && normalize_clean_path(tp)
+                .to_lowercase()
+                .contains("/cache/slice_trash/")
+        {
+            if let Ok(meta) = fs::symlink_metadata(tp) {
+                if !meta.file_type().is_symlink() && meta.is_file() {
+                    let _ = fs::remove_file(tp);
+                }
+            }
+        }
+    }
 
     conn.execute(
         "INSERT INTO sample_slices (
@@ -110,6 +138,7 @@ pub(crate) fn upsert_slice_history_with_conn(
             sample_rate = excluded.sample_rate,
             channels = excluded.channels,
             bit_depth = excluded.bit_depth,
+            is_favorite = CASE WHEN COALESCE(sample_slices.is_trashed, 0) = 1 THEN 0 ELSE sample_slices.is_favorite END,
             is_trashed = 0,
             trash_file_path = NULL,
             trashed_at = NULL,
@@ -137,6 +166,14 @@ pub(crate) fn upsert_slice_history_with_conn(
     query_single_slice_record(conn, entry.profile_id, &slice_path_str)
 }
 
+#[cfg(test)]
+pub(crate) fn upsert_slice_history_with_conn(
+    conn: &Connection,
+    entry: &SliceHistoryUpsert<'_>,
+) -> Result<SliceHistoryRecord, String> {
+    upsert_slice_history_with_meta(conn, entry, None)
+}
+
 pub(super) fn row_to_slice_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<SliceHistoryRecord> {
     let slice_path: String = row.get(1)?;
     let is_trashed = row.get::<_, i64>(17)? != 0;
@@ -155,6 +192,8 @@ pub(super) fn row_to_slice_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<S
         slice_path.as_str()
     };
     let file_exists = !check_path.is_empty()
+        && !crate::security::is_unc_or_network_path(check_path)
+        && !crate::security::has_ntfs_ads_colon(check_path)
         && fs::symlink_metadata(check_path)
             .map(|m| !m.file_type().is_symlink() && m.file_type().is_file())
             .unwrap_or(false);
@@ -210,67 +249,75 @@ pub(super) fn query_slice_record_by_id(
 }
 
 #[tauri::command]
-pub fn list_slice_history(state: State<'_, AppState>) -> Result<Vec<SliceHistoryRecord>, String> {
-    let mut records: Vec<SliceHistoryRecord> = with_read_conn(&state, |conn| {
-        let profile_id = get_active_profile_id(conn);
-        let sql = format!(
-            "SELECT {} FROM sample_slices
-             WHERE profile_id = ?1 AND COALESCE(is_trashed, 0) = 0
-             ORDER BY created_at DESC, id DESC
-             LIMIT 5000",
-            SLICE_SELECT_COLS
-        );
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| format!("Failed preparing slice history query: {}", e))?;
-        let rows = stmt
-            .query_map([profile_id], row_to_slice_record)
-            .map_err(|e| format!("Failed reading slice history: {}", e))?;
-        Ok(rows.flatten().collect())
-    })
-    .map_err(|e| sanitize_err(&state.user_dir, &e))?;
+pub async fn list_slice_history(
+    state: State<'_, AppState>,
+) -> Result<Vec<SliceHistoryRecord>, String> {
+    let state_owned = state.inner().clone();
+    let user_dir_err = state.user_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut records: Vec<SliceHistoryRecord> = with_read_conn(&state_owned, |conn| {
+            let profile_id = get_active_profile_id(conn);
+            let sql = format!(
+                "SELECT {} FROM sample_slices
+                 WHERE profile_id = ?1 AND COALESCE(is_trashed, 0) = 0
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT 5000",
+                SLICE_SELECT_COLS
+            );
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|e| format!("Failed preparing slice history query: {}", e))?;
+            let rows = stmt
+                .query_map([profile_id], row_to_slice_record)
+                .map_err(|e| format!("Failed reading slice history: {}", e))?;
+            Ok(rows.flatten().collect())
+        })
+        .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
 
-    // Lazily backfill peaks & audio format metadata for older slice entries created before v2
-    let mut backfilled: Vec<(usize, i64, i64, i64, i64, String)> = Vec::new();
-    for (idx, rec) in records.iter().enumerate() {
-        if backfilled.len() >= 64 {
-            break;
-        }
-        if rec.file_exists && (rec.peaks_json.trim().is_empty() || rec.peaks_json == "[]") {
-            let (dur, sr, ch, bd, peaks) =
-                decode_slice_audio_meta(Path::new(&rec.slice_path), rec.duration_ms);
-            if peaks != "[]" {
-                backfilled.push((idx, dur, sr, ch, bd, peaks));
+        // Lazily backfill peaks & audio format metadata for older slice entries created before v2
+        let mut backfilled: Vec<(usize, i64, i64, i64, i64, String)> = Vec::new();
+        for (idx, rec) in records.iter().enumerate() {
+            if backfilled.len() >= 64 {
+                break;
             }
-        }
-    }
-
-    if !backfilled.is_empty() {
-        let mut conn = state.lock_db();
-        if let Ok(tx) = conn.transaction() {
-            for (idx, dur, sr, ch, bd, peaks) in &backfilled {
-                let id = records[*idx].id;
-                let _ = tx.execute(
-                    "UPDATE sample_slices
-                     SET peaks_json = ?1, sample_rate = ?2, channels = ?3, bit_depth = ?4, duration_ms = ?5
-                     WHERE id = ?6",
-                    params![peaks, sr, ch, bd, dur, id],
-                );
-            }
-            if tx.commit().is_ok() {
-                for (idx, dur, sr, ch, bd, peaks) in backfilled {
-                    records[idx].duration_ms = dur;
-                    records[idx].sample_rate = sr;
-                    records[idx].channels = ch;
-                    records[idx].bit_depth = bd;
-                    records[idx].peaks_json = peaks;
+            if rec.file_exists && (rec.peaks_json.trim().is_empty() || rec.peaks_json == "[]") {
+                let (dur, sr, ch, bd, peaks) =
+                    decode_slice_audio_meta(Path::new(&rec.slice_path), rec.duration_ms);
+                if peaks != "[]" {
+                    backfilled.push((idx, dur, sr, ch, bd, peaks));
                 }
             }
         }
-        drop(conn);
-    }
 
-    Ok(records)
+        if !backfilled.is_empty() {
+            let mut conn = state_owned.lock_db();
+            if let Ok(tx) = conn.transaction() {
+                for (idx, dur, sr, ch, bd, peaks) in &backfilled {
+                    let id = records[*idx].id;
+                    let _ = tx.execute(
+                        "UPDATE sample_slices
+                         SET peaks_json = ?1, sample_rate = ?2, channels = ?3, bit_depth = ?4, duration_ms = ?5
+                         WHERE id = ?6",
+                        params![peaks, sr, ch, bd, dur, id],
+                    );
+                }
+                if tx.commit().is_ok() {
+                    for (idx, dur, sr, ch, bd, peaks) in backfilled {
+                        records[idx].duration_ms = dur;
+                        records[idx].sample_rate = sr;
+                        records[idx].channels = ch;
+                        records[idx].bit_depth = bd;
+                        records[idx].peaks_json = peaks;
+                    }
+                }
+            }
+            drop(conn);
+        }
+
+        Ok(records)
+    })
+    .await
+    .map_err(|e| sanitize_err(&user_dir_err, &format!("Slice history task failed: {}", e)))?
 }
 
 #[tauri::command]
@@ -293,9 +340,13 @@ pub fn clear_missing_slices(state: State<'_, AppState>) -> Result<usize, String>
     let missing_ids: Vec<i64> = rows
         .into_iter()
         .filter(|(_, p)| {
-            fs::symlink_metadata(p)
-                .map(|m| m.file_type().is_symlink() || !m.file_type().is_file())
-                .unwrap_or(true)
+            let trimmed = p.trim();
+            trimmed.is_empty()
+                || crate::security::is_unc_or_network_path(trimmed)
+                || crate::security::has_ntfs_ads_colon(trimmed)
+                || fs::symlink_metadata(trimmed)
+                    .map(|m| m.file_type().is_symlink() || !m.file_type().is_file())
+                    .unwrap_or(true)
         })
         .map(|(id, _)| id)
         .collect();
@@ -330,7 +381,9 @@ pub fn cleanup_unrecorded_slice_file(
     let conn = state.lock_db();
     let resolved = ensure_existing_slice_in_scope(&conn, &state.user_dir, &slice_path)
         .map_err(|e| sanitize_err(&state.user_dir, &e))?;
+    super::ensure_slice_not_in_readonly_library(&conn, &resolved)?;
     let disp = format_os_display_path(&resolved);
+    let norm_disp = normalize_clean_path(&disp);
     let exists_in_db: bool = conn
         .query_row(
             "SELECT EXISTS(
@@ -338,11 +391,22 @@ pub fn cleanup_unrecorded_slice_file(
                 WHERE (LOWER(slice_path) = LOWER(?1) OR LOWER(slice_path) = LOWER(?2))
                   AND COALESCE(is_trashed, 0) = 0
              )",
-            params![disp, normalize_clean_path(&disp)],
+            params![disp, norm_disp],
             |r| r.get(0),
         )
         .unwrap_or(true);
-    if !exists_in_db {
+    let is_indexed_sample: bool = conn
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM samples
+                WHERE LOWER(REPLACE(file_path, '\\', '/')) = LOWER(?1)
+                   OR LOWER(REPLACE(COALESCE(original_file_path, ''), '\\', '/')) = LOWER(?1)
+             )",
+            params![norm_disp],
+            |r| r.get(0),
+        )
+        .unwrap_or(true);
+    if !exists_in_db && !is_indexed_sample {
         let _ = fs::remove_file(&resolved);
     }
     Ok(())
@@ -405,6 +469,45 @@ pub(crate) fn relink_sample_slices_source_prefix(
                 params![disp, next_name, id],
             )
             .map_err(|e| format!("Failed relinking slice source {}: {}", id, e))?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn relink_sample_slices_path_prefix(
+    conn: &Connection,
+    old_prefix_slash: &str,
+    old_prefix_lower: &str,
+    norm_new_root: &str,
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare("SELECT id, slice_path FROM sample_slices WHERE slice_path != ''")
+        .map_err(|e| format!("Failed reading slice paths: {}", e))?;
+    let rows: Vec<(i64, String)> = stmt
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| format!("Failed mapping slice paths: {}", e))?
+        .flatten()
+        .collect();
+    for (id, sl_path) in rows {
+        let norm = normalize_clean_path(&sl_path);
+        let rel_opt = if cfg!(windows) {
+            norm.get(..old_prefix_slash.len())
+                .filter(|head| head.to_lowercase() == old_prefix_lower)
+                .and_then(|_| norm.get(old_prefix_slash.len()..))
+        } else {
+            norm.strip_prefix(old_prefix_slash)
+        };
+        if let Some(rel) = rel_opt {
+            let next_path = format!(
+                "{}/{}",
+                norm_new_root.trim_end_matches('/'),
+                rel.trim_start_matches('/')
+            );
+            let disp = format_os_display_path(Path::new(&next_path));
+            let _ = conn.execute(
+                "UPDATE sample_slices SET slice_path = ?1 WHERE id = ?2",
+                params![disp, id],
+            );
         }
     }
     Ok(())

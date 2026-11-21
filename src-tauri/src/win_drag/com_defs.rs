@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 use std::os::windows::ffi::OsStrExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr::copy_nonoverlapping;
 use windows::core::{GUID, HRESULT};
 use windows::Win32::Foundation::{HWND, POINT};
@@ -15,6 +15,12 @@ extern "system" {
     pub(super) fn WindowFromPoint(point: POINT) -> HWND;
     pub(super) fn GetAncestor(hwnd: HWND, gaflags: u32) -> HWND;
     pub(super) fn GetWindowThreadProcessId(hwnd: HWND, lpdwprocessid: *mut u32) -> u32;
+    pub(super) fn EnumChildWindows(
+        hwnd_parent: HWND,
+        lp_enum_func: unsafe extern "system" fn(HWND, isize) -> i32,
+        lparam: isize,
+    ) -> i32;
+    pub(super) fn RegisterClipboardFormatW(lpszformat: *const u16) -> u32;
     pub(super) fn SendMessageTimeoutW(
         hwnd: HWND,
         msg: u32,
@@ -132,12 +138,44 @@ pub(super) unsafe fn clone_hglobal(src: isize) -> Option<isize> {
     Some(hdest)
 }
 
+pub(super) unsafe fn register_clipboard_format(name: &str) -> Option<u16> {
+    let mut wide: Vec<u16> = std::ffi::OsStr::new(name).encode_wide().collect();
+    wide.push(0);
+    let id = RegisterClipboardFormatW(wide.as_ptr());
+    if id == 0 || id > u16::MAX as u32 {
+        None
+    } else {
+        Some(id as u16)
+    }
+}
+
+fn clean_windows_path_str(path: &Path) -> String {
+    crate::security::strip_verbatim_prefix(path)
+        .to_string_lossy()
+        .replace('/', "\\")
+}
+
+/// Builds a NUL-terminated UTF-16LE byte buffer for the standard Windows `FileNameW` clipboard format.
+pub(super) fn build_filenamew_payload(path: &Path) -> Option<Vec<u8>> {
+    let clean_str = clean_windows_path_str(path);
+    if clean_str.trim().is_empty() {
+        return None;
+    }
+    let mut wide: Vec<u16> = std::ffi::OsStr::new(&clean_str).encode_wide().collect();
+    wide.push(0);
+    let mut out = vec![0u8; wide.len() * std::mem::size_of::<u16>()];
+    unsafe {
+        copy_nonoverlapping(wide.as_ptr() as *const u8, out.as_mut_ptr(), out.len());
+    }
+    Some(out)
+}
+
 /// Builds a UTF-16LE `DROPFILES` byte buffer (`fWide = 1`, double-NUL terminated) for `CF_HDROP`.
+/// Expects paths already validated & canonicalized off-thread so zero disk I/O runs on the STA UI thread.
 pub(super) fn build_hdrop_payload(paths: &[PathBuf]) -> Result<Vec<u8>, String> {
     let mut wide_chars: Vec<u16> = Vec::new();
     for path in paths {
-        let canon = dunce::canonicalize(path).unwrap_or_else(|_| path.clone());
-        let clean_str = canon.to_string_lossy().replace('/', "\\");
+        let clean_str = clean_windows_path_str(path);
         if clean_str.trim().is_empty() {
             continue;
         }

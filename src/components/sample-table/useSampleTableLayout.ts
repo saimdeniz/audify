@@ -18,7 +18,7 @@ interface UseSampleTableLayoutParams {
   parentRef: React.RefObject<HTMLDivElement>;
   headerRef: React.RefObject<HTMLDivElement>;
   sampleCount: number;
-  slicesFilterActive: boolean;
+  showSlicesTable: boolean;
   isSimilarityMode: boolean;
 }
 
@@ -30,7 +30,7 @@ export function useSampleTableLayout({
   parentRef,
   headerRef,
   sampleCount,
-  slicesFilterActive,
+  showSlicesTable,
   isSimilarityMode,
 }: UseSampleTableLayoutParams) {
   const [verticalScrollbarWidth, setVerticalScrollbarWidth] = useState(0);
@@ -80,7 +80,7 @@ export function useSampleTableLayout({
 
   useLayoutEffect(() => {
     const el = parentRef.current;
-    if (!el || slicesFilterActive || sampleCount === 0) {
+    if (!el || showSlicesTable || sampleCount === 0) {
       setVerticalScrollbarWidth(0);
       return;
     }
@@ -96,7 +96,7 @@ export function useSampleTableLayout({
     const ro = new ResizeObserver(syncMetrics);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [parentRef, headerRef, sampleCount, slicesFilterActive, columnsContentWidth]);
+  }, [parentRef, headerRef, sampleCount, showSlicesTable, columnsContentWidth]);
 
   return {
     visibleCols,

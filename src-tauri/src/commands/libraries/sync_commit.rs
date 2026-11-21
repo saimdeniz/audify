@@ -67,6 +67,15 @@ pub(super) fn commit_synced_samples_with_status(
         }
     }
 
+    let bulk_fts_batch = scanned_samples.len() >= 100 || (force && target_folder_is_none);
+    if bulk_fts_batch {
+        tx.execute_batch(
+            "DROP TRIGGER IF EXISTS trg_sample_tags_ai;
+             DROP TRIGGER IF EXISTS trg_sample_tags_ad;",
+        )
+        .map_err(|e| format!("Failed suspending tag FTS triggers for bulk sync: {}", e))?;
+    }
+
     if force && target_folder_is_none {
         tx.execute(
             "DELETE FROM sample_tags
@@ -233,6 +242,12 @@ pub(super) fn commit_synced_samples_with_status(
             )
             .map_err(|e| e.to_string())?;
 
+        let mut fts_dirty_ids: Vec<i64> = if bulk_fts_batch {
+            Vec::with_capacity(scanned_samples.len())
+        } else {
+            Vec::new()
+        };
+
         for s in scanned_samples {
             if !s.genre.is_empty() {
                 let trimmed_genre = s.genre.trim();
@@ -277,7 +292,48 @@ pub(super) fn commit_synced_samples_with_status(
                         let _ = tag_insert_stmt.execute(params![sample_id, tag_id]);
                     }
                 }
+                if bulk_fts_batch && (!s.auto_tags.is_empty() || force) {
+                    fts_dirty_ids.push(sample_id);
+                }
             }
+        }
+
+        if bulk_fts_batch {
+            if force && target_folder_is_none {
+                tx.execute(
+                    "UPDATE samples_fts
+                     SET tags_text = COALESCE((
+                         SELECT GROUP_CONCAT(t.name, ' ') || ' ' || REPLACE(REPLACE(GROUP_CONCAT(t.name, ' '), 'ı', 'i'), 'İ', 'i')
+                         FROM sample_tags st
+                         INNER JOIN tags t ON t.id = st.tag_id
+                         WHERE st.sample_id = samples_fts.rowid
+                     ), '')
+                     WHERE rowid IN (SELECT id FROM samples WHERE library_id = ?1)",
+                    params![lib_id],
+                )
+                .map_err(|e| format!("Failed bulk updating FTS tags for library: {}", e))?;
+            } else if !fts_dirty_ids.is_empty() {
+                fts_dirty_ids.sort_unstable();
+                fts_dirty_ids.dedup();
+                for chunk in fts_dirty_ids.chunks(450) {
+                    let placeholders = crate::db::sql_in_placeholders(1, chunk.len());
+                    let sql = format!(
+                        "UPDATE samples_fts
+                         SET tags_text = COALESCE((
+                             SELECT GROUP_CONCAT(t.name, ' ') || ' ' || REPLACE(REPLACE(GROUP_CONCAT(t.name, ' '), 'ı', 'i'), 'İ', 'i')
+                             FROM sample_tags st
+                             INNER JOIN tags t ON t.id = st.tag_id
+                             WHERE st.sample_id = samples_fts.rowid
+                         ), '')
+                         WHERE rowid IN ({})",
+                        placeholders
+                    );
+                    tx.execute(&sql, rusqlite::params_from_iter(chunk.iter().copied()))
+                        .map_err(|e| format!("Failed updating FTS tags chunk: {}", e))?;
+                }
+            }
+            tx.execute_batch(crate::db::SAMPLE_TAGS_FTS_TRIGGERS_SQL)
+                .map_err(|e| format!("Failed restoring tag FTS triggers after bulk sync: {}", e))?;
         }
 
         // Prune ONLY non-manual orphan auto-tags!

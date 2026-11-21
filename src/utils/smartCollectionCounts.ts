@@ -1,5 +1,5 @@
 import { Collection, SampleItem } from "../types";
-import { executeSmartSearch } from "./smartSearch";
+import { countSmartSearchMatches } from "./smartSearch";
 
 const EMPTY_SMART_COLLECTION_COUNTS: Record<number, number> = {};
 
@@ -24,7 +24,7 @@ export function computeSmartCollectionCounts(
     const query = col.smart_query!.trim();
     counts[col.id] =
       allProfileSamples.length > 0
-        ? executeSmartSearch(allProfileSamples, query, enableSynonyms).length
+        ? countSmartSearchMatches(allProfileSamples, query, enableSynonyms)
         : 0;
   }
   return counts;

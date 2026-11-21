@@ -568,7 +568,7 @@ export const ActiveFilterBanner: React.FC = () => {
           <button
             type="button"
             onClick={resetAllFilters}
-            className="ml-auto w-[20px] h-[20px] rounded-[3px] border border-line bg-surface-3 hover:bg-danger/15 hover:border-danger/50 text-fg-2 hover:text-danger inline-flex items-center justify-center transition-colors shrink-0 cursor-pointer"
+            className="ml-auto w-[20px] h-[20px] rounded-[3px] border border-line bg-surface-3 hover:bg-accent-soft hover:border-accent text-fg-2 hover:text-accent-fg inline-flex items-center justify-center transition-colors shrink-0 cursor-pointer"
             title="Clear all active filters"
             aria-label="Clear all active filters"
           >

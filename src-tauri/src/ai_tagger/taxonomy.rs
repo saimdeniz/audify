@@ -236,7 +236,7 @@ pub fn persist_ai_tags_for_sample(
             };
             let inserted = conn
                 .execute(
-                    "INSERT OR IGNORE INTO sample_tags (sample_id, tag_id, is_manual) VALUES (?1, ?2, 0)",
+                    "INSERT OR IGNORE INTO sample_tags (sample_id, tag_id, is_manual, source) VALUES (?1, ?2, 0, 'ai_auto')",
                     params![sample_id, tag_id],
                 )
                 .map_err(|e| format!("Failed inserting auto AI tag: {}", e))?;

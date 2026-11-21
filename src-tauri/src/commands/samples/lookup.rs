@@ -209,11 +209,15 @@ pub(crate) fn get_sample_by_id_or_path_with_conn(
 
     let mut params_vec: Vec<rusqlite::types::Value> = Vec::new();
     if let Some(id) = sample_id {
-        sql.push_str("s.id = ?1");
-        params_vec.push(rusqlite::types::Value::Integer(id));
         if let Some(path) = norm_fp {
+            sql.push_str("(s.id = ?1");
             sql.push_str(path_clause_2);
+            sql.push(')');
+            params_vec.push(rusqlite::types::Value::Integer(id));
             params_vec.push(rusqlite::types::Value::Text(path));
+        } else {
+            sql.push_str("s.id = ?1");
+            params_vec.push(rusqlite::types::Value::Integer(id));
         }
     } else if let Some(path) = norm_fp {
         sql.push_str(path_clause_1);
