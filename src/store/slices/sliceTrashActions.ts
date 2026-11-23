@@ -239,6 +239,7 @@ export function createSliceTrashActions(
         : st.trashedSliceHistory;
     const targetCount = cleanIds.length > 0 ? cleanIds.length : st.trashedSliceCount || targets.length;
     if (targetCount === 0) return null;
+    const epoch = ctx.getProfileEpoch();
 
     set({
       trashOpStatus: { kind: "emptying", count: targetCount },
@@ -248,6 +249,7 @@ export function createSliceTrashActions(
       const summary = await invokeCommand("empty_trashed_slices", {
         sliceIds: cleanIds.length > 0 ? cleanIds : null,
       });
+      if (epoch !== ctx.getProfileEpoch()) return null;
       const deletedSet = new Set(summary.affected_ids);
 
       let exitedTrashToTracks = false;

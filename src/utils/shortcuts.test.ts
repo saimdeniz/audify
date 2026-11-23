@@ -78,7 +78,24 @@ describe("shortcuts matching & target guards", () => {
     expect(matchesShortcut({ ...enterDown, shiftKey: false }, "Shift+Enter")).toBe(
       false
     );
-    expect(matchesShortcut(enterDown, "Enter")).toBe(true);
+    expect(matchesShortcut(enterDown, "Enter")).toBe(false);
+    expect(matchesShortcut({ ...enterDown, shiftKey: false }, "Enter")).toBe(
+      true
+    );
+    // AltGr (Ctrl+Alt) symbol production on Turkish-Q / European keyboards
+    expect(
+      matchesShortcut(
+        {
+          key: "[",
+          code: "Digit8",
+          ctrlKey: true,
+          metaKey: false,
+          altKey: true,
+          shiftKey: false,
+        },
+        "["
+      )
+    ).toBe(true);
 
     expect(formatShortcutDisplay(DEFAULT_SHORTCUTS.findSimilar)).toBe(
       "Shift+Enter"
@@ -182,6 +199,41 @@ describe("shortcuts matching & target guards", () => {
           shiftKey: false,
         },
         "Ctrl+ "
+      )
+    ).toBe(true);
+  });
+
+  it("matches Turkish-Q dotless ı / dotted İ / physical KeyI for 'i' Mark In shortcut", () => {
+    const trDotlessI = {
+      key: "ı",
+      code: "KeyI",
+      ctrlKey: false,
+      metaKey: false,
+      altKey: false,
+      shiftKey: false,
+    };
+    const trDottedI = {
+      key: "i",
+      code: "Quote",
+      ctrlKey: false,
+      metaKey: false,
+      altKey: false,
+      shiftKey: false,
+    };
+    expect(matchesShortcut(trDotlessI, DEFAULT_SHORTCUTS.markSliceIn!)).toBe(true);
+    expect(matchesShortcut(trDottedI, DEFAULT_SHORTCUTS.markSliceIn!)).toBe(true);
+    expect(matchesShortcut({ ...trDotlessI, ctrlKey: true }, "i")).toBe(false);
+    expect(
+      matchesShortcut(
+        {
+          key: "o",
+          code: "KeyO",
+          ctrlKey: false,
+          metaKey: false,
+          altKey: false,
+          shiftKey: false,
+        },
+        DEFAULT_SHORTCUTS.markSliceOut!
       )
     ).toBe(true);
   });

@@ -17,7 +17,7 @@ const listeners = new Set<() => void>();
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let generation = 0;
 
-const MAX_CACHE_ENTRIES = 2000;
+const MAX_CACHE_ENTRIES = 1000;
 
 function rememberPeakJson(id: number, json: string) {
   cache.delete(id);

@@ -16,6 +16,7 @@ import {
   renderKeyCell,
   renderTagsCell,
 } from "./SampleTableRowCells";
+import { SimilarityMatchBadge } from "./SimilarityMatchBadge";
 import {
   ColumnId,
   FIXED_CLASS_COL_WIDTH,
@@ -74,7 +75,6 @@ export const SampleTableRow: React.FC<SampleTableRowProps> = React.memo(
   ({
     sample,
     rowIndex,
-    totalSamples,
     startOffsetPx,
     totalTableWidth,
     isSimilarityMode,
@@ -121,10 +121,9 @@ export const SampleTableRow: React.FC<SampleTableRowProps> = React.memo(
 
     return (
       <div
-        role="option"
+        role="row"
         aria-selected={isRowSelected}
-        aria-posinset={rowIndex + 1}
-        aria-setsize={totalSamples}
+        aria-rowindex={rowIndex + 1}
         aria-label={sample.file_name}
         style={{
           position: "absolute",
@@ -185,25 +184,10 @@ export const SampleTableRow: React.FC<SampleTableRowProps> = React.memo(
                 : "No match score"
             }
           >
-            {isSimilarityAnchor ? (
-              <span className="px-1.5 py-0.5 rounded-xs border border-accent bg-accent-soft text-accent-fg font-mono text-[9px] font-bold uppercase tracking-tight">
-                ANCHOR
-              </span>
-            ) : matchScore !== null ? (
-              <span
-                className={`px-1.5 py-0.5 rounded-xs border font-mono tabular-nums text-[10px] font-semibold ${
-                  matchScore >= 0.85
-                    ? "bg-ok/15 border-ok/50 text-ok"
-                    : matchScore >= 0.7
-                    ? "bg-accent-soft border-accent text-accent-fg"
-                    : "bg-surface-3 border-line text-fg-2"
-                }`}
-              >
-                {Math.round(matchScore * 100)}%
-              </span>
-            ) : (
-              <span className="text-fg-3 font-mono text-[10px]">—</span>
-            )}
+            <SimilarityMatchBadge
+              isAnchor={isSimilarityAnchor}
+              matchScore={matchScore}
+            />
           </div>
         )}
 

@@ -2,13 +2,18 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArchiveRestore,
+  ChevronRight,
   Copy,
   ExternalLink,
   FileCheck2,
   FolderOpen,
+  Hash,
   Inbox,
+  LayoutGrid,
+  Music,
   Pencil,
   RotateCcw,
+  Sparkles,
   Star,
   Trash2,
 } from "lucide-react";
@@ -37,11 +42,24 @@ export const MiniDockContextMenu: React.FC<MiniDockContextMenuProps> = ({
   const selectedSampleIds = useSampleStore((s) => s.selectedSampleIds);
   const enableLicensesSystem = useSampleStore((s) => s.enableLicensesSystem);
   const enableAdvancedFileOps = useSampleStore((s) => s.enableAdvancedFileOps);
+  const binFilterActive = useSampleStore((s) => s.binFilterActive);
   const trashFilterActive = useSampleStore((s) => s.trashFilterActive);
   const shortcuts = useSampleStore((s) => s.shortcuts);
+  const collections = useSampleStore((s) => s.collections);
+  const tags = useSampleStore((s) => s.tags);
+  const genres = useSampleStore((s) => s.genres);
 
   const toggleFavorite = useSampleStore((s) => s.toggleFavorite);
   const addSamplesToBin = useSampleStore((s) => s.addSamplesToBin);
+  const removeSamplesFromBin = useSampleStore((s) => s.removeSamplesFromBin);
+  const findSimilarSamples = useSampleStore((s) => s.findSimilarSamples);
+  const addSamplesToCollectionBatch = useSampleStore(
+    (s) => s.addSamplesToCollectionBatch
+  );
+  const assignTag = useSampleStore((s) => s.assignTag);
+  const assignTagBatch = useSampleStore((s) => s.assignTagBatch);
+  const assignGenre = useSampleStore((s) => s.assignGenre);
+  const assignGenreBatch = useSampleStore((s) => s.assignGenreBatch);
   const copyAttributionForSamples = useSampleStore(
     (s) => s.copyAttributionForSamples
   );
@@ -58,10 +76,19 @@ export const MiniDockContextMenu: React.FC<MiniDockContextMenuProps> = ({
   const emptyAudifyTrash = useSampleStore((s) => s.emptyAudifyTrash);
 
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const [expandedSub, setExpandedSub] = useState<
+    "collection" | "tag" | "genre" | null
+  >(null);
   const [pos, setPos] = useState<{ x: number; y: number }>({
     x: menu.x,
     y: menu.y,
   });
+
+  useEffect(() => {
+    menuRef.current?.focus();
+  }, [menu.sample.id, menu.x, menu.y]);
+
+  const manualCollections = collections.filter((c) => !c.smart_query?.trim());
 
   useLayoutEffect(() => {
     const el = menuRef.current;
@@ -105,6 +132,7 @@ export const MiniDockContextMenu: React.FC<MiniDockContextMenuProps> = ({
   return createPortal(
     <div
       ref={menuRef}
+      tabIndex={-1}
       role="menu"
       aria-label="Sample actions"
       data-context-menu-portal="true"
@@ -112,18 +140,174 @@ export const MiniDockContextMenu: React.FC<MiniDockContextMenuProps> = ({
       style={{ top: pos.y, left: pos.x, zIndex: Z_INDEX.floatingMenu }}
       onClick={(e) => e.stopPropagation()}
       onKeyDown={handleContextMenuKeyDown}
-      className="fixed w-[210px] bg-surface-2 border border-line-strong rounded-md py-1 text-[11px] text-fg shadow-2xl"
+      className="fixed w-[216px] max-h-[82vh] overflow-y-auto bg-surface-2 border border-line-strong rounded-md py-1 text-[11px] text-fg shadow-2xl focus:outline-none"
     >
+      {!trashFilterActive && menu.sample.id > 0 && (
+        <MenuItem
+          tone="accent"
+          compactHeight
+          icon={<Sparkles className="w-3.5 h-3.5 text-accent-fg" />}
+          label="Find Similar Audio (AI)"
+          onClick={() => {
+            const sample = menu.sample;
+            onClose();
+            void findSimilarSamples(sample);
+          }}
+        />
+      )}
+
       <MenuItem
         tone="accent"
         compactHeight
         icon={<Inbox className="w-3.5 h-3.5 text-accent-fg" />}
-        label="Add to Session Bin"
+        label={
+          binFilterActive ? "Remove from Session Bin" : "Add to Session Bin"
+        }
         onClick={() => {
-          addSamplesToBin(targetIds);
+          if (binFilterActive) {
+            removeSamplesFromBin(targetIds);
+          } else {
+            addSamplesToBin(targetIds);
+          }
           onClose();
         }}
       />
+
+      {!trashFilterActive && manualCollections.length > 0 && (
+        <div>
+          <MenuItem
+            tone="accent"
+            compactHeight
+            icon={<LayoutGrid className="w-3.5 h-3.5 text-accent-fg" />}
+            label="Add to Collection"
+            rightSlot={
+              <ChevronRight
+                className={`w-3 h-3 text-fg-3 transition-transform ${
+                  expandedSub === "collection" ? "rotate-90" : ""
+                }`}
+              />
+            }
+            onClick={() =>
+              setExpandedSub((prev) =>
+                prev === "collection" ? null : "collection"
+              )
+            }
+          />
+          {expandedSub === "collection" && (
+            <div className="mx-1.5 my-0.5 py-0.5 rounded-xs bg-surface-1 border border-line max-h-[120px] overflow-y-auto">
+              {manualCollections.map((col) => (
+                <button
+                  key={col.id}
+                  type="button"
+                  onClick={() => {
+                    void addSamplesToCollectionBatch(col.id, targetIds);
+                    onClose();
+                  }}
+                  className="w-full h-[22px] px-2 flex items-center gap-1.5 text-left text-[10.5px] text-fg-2 hover:text-fg hover:bg-accent-soft transition-colors truncate"
+                >
+                  <span
+                    className="w-2 h-2 rounded-[2px] shrink-0"
+                    style={{ backgroundColor: col.color || "var(--signal-accent)" }}
+                  />
+                  <span className="truncate">{col.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!trashFilterActive && tags.length > 0 && (
+        <div>
+          <MenuItem
+            tone="accent"
+            compactHeight
+            icon={<Hash className="w-3.5 h-3.5 text-accent-fg" />}
+            label="Assign Tag"
+            rightSlot={
+              <ChevronRight
+                className={`w-3 h-3 text-fg-3 transition-transform ${
+                  expandedSub === "tag" ? "rotate-90" : ""
+                }`}
+              />
+            }
+            onClick={() =>
+              setExpandedSub((prev) => (prev === "tag" ? null : "tag"))
+            }
+          />
+          {expandedSub === "tag" && (
+            <div className="mx-1.5 my-0.5 py-0.5 rounded-xs bg-surface-1 border border-line max-h-[120px] overflow-y-auto">
+              {tags.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => {
+                    if (targetIds.length > 1) {
+                      void assignTagBatch(targetIds, t.id);
+                    } else {
+                      void assignTag(menu.sample.id, t.id);
+                    }
+                    onClose();
+                  }}
+                  className="w-full h-[22px] px-2 flex items-center gap-1.5 text-left text-[10.5px] text-fg-2 hover:text-fg hover:bg-accent-soft transition-colors truncate"
+                >
+                  <span
+                    className="w-2 h-2 rounded-[2px] shrink-0"
+                    style={{ backgroundColor: t.color }}
+                  />
+                  <span className="truncate">{t.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!trashFilterActive && genres.length > 0 && (
+        <div>
+          <MenuItem
+            tone="accent"
+            compactHeight
+            icon={<Music className="w-3.5 h-3.5 text-accent-fg" />}
+            label="Assign Genre"
+            rightSlot={
+              <ChevronRight
+                className={`w-3 h-3 text-fg-3 transition-transform ${
+                  expandedSub === "genre" ? "rotate-90" : ""
+                }`}
+              />
+            }
+            onClick={() =>
+              setExpandedSub((prev) => (prev === "genre" ? null : "genre"))
+            }
+          />
+          {expandedSub === "genre" && (
+            <div className="mx-1.5 my-0.5 py-0.5 rounded-xs bg-surface-1 border border-line max-h-[120px] overflow-y-auto">
+              {genres.map((g) => (
+                <button
+                  key={g.id}
+                  type="button"
+                  onClick={() => {
+                    if (targetIds.length > 1) {
+                      void assignGenreBatch(targetIds, g.name);
+                    } else {
+                      void assignGenre(menu.sample.id, g.name);
+                    }
+                    onClose();
+                  }}
+                  className="w-full h-[22px] px-2 flex items-center gap-1.5 text-left text-[10.5px] text-fg-2 hover:text-fg hover:bg-accent-soft transition-colors truncate"
+                >
+                  <span
+                    className="w-2 h-2 rounded-[2px] shrink-0"
+                    style={{ backgroundColor: g.color }}
+                  />
+                  <span className="truncate">{g.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {enableLicensesSystem && (
         <MenuItem

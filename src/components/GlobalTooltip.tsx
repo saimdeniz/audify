@@ -365,6 +365,7 @@ export const GlobalTooltip: React.FC = () => {
   return (
     <div
       ref={tooltipRef}
+      data-mica-overlay="true"
       style={{
         left: `${tooltip.x}px`,
         top: `${tooltip.y}px`,

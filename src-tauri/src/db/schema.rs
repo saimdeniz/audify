@@ -110,6 +110,7 @@ pub fn init_schema_on_conn(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "
         PRAGMA journal_mode = WAL;
+        PRAGMA journal_size_limit = 33554432;
         PRAGMA synchronous = NORMAL;
         PRAGMA temp_store = MEMORY;
         PRAGMA mmap_size = 67108864;

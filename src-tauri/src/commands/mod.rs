@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod ascii_magic;
 pub mod audio_ops;
+pub mod audio_playback;
 pub mod backups;
 pub mod duplicates;
 pub mod file_ops;
@@ -16,6 +17,7 @@ pub mod taxonomy;
 pub use ai::*;
 pub use ascii_magic::*;
 pub use audio_ops::*;
+pub use audio_playback::*;
 pub use backups::*;
 pub use duplicates::*;
 pub use file_ops::*;

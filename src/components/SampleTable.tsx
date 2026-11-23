@@ -186,6 +186,7 @@ export const SampleTable: React.FC = () => {
     colWidths,
     setColWidths,
     toggleVisibleCol,
+    applyVisibleColsPreset,
     resetTableLayout,
     columnsContentWidth,
     totalTableWidth,
@@ -345,6 +346,7 @@ export const SampleTable: React.FC = () => {
             setColumnOrder={setColumnOrder}
             visibleCols={visibleCols}
             toggleVisibleCol={toggleVisibleCol}
+            applyVisibleColsPreset={applyVisibleColsPreset}
             colWidths={colWidths}
             setColWidths={setColWidths}
             resetTableLayout={resetTableLayout}

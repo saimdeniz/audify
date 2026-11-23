@@ -18,14 +18,6 @@ export interface WaveformDisplayConfig {
   waveformStyle: WaveformStyle;
 }
 
-const UNSUBSCRIBED_DISPLAY_SENTINEL: WaveformDisplayConfig = {
-  accentColor: "",
-  themeMode: "dark",
-  enableMica: false,
-  waveformSensitivity: "logarithmic",
-  waveformStyle: "solid_baseline",
-};
-
 interface MiniWaveformProps {
   sampleId: number;
   peaksJson?: string;
@@ -41,7 +33,26 @@ interface MiniWaveformProps {
   onScrubRatio?: (ratio: number) => void;
 }
 
-export const MiniWaveform: React.FC<MiniWaveformProps> = React.memo(
+interface MiniWaveformRendererProps extends Omit<MiniWaveformProps, "displayConfig"> {
+  displayConfig: WaveformDisplayConfig;
+}
+
+const MiniWaveformConnected: React.FC<Omit<MiniWaveformProps, "displayConfig">> = (
+  props
+) => {
+  const storeDisplayConfig = useSampleStore(
+    useShallow((s): WaveformDisplayConfig => ({
+      accentColor: s.accentColor,
+      themeMode: s.themeMode,
+      enableMica: s.enableMica,
+      waveformSensitivity: s.waveformSensitivity,
+      waveformStyle: s.waveformStyle,
+    }))
+  );
+  return <MiniWaveformRenderer {...props} displayConfig={storeDisplayConfig} />;
+};
+
+const MiniWaveformRenderer: React.FC<MiniWaveformRendererProps> = React.memo(
   ({
     sampleId,
     peaksJson: inlinePeaksJson,
@@ -50,7 +61,7 @@ export const MiniWaveform: React.FC<MiniWaveformProps> = React.memo(
     durationSec = 0,
     progressRatio = 0,
     width: propWidth,
-    displayConfig: propDisplayConfig,
+    displayConfig,
     onScrubRatio,
   }) => {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -59,26 +70,13 @@ export const MiniWaveform: React.FC<MiniWaveformProps> = React.memo(
     const [measuredWidth, setMeasuredWidth] = useState<number>(184);
 
     const peaksJson = usePeaksJson(sampleId, inlinePeaksJson);
-    const storeDisplayConfig = useSampleStore(
-      useShallow((s): WaveformDisplayConfig =>
-        propDisplayConfig
-          ? UNSUBSCRIBED_DISPLAY_SENTINEL
-          : {
-              accentColor: s.accentColor,
-              themeMode: s.themeMode,
-              enableMica: s.enableMica,
-              waveformSensitivity: s.waveformSensitivity,
-              waveformStyle: s.waveformStyle,
-            }
-      )
-    );
     const {
       accentColor,
       themeMode,
       enableMica,
       waveformSensitivity,
       waveformStyle,
-    } = propDisplayConfig ?? storeDisplayConfig;
+    } = displayConfig;
 
     useEffect(() => {
       if (propWidth !== undefined) return;
@@ -158,7 +156,7 @@ export const MiniWaveform: React.FC<MiniWaveformProps> = React.memo(
           let color = passiveColor;
           const isPlayed = (isActiveTrack || isSelected) && r0 <= activeRatio && activeRatio > 0;
           if (isPlayed) {
-            color = accentColor;
+            color = palette.accentColor;
           } else if (isSelected) {
             color = unplayedSelectedColor;
           }
@@ -264,3 +262,15 @@ export const MiniWaveform: React.FC<MiniWaveformProps> = React.memo(
     );
   }
 );
+
+export const MiniWaveform: React.FC<MiniWaveformProps> = React.memo((props) => {
+  if (props.displayConfig) {
+    return (
+      <MiniWaveformRenderer
+        {...props}
+        displayConfig={props.displayConfig}
+      />
+    );
+  }
+  return <MiniWaveformConnected {...props} />;
+});

@@ -77,7 +77,8 @@ export function validateAudioStemForBatch(rawStem: string): string | null {
   if (trimmed.endsWith(".") || rawStem.endsWith(" ")) {
     return "Cannot end with a space or period";
   }
-  if (RESERVED_WINDOWS_NAMES.has(trimmed.toUpperCase())) {
+  const baseBeforeDot = trimmed.split(".")[0].toUpperCase();
+  if (RESERVED_WINDOWS_NAMES.has(baseBeforeDot)) {
     return `"${trimmed}" is a reserved system filename`;
   }
   return null;
@@ -191,7 +192,7 @@ export function computeCandidateStem(
       }`;
       const escaped = config.find.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const re = new RegExp(escaped, flags);
-      out = oldStem.replace(re, config.replaceWith);
+      out = oldStem.replace(re, () => config.replaceWith);
     }
     if (config.trimSpaces) {
       out = out.trim().replace(/\s+/g, " ");

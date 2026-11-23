@@ -78,7 +78,7 @@ pub(super) fn hydrate_sample_tags(
         let sql = "SELECT st.sample_id, st.tag_id
                    FROM sample_tags st
                    INNER JOIN samples s ON s.id = st.sample_id
-                   WHERE COALESCE(s.is_trashed, 0) = ?1
+                   WHERE s.is_trashed = ?1
                      AND s.library_id IN (
                          SELECT l.id FROM libraries l
                          WHERE l.is_global = 1
@@ -159,12 +159,12 @@ pub(crate) fn get_sample_by_id_or_path_with_conn(
     };
 
     let path_clause_1 = if cfg!(windows) {
-        "(s.file_path = ?1 COLLATE NOCASE OR s.original_file_path = ?1 COLLATE NOCASE)"
+        "(LOWER(s.file_path) = LOWER(?1) OR LOWER(s.original_file_path) = LOWER(?1))"
     } else {
         "(s.file_path = ?1 OR s.original_file_path = ?1)"
     };
     let path_clause_2 = if cfg!(windows) {
-        " OR s.file_path = ?2 COLLATE NOCASE OR s.original_file_path = ?2 COLLATE NOCASE"
+        " OR LOWER(s.file_path) = LOWER(?2) OR LOWER(s.original_file_path) = LOWER(?2)"
     } else {
         " OR s.file_path = ?2 OR s.original_file_path = ?2"
     };

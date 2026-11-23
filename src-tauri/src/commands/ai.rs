@@ -398,10 +398,16 @@ pub async fn find_similar_samples(
             None
         };
 
-        let cache = ai_state
+        let mut cache = ai_state
             .vector_cache
             .lock()
             .map_err(|_| "AI similarity cache lock poisoned".to_string())?;
+        if !cache.hydrated || cache.model_id != active_model_id {
+            let conn =
+                open_read_conn(&state.user_dir).map_err(|e| sanitize_err(&state.user_dir, &e))?;
+            let pid = get_active_profile_id(&conn);
+            cache.ensure_hydrated_for_profile(&conn, &active_model_id, pid)?;
+        }
 
         let safe_min_score = min_score
             .filter(|v| v.is_finite())

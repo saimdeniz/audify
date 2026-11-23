@@ -10,7 +10,6 @@ interface LibraryViewsSectionProps {
   dropFlashTarget: string | null;
   favoriteOnly: boolean;
   recentOnly: boolean;
-  typeFilter: "all" | "oneshot" | "loop";
   totalSamplesCount: number;
   totalFavoritesCount: number;
   recentSamplesCount: number;
@@ -20,7 +19,6 @@ interface LibraryViewsSectionProps {
   setFavoriteOnly: (v: boolean) => void;
   setRecentOnly: (v: boolean) => void;
   clearRecentSamples: () => void;
-  setTypeFilter: (t: "all" | "oneshot" | "loop") => void;
   updateDragHoverTarget: (next: string | null) => void;
 }
 
@@ -33,7 +31,6 @@ export const LibraryViewsSection: React.FC<LibraryViewsSectionProps> = ({
   dropFlashTarget,
   favoriteOnly,
   recentOnly,
-  typeFilter,
   totalSamplesCount,
   totalFavoritesCount,
   recentSamplesCount,
@@ -43,7 +40,6 @@ export const LibraryViewsSection: React.FC<LibraryViewsSectionProps> = ({
   setFavoriteOnly,
   setRecentOnly,
   clearRecentSamples,
-  setTypeFilter,
   updateDragHoverTarget,
 }) => {
   return (
@@ -179,35 +175,6 @@ export const LibraryViewsSection: React.FC<LibraryViewsSectionProps> = ({
             </button>
           )}
         </div>
-
-        {isMiniOverlay && (
-          <div className="pt-1 grid grid-cols-3 gap-1 font-mono text-[9.5px]">
-            {(
-              [
-                { id: "all", label: "ALL" },
-                { id: "oneshot", label: "1-SHOT" },
-                { id: "loop", label: "LOOP" },
-              ] as const
-            ).map((opt) => {
-              const active = typeFilter === opt.id;
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setTypeFilter(opt.id)}
-                  className={`h-[20px] rounded-xs border transition-colors ${
-                    active
-                      ? "bg-accent-soft border-accent text-accent-fg font-semibold"
-                      : "bg-surface-3 border-line text-fg-2 hover:text-fg"
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
-          </div>
-        )}
       </nav>
     </div>
   );

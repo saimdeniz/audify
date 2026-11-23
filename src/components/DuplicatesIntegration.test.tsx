@@ -350,7 +350,6 @@ describe("Integrated Duplicates View & UI Polish", () => {
           dropFlashTarget={null}
           favoriteOnly={false}
           recentOnly={false}
-          typeFilter="all"
           totalSamplesCount={100}
           totalFavoritesCount={5}
           recentSamplesCount={3}
@@ -360,7 +359,6 @@ describe("Integrated Duplicates View & UI Polish", () => {
           setFavoriteOnly={vi.fn()}
           setRecentOnly={vi.fn()}
           clearRecentSamples={vi.fn()}
-          setTypeFilter={vi.fn()}
           updateDragHoverTarget={vi.fn()}
         />
       </>
@@ -680,7 +678,7 @@ describe("Integrated Duplicates View & UI Polish", () => {
       />
     );
 
-    const row = container.querySelector('[role="option"]');
+    const row = container.querySelector('[role="row"]');
     expect(row?.className).toContain("audify-dup-group-start");
     expect(row?.className).toContain("audify-row-surface-alt");
     expect(row?.className).not.toContain("border-t-2");
@@ -954,7 +952,7 @@ describe("Integrated Duplicates View & UI Polish", () => {
     );
     const badge = screen.getByText("#G2 · 95%");
     expect(badge.className).toContain("text-warn");
-    expect(container.querySelector('[role="option"]')).toBeTruthy();
+    expect(container.querySelector('[role="row"]')).toBeTruthy();
   });
 
   it("supports All (80%+ min) in Similar Audio scan dropdown and locks compact Mini Dock FilterDrawer to a single-row h-[74px]", async () => {

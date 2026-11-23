@@ -30,6 +30,19 @@ export function isGifWallpaperPath(filePath: string): boolean {
   return /\.gif(?:[?#].*)?$/i.test(filePath.trim());
 }
 
+export function isVideoWallpaperPath(filePath: string): boolean {
+  return /\.(?:mp4|webm)(?:[?#].*)?$/i.test(filePath.trim());
+}
+
+export function getVideoWallpaperExtBadge(
+  filePath: string
+): "MP4" | "WEBM" | null {
+  const trimmed = filePath.trim();
+  if (/\.webm(?:[?#].*)?$/i.test(trimmed)) return "WEBM";
+  if (/\.mp4(?:[?#].*)?$/i.test(trimmed)) return "MP4";
+  return null;
+}
+
 function rememberBlobUrl(
   map: Map<string, string>,
   key: string,
@@ -105,14 +118,14 @@ function loadCrossOriginImage(assetUrl: string): Promise<HTMLImageElement> {
 
 function getViewportDisplayCeiling(): { maxW: number; maxH: number } {
   if (typeof window === "undefined") {
-    return { maxW: 2560, maxH: 1440 };
+    return { maxW: 1920, maxH: 1080 };
   }
   const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
-  const rawW = window.screen?.width ? Math.round(window.screen.width * dpr) : 2560;
-  const rawH = window.screen?.height ? Math.round(window.screen.height * dpr) : 1440;
+  const rawW = window.screen?.width ? Math.round(window.screen.width * dpr) : 1920;
+  const rawH = window.screen?.height ? Math.round(window.screen.height * dpr) : 1080;
   return {
-    maxW: Math.max(2560, Math.min(3840, rawW)),
-    maxH: Math.max(1440, Math.min(2160, rawH)),
+    maxW: Math.max(1280, Math.min(3840, rawW)),
+    maxH: Math.max(720, Math.min(2160, rawH)),
   };
 }
 
@@ -143,12 +156,87 @@ async function decodeResizedImageBlobUrl(
   const outBlob = await new Promise<Blob | null>((resolve) =>
     canvas.toBlob(resolve, "image/jpeg", quality)
   );
+  canvas.width = 0;
+  canvas.height = 0;
   if (!outBlob) return assetUrl;
   return URL.createObjectURL(outBlob);
 }
 
 /**
- * Returns a fast aspect-preserving HiDPI thumbnail URL for any wallpaper tile.
+ * Captures a single first-frame 320x180 JPEG poster from an MP4/WebM loop wallpaper
+ * and immediately releases the video decoder surface so gallery tiles cost ~20 KB.
+ */
+async function captureVideoPosterBlobUrl(assetUrl: string): Promise<string> {
+  if (typeof document === "undefined") return "";
+  const video = document.createElement("video");
+  video.muted = true;
+  video.playsInline = true;
+  video.crossOrigin = "anonymous";
+  video.preload = "auto";
+
+  const releaseVideo = () => {
+    video.onloadeddata = null;
+    video.onseeked = null;
+    video.onerror = null;
+    try {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    } catch {
+      // ignore cleanup failures in non-browser runtimes
+    }
+  };
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const done = (err?: Error) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        if (err) reject(err);
+        else resolve();
+      };
+      const timer = window.setTimeout(
+        () => done(new Error("Video poster timeout")),
+        4500
+      );
+      video.onloadeddata = () => done();
+      video.onerror = () => done(new Error("Video poster load failed"));
+      video.src = assetUrl;
+      video.load();
+    });
+
+    const natW = Math.max(1, video.videoWidth || 320);
+    const natH = Math.max(1, video.videoHeight || 180);
+    const scale = Math.min(1, Math.max(320 / natW, 180 / natH));
+    const outW = Math.max(1, Math.round(natW * scale));
+    const outH = Math.max(1, Math.round(natH * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = outW;
+    canvas.height = outH;
+    const ctx = canvas.getContext("2d", { alpha: false });
+    if (!ctx) {
+      canvas.width = 0;
+      canvas.height = 0;
+      return "";
+    }
+    ctx.drawImage(video, 0, 0, outW, outH);
+    const outBlob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", 0.86)
+    );
+    canvas.width = 0;
+    canvas.height = 0;
+    return outBlob ? URL.createObjectURL(outBlob) : "";
+  } finally {
+    releaseVideo();
+  }
+}
+
+/**
+ * Returns a fast aspect-preserving HiDPI static thumbnail URL for any wallpaper tile
+ * (extracting first-frame JPEG posters for GIF and MP4/WebM to avoid multi-decoder RAM spikes).
  */
 export async function getWallpaperThumbnailUrl(filePath: string): Promise<string> {
   if (!filePath) return "";
@@ -157,11 +245,6 @@ export async function getWallpaperThumbnailUrl(filePath: string): Promise<string
   if (existing) {
     return existing;
   }
-  if (isGifWallpaperPath(filePath)) {
-    const assetUrl = convertFileSrc(filePath);
-    rememberBlobUrl(thumbMemoryCache, key, assetUrl);
-    return assetUrl;
-  }
   const pending = pendingThumbPromises.get(key);
   if (pending) {
     return pending;
@@ -169,6 +252,31 @@ export async function getWallpaperThumbnailUrl(filePath: string): Promise<string
 
   const startGlobal = globalThumbEpoch;
   const startKey = keyEvictEpochs.get(key) ?? 0;
+
+  if (isVideoWallpaperPath(filePath)) {
+    const videoPromise = decodeQueue.add(async () => {
+      const assetUrl = convertFileSrc(filePath);
+      try {
+        const posterUrl = await captureVideoPosterBlobUrl(assetUrl);
+        if (isThumbWriteStale(key, startGlobal, startKey)) {
+          if (posterUrl.startsWith("blob:")) {
+            URL.revokeObjectURL(posterUrl);
+          }
+          return "";
+        }
+        if (posterUrl) {
+          rememberBlobUrl(thumbMemoryCache, key, posterUrl);
+        }
+        return posterUrl;
+      } catch {
+        return "";
+      } finally {
+        pendingThumbPromises.delete(key);
+      }
+    });
+    pendingThumbPromises.set(key, videoPromise);
+    return videoPromise;
+  }
 
   const promise = decodeQueue.add(async () => {
     const assetUrl = convertFileSrc(filePath);
@@ -223,7 +331,7 @@ export async function getWallpaperViewportUrl(filePath: string): Promise<string>
   if (existing) {
     return existing;
   }
-  if (isGifWallpaperPath(filePath)) {
+  if (isGifWallpaperPath(filePath) || isVideoWallpaperPath(filePath)) {
     const assetUrl = convertFileSrc(filePath);
     rememberBlobUrl(viewportMemoryCache, key, assetUrl, MAX_VIEWPORT_CACHE_ENTRIES);
     return assetUrl;

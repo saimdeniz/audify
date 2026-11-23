@@ -16,6 +16,7 @@ import {
   getWallpaperThumbnailUrl,
   getWallpaperViewportUrl,
 } from "../../utils/thumbnailCache";
+import { evictBlurredWallpaperCache } from "../../utils/wallpaperBlurCache";
 import { releaseBackdropTransitionCaches } from "../../utils/wallpaperCleanup";
 import {
   ASCII_MAGIC_FIT_STORAGE_KEY,
@@ -103,6 +104,7 @@ export function createBackdropWallpaperActions(
       try {
         await invoke("delete_custom_background", { filePath });
         evictThumbnailCache(filePath);
+        evictBlurredWallpaperCache(filePath);
         evictAutoAccentCache(filePath);
         if (get().customBgImage === filePath) {
           get().setCustomBgImage("");
@@ -120,11 +122,20 @@ export function createBackdropWallpaperActions(
         const selected = await open({
           multiple: true,
           directory: false,
-          title: "Select Custom Wallpaper Image(s)",
+          title: "Select Custom Wallpaper Image(s) or Loop Video(s)",
           filters: [
             {
-              name: "Images",
-              extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"],
+              name: "Images & Loop Videos",
+              extensions: [
+                "png",
+                "jpg",
+                "jpeg",
+                "webp",
+                "gif",
+                "bmp",
+                "mp4",
+                "webm",
+              ],
             },
           ],
         });

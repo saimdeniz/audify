@@ -1,4 +1,4 @@
-import React, { Suspense, useEffect } from "react";
+import React, { Suspense, useEffect, useState } from "react";
 import { AppAtmosphereViewport } from "./components/AppAtmosphereViewport";
 import { CreditToastBanner, StatusNoticeToast } from "./components/AppToasts";
 import { AudioEngine } from "./components/AudioEngine";
@@ -32,6 +32,11 @@ const FileOpsModals = React.lazy(() =>
 const BatchRenameModal = React.lazy(() =>
   import("./components/modals/BatchRenameModal").then((m) => ({
     default: m.BatchRenameModal,
+  }))
+);
+const ShortcutsCheatsheetModal = React.lazy(() =>
+  import("./components/modals/ShortcutsCheatsheetModal").then((m) => ({
+    default: m.ShortcutsCheatsheetModal,
   }))
 );
 
@@ -149,6 +154,18 @@ export const App: React.FC = () => {
   }, []);
 
   useAppGlobalShortcuts();
+  const [showShortcutsGuide, setShowShortcutsGuide] = useState(false);
+
+  useEffect(() => {
+    const onToggleGuide = () => setShowShortcutsGuide((prev) => !prev);
+    window.addEventListener("audify:toggle-shortcuts-cheatsheet", onToggleGuide);
+    return () => {
+      window.removeEventListener(
+        "audify:toggle-shortcuts-cheatsheet",
+        onToggleGuide
+      );
+    };
+  }, []);
 
   const isStandaloneSettings = isStandaloneSettingsWindow();
 
@@ -239,6 +256,13 @@ export const App: React.FC = () => {
       {hasBatchRenameModal && (
         <Suspense fallback={null}>
           <BatchRenameModal />
+        </Suspense>
+      )}
+      {showShortcutsGuide && (
+        <Suspense fallback={null}>
+          <ShortcutsCheatsheetModal
+            onClose={() => setShowShortcutsGuide(false)}
+          />
         </Suspense>
       )}
       <GlobalTooltip />

@@ -54,11 +54,13 @@ export const SampleContextMenu: React.FC<SampleContextMenuProps> = ({
   const selectedCollectionId = useSampleStore((s) => s.selectedCollectionId);
   const enableLicensesSystem = useSampleStore((s) => s.enableLicensesSystem);
   const enableAdvancedFileOps = useSampleStore((s) => s.enableAdvancedFileOps);
+  const binFilterActive = useSampleStore((s) => s.binFilterActive);
   const trashFilterActive = useSampleStore((s) => s.trashFilterActive);
   const libraries = useSampleStore((s) => s.libraries);
   const shortcuts = useSampleStore((s) => s.shortcuts);
 
   const addSamplesToBin = useSampleStore((s) => s.addSamplesToBin);
+  const removeSamplesFromBin = useSampleStore((s) => s.removeSamplesFromBin);
   const copyAttributionForSamples = useSampleStore(
     (s) => s.copyAttributionForSamples
   );
@@ -171,7 +173,7 @@ export const SampleContextMenu: React.FC<SampleContextMenuProps> = ({
           : activeContextSample.file_name}
       </div>
 
-      {/* Add to Session Bin */}
+      {/* Add to / Remove from Session Bin */}
       <MenuItem
         compactHeight
         tone="accent"
@@ -179,17 +181,27 @@ export const SampleContextMenu: React.FC<SampleContextMenuProps> = ({
         onClick={() => {
           const ids = contextMenu.targetIds;
           setContextMenu(null);
-          addSamplesToBin(ids);
+          if (binFilterActive) {
+            removeSamplesFromBin(ids);
+          } else {
+            addSamplesToBin(ids);
+          }
         }}
         icon={<Inbox className="w-3.5 h-3.5 text-accent-fg" />}
         label={
-          isMultiContext
+          binFilterActive
+            ? isMultiContext
+              ? `Remove ${contextMenu.targetIds.length} from Bin`
+              : "Remove from Bin"
+            : isMultiContext
             ? `Add ${contextMenu.targetIds.length} to Bin`
             : "Add to Bin"
         }
         rightSlot={
           <span className="font-mono text-[9.5px] text-fg-3 ml-1">
-            {formatShortcutDisplay(shortcuts.addToBin, { compact: true })}
+            {binFilterActive
+              ? "Del"
+              : formatShortcutDisplay(shortcuts.addToBin, { compact: true })}
           </span>
         }
       />

@@ -16,10 +16,16 @@ fn float_to_pcm_i16(raw: f32) -> i16 {
     (sanitize_audio_sample(raw) * 32767.0).round() as i16
 }
 
-/// Downmixes an interleaved multichannel frame (`ch >= 1`) into `out_channels` (`1` or `2`).
-/// For `ch > 2` (e.g. 5.1 6-channel or 10-channel field recordings), mixes front-left/even
-/// channels into `L` and front-right/odd channels into `R`, clamped safely to `[-1.0, 1.0]`.
-pub(super) fn push_frame_downmixed(frame: &[f32], out_channels: usize, dst: &mut Vec<i16>) {
+#[inline]
+fn float_to_pcm_i24(raw: f32) -> i32 {
+    (sanitize_audio_sample(raw) * 8_388_607.0)
+        .round()
+        .clamp(-8_388_608.0, 8_388_607.0) as i32
+}
+
+/// Downmixes an interleaved multichannel frame (`ch >= 1`) into `out_channels` (`1` or `2`)
+/// while preserving full 32-bit float dynamic range.
+pub(super) fn push_frame_downmixed_f32(frame: &[f32], out_channels: usize, dst: &mut Vec<f32>) {
     let ch = frame.len();
     if ch == 0 {
         return;
@@ -31,19 +37,19 @@ pub(super) fn push_frame_downmixed(frame: &[f32], out_channels: usize, dst: &mut
                 sum += v;
             }
         }
-        dst.push(float_to_pcm_i16(sum / (ch as f32)));
+        dst.push(sanitize_audio_sample(sum / (ch as f32)));
         return;
     }
 
     match ch {
         1 => {
-            let pcm = float_to_pcm_i16(frame[0]);
-            dst.push(pcm);
-            dst.push(pcm);
+            let s = sanitize_audio_sample(frame[0]);
+            dst.push(s);
+            dst.push(s);
         }
         2 => {
-            dst.push(float_to_pcm_i16(frame[0]));
-            dst.push(float_to_pcm_i16(frame[1]));
+            dst.push(sanitize_audio_sample(frame[0]));
+            dst.push(sanitize_audio_sample(frame[1]));
         }
         6 => {
             // Standard 5.1 layout: FL(0), FR(1), FC(2), LFE(3), BL/SL(4), BR/SR(5)
@@ -55,8 +61,8 @@ pub(super) fn push_frame_downmixed(frame: &[f32], out_channels: usize, dst: &mut
             let k = std::f32::consts::FRAC_1_SQRT_2;
             let left = (s0 + k * s2 + k * s4) * k;
             let right = (s1 + k * s2 + k * s5) * k;
-            dst.push(float_to_pcm_i16(left));
-            dst.push(float_to_pcm_i16(right));
+            dst.push(sanitize_audio_sample(left));
+            dst.push(sanitize_audio_sample(right));
         }
         _ => {
             // General multichannel (>2ch) field recording: even channels -> L, odd channels -> R
@@ -84,22 +90,35 @@ pub(super) fn push_frame_downmixed(frame: &[f32], out_channels: usize, dst: &mut
             } else {
                 1.0
             };
-            dst.push(float_to_pcm_i16(l_sum * l_scale));
-            dst.push(float_to_pcm_i16(r_sum * r_scale));
+            dst.push(sanitize_audio_sample(l_sum * l_scale));
+            dst.push(sanitize_audio_sample(r_sum * r_scale));
         }
     }
 }
 
-/// Applies Catmull-Rom / 4-point cubic Hermite varispeed resampling (`rate = 2^(semitones / 12)`)
-/// so pitched previews exported to NLEs remain standard `sample_rate` PCM WAV files.
-pub(super) fn resample_interleaved_varispeed(
-    samples: &[i16],
+/// Downmixes an interleaved multichannel frame (`ch >= 1`) into `out_channels` (`1` or `2`) as `i16`.
+pub(super) fn push_frame_downmixed(frame: &[f32], out_channels: usize, dst: &mut Vec<i16>) {
+    let mut tmp = Vec::with_capacity(out_channels);
+    push_frame_downmixed_f32(frame, out_channels, &mut tmp);
+    for s in tmp {
+        dst.push(float_to_pcm_i16(s));
+    }
+}
+
+/// Single-pass high-precision float32 resampler for combined varispeed pitch (`2^(st/12)`)
+/// and sample-rate conversion (`src_sr / dst_sr`).
+/// Uses Hann-windowed sinc anti-aliasing when `speed_ratio > 1.02` and 4-point cubic Hermite otherwise.
+pub(super) fn resample_interleaved_f32(
+    samples: &[f32],
     channels: usize,
-    semitones: f32,
+    speed_ratio: f64,
     max_total_samples: usize,
-) -> Vec<i16> {
-    let clamped_st = semitones.clamp(-24.0, 24.0);
-    if !clamped_st.is_finite() || clamped_st.abs() < 0.01 || channels == 0 {
+) -> Vec<f32> {
+    if !speed_ratio.is_finite()
+        || speed_ratio <= 0.0
+        || (speed_ratio - 1.0).abs() < 1e-5
+        || channels == 0
+    {
         return samples.to_vec();
     }
     let in_frames = samples.len() / channels;
@@ -107,45 +126,91 @@ pub(super) fn resample_interleaved_varispeed(
         return samples.to_vec();
     }
 
-    let rate = 2.0_f64.powf((clamped_st as f64) / 12.0);
     let max_out_frames = (max_total_samples / channels).max(1);
-    let out_frames = (((in_frames as f64) / rate).round() as usize)
+    let out_frames = (((in_frames as f64) / speed_ratio).round() as usize)
         .max(1)
         .min(max_out_frames);
 
     let mut out = Vec::with_capacity(out_frames * channels);
     let last_frame = (in_frames - 1) as isize;
+    let use_aa_sinc = speed_ratio > 1.02;
+    let aa_cutoff = (0.92 / speed_ratio).min(1.0);
+    let aa_radius = if use_aa_sinc {
+        ((2.5 * speed_ratio).ceil() as isize).clamp(4, 16)
+    } else {
+        0
+    };
 
     for out_f in 0..out_frames {
-        let src_pos = (out_f as f64) * rate;
+        let src_pos = (out_f as f64) * speed_ratio;
         let idx = src_pos.floor() as isize;
         let frac = (src_pos - (idx as f64)) as f32;
 
-        let f0 = (idx - 1).clamp(0, last_frame) as usize;
-        let f1 = idx.clamp(0, last_frame) as usize;
-        let f2 = (idx + 1).clamp(0, last_frame) as usize;
-        let f3 = (idx + 2).clamp(0, last_frame) as usize;
+        if use_aa_sinc {
+            let r_f64 = aa_radius as f64;
+            let mut ch_acc = [0.0_f64; 8];
+            let mut weight_sum = 0.0_f64;
+            let ch_capped = channels.min(8);
 
-        for ch in 0..channels {
-            let y0 = samples[f0 * channels + ch] as f32;
-            let y1 = samples[f1 * channels + ch] as f32;
-            let y2 = samples[f2 * channels + ch] as f32;
-            let y3 = samples[f3 * channels + ch] as f32;
+            for k in -aa_radius..=aa_radius {
+                let sample_idx = (idx + k).clamp(0, last_frame) as usize;
+                let dx = (idx + k) as f64 - src_pos;
+                if dx.abs() >= r_f64 {
+                    continue;
+                }
+                let x = std::f64::consts::PI * dx * aa_cutoff;
+                let sinc = if x.abs() < 1e-9 { 1.0 } else { x.sin() / x };
+                let win = 0.5 * (1.0 + (std::f64::consts::PI * dx / r_f64).cos());
+                let w = sinc * win;
+                weight_sum += w;
+                let base = sample_idx * channels;
+                for (c, slot) in ch_acc.iter_mut().enumerate().take(ch_capped) {
+                    *slot += (samples[base + c] as f64) * w;
+                }
+            }
+            let inv_w = if weight_sum.abs() > 1e-9 {
+                1.0 / weight_sum
+            } else {
+                1.0
+            };
+            for ch in 0..channels {
+                let val = if ch < ch_capped {
+                    (ch_acc[ch] * inv_w) as f32
+                } else {
+                    samples[(idx.clamp(0, last_frame) as usize) * channels + ch]
+                };
+                out.push(sanitize_audio_sample(val));
+            }
+        } else {
+            let f0 = (idx - 1).clamp(0, last_frame) as usize;
+            let f1 = idx.clamp(0, last_frame) as usize;
+            let f2 = (idx + 1).clamp(0, last_frame) as usize;
+            let f3 = (idx + 2).clamp(0, last_frame) as usize;
 
-            // 4-point, 3rd-order Hermite interpolation
-            let c0 = y1;
-            let c1 = 0.5 * (y2 - y0);
-            let c2 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;
-            let c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);
-            let val = ((c3 * frac + c2) * frac + c1) * frac + c0;
-            out.push(val.round().clamp(-32768.0, 32767.0) as i16);
+            for ch in 0..channels {
+                let y0 = samples[f0 * channels + ch];
+                let y1 = samples[f1 * channels + ch];
+                let y2 = samples[f2 * channels + ch];
+                let y3 = samples[f3 * channels + ch];
+
+                let c0 = y1;
+                let c1 = 0.5 * (y2 - y0);
+                let c2 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;
+                let c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);
+                let val = ((c3 * frac + c2) * frac + c1) * frac + c0;
+                out.push(sanitize_audio_sample(val));
+            }
         }
     }
     out
 }
 
 /// Applies a smooth `3ms` half-cosine anti-click fade-in and fade-out at slice boundaries.
-pub(super) fn apply_anti_click_micro_fade(samples: &mut [i16], sample_rate: u32, channels: usize) {
+pub(super) fn apply_anti_click_micro_fade_f32(
+    samples: &mut [f32],
+    sample_rate: u32,
+    channels: usize,
+) {
     if channels == 0 || sample_rate == 0 {
         return;
     }
@@ -164,32 +229,28 @@ pub(super) fn apply_anti_click_micro_fade(samples: &mut [i16], sample_rate: u32,
         let start_base = i * channels;
         let end_base = (total_frames - 1 - i) * channels;
         for ch in 0..channels {
-            samples[start_base + ch] = ((samples[start_base + ch] as f32) * gain)
-                .round()
-                .clamp(-32768.0, 32767.0) as i16;
-            samples[end_base + ch] = ((samples[end_base + ch] as f32) * gain)
-                .round()
-                .clamp(-32768.0, 32767.0) as i16;
+            samples[start_base + ch] = sanitize_audio_sample(samples[start_base + ch] * gain);
+            samples[end_base + ch] = sanitize_audio_sample(samples[end_base + ch] * gain);
         }
     }
 }
 
-pub fn write_wav_i16(
-    path: &Path,
+fn write_wav_header<W: Write>(
+    writer: &mut W,
     sample_rate: u32,
     channels: u16,
-    samples: &[i16],
+    bits_per_sample: u16,
+    sample_count: usize,
 ) -> io::Result<()> {
-    if sample_rate == 0 || channels == 0 {
+    if sample_rate == 0 || channels == 0 || (bits_per_sample != 16 && bits_per_sample != 24) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "Invalid WAV header parameters (sample_rate and channels must be > 0)",
+            "Invalid WAV header parameters",
         ));
     }
-
-    let data_bytes_usize = samples
-        .len()
-        .checked_mul(2)
+    let bytes_per_sample = (bits_per_sample / 8) as usize;
+    let data_bytes_usize = sample_count
+        .checked_mul(bytes_per_sample)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "WAV byte length overflow"))?;
     let data_bytes = u32::try_from(data_bytes_usize).map_err(|_| {
         io::Error::new(
@@ -201,10 +262,6 @@ pub fn write_wav_i16(
         .checked_add(data_bytes)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "WAV RIFF size overflow"))?;
 
-    let file = File::create(path)?;
-    let mut writer = BufWriter::new(file);
-
-    let bits_per_sample: u16 = 16;
     let block_align = channels
         .checked_mul(bits_per_sample / 8)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "WAV block_align overflow"))?;
@@ -218,7 +275,7 @@ pub fn write_wav_i16(
 
     writer.write_all(b"fmt ")?;
     writer.write_all(&16u32.to_le_bytes())?;
-    writer.write_all(&1u16.to_le_bytes())?;
+    writer.write_all(&1u16.to_le_bytes())?; // PCM
     writer.write_all(&channels.to_le_bytes())?;
     writer.write_all(&sample_rate.to_le_bytes())?;
     writer.write_all(&byte_rate.to_le_bytes())?;
@@ -227,6 +284,58 @@ pub fn write_wav_i16(
 
     writer.write_all(b"data")?;
     writer.write_all(&data_bytes.to_le_bytes())?;
+    Ok(())
+}
+
+pub fn write_wav_pcm_f32(
+    path: &Path,
+    sample_rate: u32,
+    channels: u16,
+    bits_per_sample: u16,
+    samples: &[f32],
+) -> io::Result<()> {
+    let file = File::create(path)?;
+    let mut writer = BufWriter::new(file);
+    write_wav_header(&mut writer, sample_rate, channels, bits_per_sample, samples.len())?;
+
+    if bits_per_sample == 24 {
+        let mut chunk_buf = [0u8; 9216]; // divisible by 3
+        for sample_chunk in samples.chunks(chunk_buf.len() / 3) {
+            let byte_len = sample_chunk.len() * 3;
+            for (idx, &s) in sample_chunk.iter().enumerate() {
+                let le = float_to_pcm_i24(s).to_le_bytes();
+                chunk_buf[idx * 3] = le[0];
+                chunk_buf[idx * 3 + 1] = le[1];
+                chunk_buf[idx * 3 + 2] = le[2];
+            }
+            writer.write_all(&chunk_buf[..byte_len])?;
+        }
+    } else {
+        let mut chunk_buf = [0u8; 8192];
+        for sample_chunk in samples.chunks(chunk_buf.len() / 2) {
+            let byte_len = sample_chunk.len() * 2;
+            for (idx, &s) in sample_chunk.iter().enumerate() {
+                let le = float_to_pcm_i16(s).to_le_bytes();
+                chunk_buf[idx * 2] = le[0];
+                chunk_buf[idx * 2 + 1] = le[1];
+            }
+            writer.write_all(&chunk_buf[..byte_len])?;
+        }
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+pub fn write_wav_i16(
+    path: &Path,
+    sample_rate: u32,
+    channels: u16,
+    samples: &[i16],
+) -> io::Result<()> {
+    let file = File::create(path)?;
+    let mut writer = BufWriter::new(file);
+    write_wav_header(&mut writer, sample_rate, channels, 16, samples.len())?;
 
     let mut chunk_buf = [0u8; 8192];
     for sample_chunk in samples.chunks(chunk_buf.len() / 2) {

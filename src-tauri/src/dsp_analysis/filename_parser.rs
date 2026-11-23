@@ -106,7 +106,7 @@ pub fn normalize_musical_or_camelot_key(raw: &str) -> Option<(String, String)> {
         (1, s)
     } else if let Some(s) = rest_raw.strip_prefix('♯') {
         (1, s)
-    } else if let Some(s) = rest_raw.strip_prefix('b') {
+    } else if let Some(s) = rest_raw.strip_prefix('b').or_else(|| rest_raw.strip_prefix('B')) {
         (-1, s)
     } else if let Some(s) = rest_raw.strip_prefix('♭') {
         (-1, s)
@@ -209,7 +209,7 @@ pub fn detect_key_from_filename(file_name: &str, has_bpm_in_name: bool) -> Optio
         let lower = tok.to_ascii_lowercase();
 
         if let Some(rest) = lower.strip_prefix("key") {
-            if rest.len() >= 2 {
+            if !rest.is_empty() {
                 if let Some(res) = normalize_musical_or_camelot_key(rest) {
                     return Some(res);
                 }
@@ -221,9 +221,14 @@ pub fn detect_key_from_filename(file_name: &str, has_bpm_in_name: bool) -> Optio
             || lower.ends_with("major")
             || lower.ends_with("min")
             || lower.ends_with("minor");
-        let has_accidental_minor = (tok.contains('#')
-            || (tok.len() == 3 && tok.as_bytes()[1] == b'b' && tok.as_bytes()[2] == b'm'))
-            && tok.as_bytes()[0].is_ascii_uppercase();
+        let bytes = tok.as_bytes();
+        let has_accidental_minor = !bytes.is_empty()
+            && bytes[0].is_ascii_uppercase()
+            && (tok.contains('#')
+                || (bytes.len() == 3
+                    && bytes[1].eq_ignore_ascii_case(&b'b')
+                    && bytes[2].eq_ignore_ascii_case(&b'm')
+                    && (bytes[1] == b'b' || bytes[2] == b'M')));
 
         if has_explicit_mode || has_accidental_minor {
             if let Some(res) = normalize_musical_or_camelot_key(tok) {
@@ -232,17 +237,22 @@ pub fn detect_key_from_filename(file_name: &str, has_bpm_in_name: bool) -> Optio
         }
 
         if prev_is_key_label || has_bpm_in_name {
-            // Require canonical capitalization for short 2-char minor keys like `Am`, `Cm`, `Fm`
-            // so words like `am` or `in` in titles are never misread unless `key` precedes them.
-            let bytes = tok.as_bytes();
-            let looks_like_short_minor =
-                bytes.len() == 2 && bytes[0].is_ascii_uppercase() && bytes[1] == b'm';
+            // Accept canonical `Am`, uppercase `AM` (when paired with BPM), flat majors `Db`/`Eb`/`Bb`, or Camelot `8A`
+            let looks_like_short_minor = bytes.len() == 2
+                && bytes[0].is_ascii_uppercase()
+                && bytes[1].eq_ignore_ascii_case(&b'm');
+            let looks_like_flat_major =
+                bytes.len() == 2 && bytes[0].is_ascii_uppercase() && bytes[1] == b'b';
             let looks_like_camelot = bytes.len() >= 2
                 && bytes.len() <= 3
                 && matches!(bytes[bytes.len() - 1], b'A' | b'B')
                 && bytes[..bytes.len() - 1].iter().all(|b| b.is_ascii_digit());
 
-            if prev_is_key_label || looks_like_short_minor || looks_like_camelot {
+            if prev_is_key_label
+                || looks_like_short_minor
+                || looks_like_flat_major
+                || looks_like_camelot
+            {
                 if let Some(res) = normalize_musical_or_camelot_key(tok) {
                     return Some(res);
                 }

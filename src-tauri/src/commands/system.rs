@@ -1,12 +1,12 @@
-use crate::audio::fnv1a_hex8;
 use crate::db::AppState;
 use crate::security::{
-    detect_image_magic, ensure_inside, has_ntfs_ads_colon, is_dos_device_name,
-    is_unc_or_network_path, open_directory_in_shell, read_bounded_bytes,
+    detect_image_magic, detect_wallpaper_media_magic, ensure_inside, has_ntfs_ads_colon,
+    is_dos_device_name, is_unc_or_network_path, open_bounded_file, open_directory_in_shell,
     reveal_file_in_explorer, sanitize_err, validate_path_in_libraries_or_cache,
-    MAX_CUSTOM_BG_BYTES,
+    ALLOWED_BG_MEDIA_EXTS, ALLOWED_BG_VIDEO_EXTS, MAX_CUSTOM_BG_BYTES, MAX_CUSTOM_BG_VIDEO_BYTES,
 };
-use std::fs;
+use std::fs::{self, File};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use tauri::State;
 
@@ -39,7 +39,83 @@ pub fn open_data_folder(state: State<'_, AppState>) -> Result<(), String> {
 
 const MAX_BG_SCAN_DEPTH: usize = 4;
 const MAX_BG_SCAN_ITEMS: usize = 1000;
-const ALLOWED_BG_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp"];
+
+fn files_identical_streaming(src: &mut File, existing_path: &Path) -> bool {
+    let Ok(mut existing) = File::open(existing_path) else {
+        return false;
+    };
+    if src.seek(SeekFrom::Start(0)).is_err() {
+        return false;
+    }
+    let mut buf_a = [0u8; 64 * 1024];
+    let mut buf_b = [0u8; 64 * 1024];
+    loop {
+        let Ok(na) = src.read(&mut buf_a) else {
+            return false;
+        };
+        let Ok(nb) = existing.read(&mut buf_b) else {
+            return false;
+        };
+        if na != nb || buf_a[..na] != buf_b[..nb] {
+            return false;
+        }
+        if na == 0 {
+            return true;
+        }
+    }
+}
+
+fn stream_fnv1a_hex8(file: &mut File, max_bytes: u64) -> Result<String, String> {
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| format!("Failed seeking wallpaper file: {}", e))?;
+    let mut hash: u32 = 0x811c9dc5;
+    let mut buf = [0u8; 64 * 1024];
+    let mut total: u64 = 0;
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("Failed reading wallpaper file: {}", e))?;
+        if n == 0 {
+            break;
+        }
+        total = total.saturating_add(n as u64);
+        if total > max_bytes {
+            return Err(format!("File exceeds maximum allowed size ({} bytes limit)", max_bytes));
+        }
+        for &b in &buf[..n] {
+            hash ^= b as u32;
+            hash = hash.wrapping_mul(0x01000193);
+        }
+    }
+    Ok(format!("{:08x}", hash))
+}
+
+fn copy_bounded_streaming(src: &mut File, dest: &Path, max_bytes: u64) -> Result<(), String> {
+    src.seek(SeekFrom::Start(0))
+        .map_err(|e| format!("Failed seeking wallpaper file: {}", e))?;
+    let mut out = File::create(dest).map_err(|e| format!("Failed to copy media: {}", e))?;
+    let mut buf = [0u8; 64 * 1024];
+    let mut total: u64 = 0;
+    loop {
+        let n = src
+            .read(&mut buf)
+            .map_err(|e| format!("Failed reading wallpaper file: {}", e))?;
+        if n == 0 {
+            break;
+        }
+        total = total.saturating_add(n as u64);
+        if total > max_bytes {
+            drop(out);
+            let _ = fs::remove_file(dest);
+            return Err(format!("File exceeds maximum allowed size ({} bytes limit)", max_bytes));
+        }
+        out.write_all(&buf[..n])
+            .map_err(|e| format!("Failed writing wallpaper file: {}", e))?;
+    }
+    out.flush()
+        .map_err(|e| format!("Failed flushing wallpaper file: {}", e))?;
+    Ok(())
+}
 
 fn collect_backgrounds_recursive(
     images_root: &Path,
@@ -77,7 +153,7 @@ fn collect_backgrounds_recursive(
             let is_valid = safe_path
                 .extension()
                 .and_then(|s| s.to_str())
-                .map(|ext| ALLOWED_BG_EXTS.contains(&ext.to_ascii_lowercase().as_str()))
+                .map(|ext| ALLOWED_BG_MEDIA_EXTS.contains(&ext.to_ascii_lowercase().as_str()))
                 .unwrap_or(false);
             if is_valid {
                 out.push(safe_path.to_string_lossy().replace('\\', "/"));
@@ -119,7 +195,7 @@ pub(crate) fn import_custom_background_to_dir(
     if raw_file_name.contains(':')
         || raw_file_name.contains('/')
         || raw_file_name.contains('\\')
-        || raw_file_name.contains("..")
+        || raw_file_name == ".."
         || raw_file_name.chars().any(|c| c.is_control())
     {
         return Err("Invalid characters in image file name".to_string());
@@ -134,21 +210,46 @@ pub(crate) fn import_custom_background_to_dir(
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
 
-    if !["jpg", "jpeg", "png", "webp", "gif", "bmp"].contains(&ext_lower.as_str()) {
+    if !ALLOWED_BG_MEDIA_EXTS.contains(&ext_lower.as_str()) {
         return Err(
-            "Only image files (jpg, png, webp, gif, bmp) can be used as background".to_string(),
+            "Only image or loop video files (jpg, png, webp, gif, bmp, mp4, webm) can be used as background"
+                .to_string(),
         );
     }
 
-    let bytes = read_bounded_bytes(src, MAX_CUSTOM_BG_BYTES)
-        .map_err(|e| sanitize_err(user_dir, &e))?;
-    let _magic_kind = detect_image_magic(&bytes).ok_or_else(|| {
-        "File is not a valid image (PNG/JPEG/WEBP/GIF/BMP magic header mismatch)".to_string()
-    })?;
+    let is_video = ALLOWED_BG_VIDEO_EXTS.contains(&ext_lower.as_str());
+    let max_bytes = if is_video {
+        MAX_CUSTOM_BG_VIDEO_BYTES
+    } else {
+        MAX_CUSTOM_BG_BYTES
+    };
+    let (mut src_file, file_len) =
+        open_bounded_file(src, max_bytes).map_err(|e| sanitize_err(user_dir, &e))?;
+
+    let mut header = [0u8; 64];
+    let header_len = src_file
+        .read(&mut header)
+        .map_err(|e| sanitize_err(user_dir, &e.to_string()))?;
+    let header_slice = &header[..header_len];
+
+    if is_video {
+        let detected = detect_wallpaper_media_magic(header_slice);
+        if detected != Some(ext_lower.as_str()) {
+            return Err(
+                "File is not a valid MP4 or WebM video (container header mismatch)".to_string(),
+            );
+        }
+    } else if detect_image_magic(header_slice).is_none() {
+        return Err(
+            "File is not a valid image (PNG/JPEG/WEBP/GIF/BMP magic header mismatch)".to_string(),
+        );
+    }
 
     let images_dir = user_dir.join("images");
     let target_dir = if ext_lower == "gif" {
         images_dir.join("gifs")
+    } else if is_video {
+        images_dir.join("videos")
     } else {
         images_dir.clone()
     };
@@ -191,16 +292,15 @@ pub(crate) fn import_custom_background_to_dir(
         let safe_dest = ensure_inside(&safe_target_dir, &dest)
             .map_err(|e| sanitize_err(user_dir, &e))?;
         let same_content = sym.is_file()
-            && sym.len() == bytes.len() as u64
-            && fs::read(&safe_dest)
-                .map(|existing| existing == bytes)
-                .unwrap_or(false);
+            && sym.len() == file_len
+            && files_identical_streaming(&mut src_file, &safe_dest);
 
         if same_content {
             return Ok(safe_dest.to_string_lossy().replace('\\', "/"));
         }
 
-        let hash8 = fnv1a_hex8(&[&bytes]);
+        let hash8 = stream_fnv1a_hex8(&mut src_file, max_bytes)
+            .map_err(|e| sanitize_err(user_dir, &e))?;
         dest = safe_target_dir.join(format!("{}_{}.{}", final_stem, hash8, ext_lower));
         if let Ok(sym2) = fs::symlink_metadata(&dest) {
             if sym2.file_type().is_symlink() || sym2.is_dir() {
@@ -209,8 +309,8 @@ pub(crate) fn import_custom_background_to_dir(
         }
     }
 
-    fs::write(&dest, &bytes)
-        .map_err(|e| format!("Failed to copy image: {}", sanitize_err(user_dir, &e.to_string())))?;
+    copy_bounded_streaming(&mut src_file, &dest, max_bytes)
+        .map_err(|e| sanitize_err(user_dir, &e))?;
     Ok(dest.to_string_lossy().replace('\\', "/"))
 }
 
@@ -299,6 +399,51 @@ mod tests {
         assert!(list.iter().any(|p| p.ends_with("/images/root_bg.png")));
         assert!(list.iter().any(|p| p.ends_with("/images/nature/night/forest.webp")));
         assert!(list.iter().any(|p| p.ends_with("/images/gifs/spark.gif")));
+
+        let _ = fs::remove_dir_all(&user_dir);
+    }
+
+    #[test]
+    fn imports_and_routes_mp4_webm_videos_and_rejects_mismatched_magic() {
+        let user_dir = make_temp_user_dir("bg_videos");
+
+        let mp4_src = user_dir.join("neon_loop.mp4");
+        fs::write(&mp4_src, b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2").unwrap();
+        let imported_mp4 =
+            import_custom_background_to_dir(&user_dir, mp4_src.to_str().unwrap()).unwrap();
+        assert!(
+            imported_mp4.ends_with("/images/videos/neon_loop.mp4"),
+            "got: {imported_mp4}"
+        );
+
+        // Re-importing identical content deduplicates to the same path
+        let imported_mp4_again =
+            import_custom_background_to_dir(&user_dir, mp4_src.to_str().unwrap()).unwrap();
+        assert_eq!(imported_mp4_again, imported_mp4);
+
+        let webm_src = user_dir.join("rain.webm");
+        fs::write(
+            &webm_src,
+            b"\x1A\x45\xDF\xA3\x9F\x42\x86\x81\x01\x42\x82\x84webm\x42\x87\x81\x02",
+        )
+        .unwrap();
+        let imported_webm =
+            import_custom_background_to_dir(&user_dir, webm_src.to_str().unwrap()).unwrap();
+        assert!(
+            imported_webm.ends_with("/images/videos/rain.webm"),
+            "got: {imported_webm}"
+        );
+
+        // Disguised PNG renamed to .mp4 must be rejected
+        let fake_mp4 = user_dir.join("fake.mp4");
+        fs::write(&fake_mp4, b"\x89PNG\r\n\x1a\nnot_an_mp4").unwrap();
+        assert!(import_custom_background_to_dir(&user_dir, fake_mp4.to_str().unwrap()).is_err());
+
+        // Scan includes both videos
+        let list = get_custom_backgrounds_from_dir(&user_dir).unwrap();
+        assert_eq!(list.len(), 2, "got list: {:?}", list);
+        assert!(list.iter().any(|p| p.ends_with("/images/videos/neon_loop.mp4")));
+        assert!(list.iter().any(|p| p.ends_with("/images/videos/rain.webm")));
 
         let _ = fs::remove_dir_all(&user_dir);
     }

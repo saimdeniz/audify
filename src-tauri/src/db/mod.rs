@@ -142,8 +142,10 @@ pub fn open_read_conn(user_dir: &Path) -> Result<Connection, String> {
             crate::security::sanitize_err(user_dir, &e.to_string())
         )
     })?;
+    let _ = conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true);
     conn.execute_batch(
         "PRAGMA query_only = ON;
+         PRAGMA trusted_schema = OFF;
          PRAGMA temp_store = MEMORY;
          PRAGMA mmap_size = 67108864;
          PRAGMA cache_size = -6000;",

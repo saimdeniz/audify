@@ -3,6 +3,7 @@ pub mod app_cache_helpers;
 pub mod app_helpers;
 pub mod ascii_magic;
 pub mod audio;
+pub mod audio_engine;
 pub mod commands;
 pub mod db;
 pub mod dsp_analysis;
@@ -12,6 +13,7 @@ pub mod scanner;
 pub mod security;
 #[cfg(target_os = "windows")]
 pub mod win_drag;
+pub mod win_edge_peek;
 
 pub use app_helpers::{prune_audio_cache_dirs, reconcile_library_asset_scopes};
 use app_helpers::{
@@ -69,13 +71,17 @@ pub fn run() {
     tauri::Builder::default()
         .manage(state)
         .manage(ai_tagger::AiTaggerState::default())
+        .manage(audio_engine::AudioEngineState::default())
         .manage(library_watcher::LibraryWatcherState::default())
+        .manage(win_edge_peek::EdgePeekState::default())
         .register_uri_scheme_protocol("ascii-sandbox", move |_ctx, request| {
             ascii_magic::sandbox_protocol::handle_sandbox_request(&sandbox_user_dir, request)
         })
         .setup(|app| {
             use tauri::Manager;
             let state = app.state::<AppState>();
+            app.state::<audio_engine::AudioEngineState>()
+                .start(app.handle().clone());
             app.state::<library_watcher::LibraryWatcherState>()
                 .start(app.handle().clone());
             {
@@ -130,6 +136,13 @@ pub fn run() {
                     window.label(),
                     *focused,
                 );
+                if window.label() == "main" && *focused {
+                    if let Some(edge_state) =
+                        window.app_handle().try_state::<win_edge_peek::EdgePeekState>()
+                    {
+                        edge_state.notify_main_focused();
+                    }
+                }
                 return;
             }
             if window.label() == "main" {
@@ -137,6 +150,13 @@ pub fn run() {
                     event,
                     tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
                 ) {
+                    if let Some(edge_state) =
+                        window.app_handle().try_state::<win_edge_peek::EdgePeekState>()
+                    {
+                        if let Some(main_win) = window.app_handle().get_webview_window("main") {
+                            edge_state.disable_for_window(window.app_handle(), &main_win);
+                        }
+                    }
                     if let Some(settings_win) = window.app_handle().get_webview_window("settings") {
                         let _ = settings_win.destroy();
                     }
@@ -253,6 +273,17 @@ pub fn run() {
             commands::list_trashed_slices,
             commands::empty_trashed_slices,
             commands::get_audio_preview_gain,
+            commands::audio_engine_load,
+            commands::audio_engine_play,
+            commands::audio_engine_pause,
+            commands::audio_engine_stop,
+            commands::audio_engine_unload,
+            commands::audio_engine_seek,
+            commands::audio_engine_set_params,
+            commands::audio_engine_list_devices,
+            commands::audio_engine_set_device,
+            commands::audio_engine_release_handle,
+            commands::audio_engine_get_state,
             commands::open_slices_folder,
             commands::transcode_to_pcm_cache,
             commands::show_in_folder,
@@ -284,7 +315,21 @@ pub fn run() {
             commands::resolve_ai_tag_suggestion,
             commands::approve_all_ai_tag_suggestions,
             commands::dismiss_all_ai_tag_suggestions,
+            win_edge_peek::mini_dock_set_edge_peek,
+            win_edge_peek::mini_dock_edge_peek_set_hold,
+            win_edge_peek::mini_dock_edge_peek_set_theme,
         ])
-        .run(tauri::generate_context!())
-        .expect("Failed to setup app");
+        .build(tauri::generate_context!())
+        .expect("Failed to setup app")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                if let Some(state) = app_handle.try_state::<AppState>() {
+                    let conn = state.lock_db();
+                    let _ = conn.execute_batch(
+                        "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA optimize;",
+                    );
+                }
+            }
+        });
 }

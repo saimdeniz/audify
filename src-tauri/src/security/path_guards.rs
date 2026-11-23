@@ -224,13 +224,26 @@ pub fn is_forbidden_os_or_root_path(raw: &str) -> bool {
     is_forbidden_os_or_root_normalized(&normalize_clean_path(raw))
 }
 
-fn reject_if_symlink(path: &Path) -> Result<(), String> {
-    if let Ok(sym) = fs::symlink_metadata(path) {
-        if sym.file_type().is_symlink() {
-            return Err("Symbolic links and junctions are not allowed".to_string());
+/// Rejects symlinks/junctions on `path` AND on every existing non-root ancestor
+/// BEFORE `fs::canonicalize` runs, blocking SMB Net-NTLMv2 leaks via intermediate junctions.
+pub(crate) fn reject_symlink_ancestors(path: &Path) -> Result<(), String> {
+    let mut cur = Some(path);
+    while let Some(p) = cur {
+        if p.as_os_str().is_empty() || p.parent().is_none() {
+            break;
         }
+        if let Ok(sym) = fs::symlink_metadata(p) {
+            if sym.file_type().is_symlink() {
+                return Err("Symbolic links and junctions are not allowed".to_string());
+            }
+        }
+        cur = p.parent();
     }
     Ok(())
+}
+
+fn reject_if_symlink(path: &Path) -> Result<(), String> {
+    reject_symlink_ancestors(path)
 }
 
 /// Validates that `p` is a safe, existing local audio library or export directory:
@@ -269,6 +282,7 @@ pub fn is_safe_library_dir(p: &str) -> Result<PathBuf, String> {
     if sym.file_type().is_symlink() {
         return Err("Symbolic links and junctions are not allowed as a library directory".to_string());
     }
+    reject_symlink_ancestors(raw_path)?;
 
     let canon = fs::canonicalize(raw_path).map_err(|_| {
         format!(

@@ -11,9 +11,12 @@ import {
   shouldBlurSearchInputOnPointerDown,
 } from "../utils/shortcuts";
 import {
+  handleF2RenameShortcut,
+  handleMarkSliceInOutShortcut,
   handleSliceModeKeyDown,
   handleSliceTextEntryUtility,
   handleSliceUndoRedoShortcut,
+  handleToggleFavoriteShortcut,
 } from "./sliceShortcutsHelper";
 
 type AppStoreState = ReturnType<typeof useSampleStore.getState>;
@@ -159,67 +162,6 @@ function handleUndoRedoShortcut(
   return false;
 }
 
-function handleF2RenameShortcut(e: KeyboardEvent, state: AppStoreState): boolean {
-  if (
-    e.key !== "F2" ||
-    e.ctrlKey ||
-    e.metaKey ||
-    e.altKey ||
-    e.shiftKey
-  ) {
-    return false;
-  }
-  e.preventDefault();
-  if (e.repeat) return true;
-  if (state.trashFilterActive) {
-    state.setStatusMessage("Restore file from Trash before renaming");
-    return true;
-  }
-  if (!state.enableAdvancedFileOps) {
-    state.setStatusMessage(
-      "F2 Rename is disabled in Safe Read-Only Mode (Enable in Settings > Advanced)"
-    );
-    return true;
-  }
-  if (state.selectedSampleIds.length > 1) {
-    state.openBatchRenameModal(state.selectedSampleIds);
-    return true;
-  }
-  const { selectedSample } = state;
-  if (selectedSample) {
-    const lib = state.libraries.find((l) => l.id === selectedSample.library_id);
-    if (lib?.is_read_only) {
-      state.setStatusMessage(
-        `Library "${lib.name}" is locked as a Protected Read-Only Vault`
-      );
-      return true;
-    }
-    state.openBatchRenameModal([selectedSample.id]);
-  }
-  return true;
-}
-
-function handleToggleFavoriteShortcut(state: AppStoreState): void {
-  const { selectedSampleIds, selectedSample, samples } = state;
-  if (selectedSampleIds.length > 1) {
-    const idSet = new Set(selectedSampleIds);
-    let hasAny = false;
-    let allFav = true;
-    for (let i = 0; i < samples.length; i++) {
-      if (idSet.has(samples[i].id)) {
-        hasAny = true;
-        if (!samples[i].is_favorite) {
-          allFav = false;
-          break;
-        }
-      }
-    }
-    void state.toggleFavoritesBatch(selectedSampleIds, !(hasAny && allFav));
-  } else if (selectedSample) {
-    void state.toggleFavorite(selectedSample.id);
-  }
-}
-
 function handleCollectionOrTrashDelete(
   e: KeyboardEvent,
   state: AppStoreState
@@ -245,6 +187,16 @@ function handleCollectionOrTrashDelete(
       : matchesShortcut(e, removeKey));
 
   if (selectedCollectionId !== null && matchedRemoveFromCollection) {
+    const activeCol = state.collections.find((c) => c.id === selectedCollectionId);
+    if (activeCol?.smart_query?.trim()) {
+      e.preventDefault();
+      if (!e.repeat) {
+        state.setStatusMessage(
+          "Smart Collections are dynamic — switch to All Samples to trash files"
+        );
+      }
+      return true;
+    }
     const idsToRemove =
       selectedSampleIds.length > 0
         ? selectedSampleIds
@@ -258,6 +210,29 @@ function handleCollectionOrTrashDelete(
           selectedCollectionId,
           idsToRemove
         );
+      }
+    }
+    return true;
+  }
+
+  if (
+    state.binFilterActive &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey &&
+    !e.shiftKey &&
+    (e.key === "Delete" || e.key === "Backspace")
+  ) {
+    const idsToRemove =
+      selectedSampleIds.length > 0
+        ? selectedSampleIds
+        : selectedSample
+        ? [selectedSample.id]
+        : [];
+    if (idsToRemove.length > 0) {
+      e.preventDefault();
+      if (!e.repeat) {
+        state.removeSamplesFromBin(idsToRemove);
       }
     }
     return true;
@@ -308,7 +283,15 @@ export function useAppGlobalShortcuts(): void {
         return;
       }
 
-      if ((e.ctrlKey || e.metaKey) && e.key === ",") {
+      const target = e.target as HTMLElement | null;
+      const isRecordingShortcut = target?.dataset?.shortcutRecorder === "true";
+      const hasBlockingModal =
+        isRecordingShortcut ||
+        state.batchRenameSampleIds !== null ||
+        state.batchRenameSliceIds !== null ||
+        document.querySelector('[data-modal-portal="true"]') !== null;
+
+      if (!hasBlockingModal && (e.ctrlKey || e.metaKey) && e.key === ",") {
         e.preventDefault();
         if (state.isMiniDock) {
           void state.toggleMiniDock().then(() => {
@@ -320,14 +303,12 @@ export function useAppGlobalShortcuts(): void {
         return;
       }
 
-      const target = e.target as HTMLElement | null;
-      const isRecordingShortcut = target?.dataset?.shortcutRecorder === "true";
       const miniDockKey = state.shortcuts.toggleMiniDock ?? "Ctrl+M";
 
       // Allow modifier-chord toggleMiniDock (e.g. Ctrl+M) even when search input is focused
       if (
         !state.isSettingsOpen &&
-        !isRecordingShortcut &&
+        !hasBlockingModal &&
         miniDockKey &&
         isSafeGlobalShortcutInTextEntry(e, miniDockKey)
       ) {
@@ -336,12 +317,7 @@ export function useAppGlobalShortcuts(): void {
         return;
       }
 
-      if (
-        isRecordingShortcut ||
-        state.batchRenameSampleIds !== null ||
-        state.batchRenameSliceIds !== null ||
-        document.querySelector('[data-modal-portal="true"]') !== null
-      ) return;
+      if (hasBlockingModal) return;
       if (!state.isSettingsOpen && handleHardwareMediaKey(e, state)) return;
       if (isTextEntryTarget(target)) {
         if (!state.isSettingsOpen) {
@@ -354,6 +330,20 @@ export function useAppGlobalShortcuts(): void {
         return;
       }
       if (state.isSettingsOpen) return;
+
+      if (
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        (e.key === "F1" || e.key === "?")
+      ) {
+        e.preventDefault();
+        if (!e.repeat) {
+          window.dispatchEvent(new CustomEvent("audify:toggle-shortcuts-cheatsheet"));
+        }
+        return;
+      }
+
       if (handleSliceUndoRedoShortcut(e, state) || handleUndoRedoShortcut(e, state)) return;
 
       if (miniDockKey && matchesShortcut(e, miniDockKey)) {
@@ -466,6 +456,9 @@ export function useAppGlobalShortcuts(): void {
       if (handleFileUtilityShortcuts(e, state, false)) {
         return;
       }
+      if (handleMarkSliceInOutShortcut(e, state)) {
+        return;
+      }
       if (matchesShortcut(e, shortcuts.clearSlice)) {
         if (sliceRange !== null) {
           e.preventDefault();
@@ -519,7 +512,7 @@ export function useAppGlobalShortcuts(): void {
       }
 
       if (/^[1-9]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        if (state.slicesFilterActive) return;
+        if (state.slicesFilterActive || state.trashFilterActive) return;
         const idx = parseInt(e.key, 10) - 1;
         if (tags[idx]) {
           e.preventDefault();

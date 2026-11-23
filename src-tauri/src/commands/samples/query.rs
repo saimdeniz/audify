@@ -102,9 +102,9 @@ pub(crate) fn query_samples_with_conn_ext(
     let mut where_clauses: Vec<String> = Vec::new();
 
     if want_trashed {
-        where_clauses.push("COALESCE(s.is_trashed, 0) = 1".to_string());
+        where_clauses.push("s.is_trashed = 1".to_string());
     } else {
-        where_clauses.push("COALESCE(s.is_trashed, 0) = 0".to_string());
+        where_clauses.push("s.is_trashed = 0".to_string());
     }
 
     let fts_match = search_query
@@ -265,6 +265,8 @@ pub(crate) fn query_samples_with_conn_ext(
         if let Some(lim) = limit {
             params_vec.push(rusqlite::types::Value::Integer(lim));
             sql.push_str(&format!(" LIMIT ?{}", params_vec.len()));
+        } else if offset.is_some() {
+            sql.push_str(" LIMIT -1");
         }
         if let Some(off) = offset {
             params_vec.push(rusqlite::types::Value::Integer(off));

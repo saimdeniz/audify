@@ -3,6 +3,7 @@ use std::ffi::c_void;
 use std::path::PathBuf;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
 use windows::core::{Interface, GUID, HRESULT};
 use windows::Win32::Foundation::BOOL;
 use windows::Win32::Graphics::Gdi::HBITMAP;
@@ -52,7 +53,7 @@ impl Drop for StoredMediumEntry {
 struct SyncFileDataObject {
     vtbl: *const RawDataObjectVtbl,
     ref_count: AtomicU32,
-    entries: Vec<StoredMediumEntry>,
+    entries: Mutex<Vec<StoredMediumEntry>>,
 }
 
 static DATA_OBJECT_VTBL: RawDataObjectVtbl = RawDataObjectVtbl {
@@ -82,9 +83,16 @@ fn format_matches(req: &FORMATETC, stored: &FORMATETC) -> bool {
 unsafe fn duplicate_stgmedium(src: &STGMEDIUM, dst: *mut STGMEDIUM) -> HRESULT {
     std::ptr::write_bytes(dst, 0, 1);
 
-    // If the medium relies on a custom `pUnkForRelease`, shallow-copy the union + AddRef `pUnkForRelease`
-    if src.pUnkForRelease.is_some() {
+    // If the medium relies on a custom `pUnkForRelease`, shallow-copy the union and
+    // explicitly AddRef `pUnkForRelease` (in `windows 0.52`, `STGMEDIUM::clone()` is a
+    // raw bitwise copy and does NOT call AddRef!).
+    if let Some(ref punk) = *src.pUnkForRelease {
         *dst = src.clone();
+        let raw_unk = punk.as_raw();
+        if !raw_unk.is_null() {
+            let vtbl = *(raw_unk as *const *const RawIUnknownVtbl);
+            ((*vtbl).add_ref)(raw_unk);
+        }
         return S_OK_HR;
     }
 
@@ -179,9 +187,11 @@ unsafe extern "system" fn data_obj_get_data(
     let req = &*pformatetc_in;
     let obj = &*(this as *const SyncFileDataObject);
 
-    for entry in &obj.entries {
-        if format_matches(req, &entry.fmt) {
-            return duplicate_stgmedium(&entry.med, pmedium);
+    if let Ok(entries) = obj.entries.lock() {
+        for entry in entries.iter() {
+            if format_matches(req, &entry.fmt) {
+                return duplicate_stgmedium(&entry.med, pmedium);
+            }
         }
     }
     std::ptr::write_bytes(pmedium, 0, 1);
@@ -205,9 +215,11 @@ unsafe extern "system" fn data_obj_query_get_data(
     }
     let req = &*pformatetc;
     let obj = &*(this as *const SyncFileDataObject);
-    for entry in &obj.entries {
-        if format_matches(req, &entry.fmt) {
-            return S_OK_HR;
+    if let Ok(entries) = obj.entries.lock() {
+        for entry in entries.iter() {
+            if format_matches(req, &entry.fmt) {
+                return S_OK_HR;
+            }
         }
     }
     DV_E_FORMATETC_HR
@@ -252,22 +264,30 @@ unsafe extern "system" fn data_obj_set_data(
         cloned
     };
 
-    let obj = &mut *(this as *mut SyncFileDataObject);
-    if let Some(existing) = obj.entries.iter_mut().find(|e| {
-        e.fmt.cfFormat == fmt.cfFormat
-            && e.fmt.dwAspect == fmt.dwAspect
-            && e.fmt.lindex == fmt.lindex
-    }) {
-        *existing = StoredMediumEntry {
-            fmt,
-            med: owned_med,
+    let obj = &*(this as *const SyncFileDataObject);
+    let new_entry = StoredMediumEntry {
+        fmt,
+        med: owned_med,
+    };
+    // Swap out any replaced entry and drop it strictly AFTER releasing the mutex so
+    // any re-entrant COM ReleaseStgMedium callback cannot deadlock or violate aliasing.
+    let replaced = {
+        let mut entries = match obj.entries.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
         };
-    } else {
-        obj.entries.push(StoredMediumEntry {
-            fmt,
-            med: owned_med,
-        });
-    }
+        if let Some(existing) = entries.iter_mut().find(|e| {
+            e.fmt.cfFormat == fmt.cfFormat
+                && e.fmt.dwAspect == fmt.dwAspect
+                && e.fmt.lindex == fmt.lindex
+        }) {
+            Some(std::mem::replace(existing, new_entry))
+        } else {
+            entries.push(new_entry);
+            None
+        }
+    };
+    drop(replaced);
     S_OK_HR
 }
 
@@ -284,7 +304,10 @@ unsafe extern "system" fn data_obj_enum_format_etc(
         return E_NOTIMPL_HR;
     }
     let obj = &*(this as *const SyncFileDataObject);
-    let formats: Vec<FORMATETC> = obj.entries.iter().map(|e| e.fmt).collect();
+    let formats: Vec<FORMATETC> = match obj.entries.lock() {
+        Ok(entries) => entries.iter().map(|e| e.fmt).collect(),
+        Err(_) => Vec::new(),
+    };
     if formats.is_empty() {
         return E_INVALIDARG_HR;
     }
@@ -380,7 +403,7 @@ pub(super) unsafe fn create_sync_file_data_object(paths: &[PathBuf]) -> Result<I
     let boxed = Box::new(SyncFileDataObject {
         vtbl: &DATA_OBJECT_VTBL,
         ref_count: AtomicU32::new(1),
-        entries,
+        entries: Mutex::new(entries),
     });
 
     Ok(IDataObject::from_raw(Box::into_raw(boxed) as *mut c_void))

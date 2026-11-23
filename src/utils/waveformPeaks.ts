@@ -1,6 +1,6 @@
 import { WaveformSensitivity } from "../types";
 
-const MAX_PARSED_PEAKS = 800;
+const MAX_PARSED_PEAKS = 400;
 const EMPTY_PEAKS: number[] = Object.freeze(new Array(600).fill(0)) as number[];
 const peaksCache = new Map<string, number[]>();
 

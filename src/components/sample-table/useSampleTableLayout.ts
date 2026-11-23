@@ -55,6 +55,15 @@ export function useSampleTableLayout({
     });
   }, []);
 
+  const applyVisibleColsPreset = useCallback((cols: VisibleColumnsState) => {
+    const next = { ...cols };
+    setVisibleCols(next);
+    safeSetItem(AUDIFY_STORAGE_KEYS.visibleColumnsV2, JSON.stringify(next), {
+      broadcast: false,
+      markEdited: false,
+    });
+  }, []);
+
   const resetTableLayout = useCallback(() => {
     setVisibleCols({ ...DEFAULT_VISIBLE_COLS });
     setColWidths({ ...DEFAULT_COL_WIDTHS });
@@ -105,6 +114,7 @@ export function useSampleTableLayout({
     colWidths,
     setColWidths,
     toggleVisibleCol,
+    applyVisibleColsPreset,
     resetTableLayout,
     columnsContentWidth,
     totalTableWidth,

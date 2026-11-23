@@ -17,6 +17,7 @@ import {
   DuplicateScanMode,
   DuplicateScanProgressPayload,
   DuplicateScanResult,
+  ExportAudioPreset,
   FileOpJournalEntry,
   TrashOpStatus,
   FolderStat,
@@ -24,6 +25,7 @@ import {
   KeyboardShortcuts,
   Library,
   LicenseGroup,
+  MiniDockEdgeSide,
   PendingSnapshotRestore,
   Profile,
   SampleItem,
@@ -156,6 +158,8 @@ export interface SampleStoreDataState {
   playTriggerSeq: number;
 
   // Settings, Theme, Visual Customization, Audio, Shortcuts, Auto-Tag & Licenses
+  sidebarCollapsed: boolean;
+  sidebarCompactHover: boolean;
   isSettingsOpen: boolean;
   isSettingsWindowVisible: boolean;
   settingsTab: SettingsTab;
@@ -168,6 +172,8 @@ export interface SampleStoreDataState {
   playheadLatencyMs: number | null;
   audioOutputDeviceId: string;
   sliceMicroFade: boolean;
+  exportAudioPreset: ExportAudioPreset;
+  skipLeadingSilence: boolean;
   normalizePreview: boolean;
   autoAnalyzeBpmKey: boolean;
   enableLiveFolderWatch: boolean;
@@ -175,6 +181,8 @@ export interface SampleStoreDataState {
   bpmKeyProgress: BpmKeyProgressPayload | null;
   isMiniDock: boolean;
   isMiniDockPinned: boolean;
+  miniDockEdgePeek: boolean;
+  miniDockEdgeSide: MiniDockEdgeSide;
   enableMica: boolean;
   themeTintIntensity: number;
   customBgImage: string;

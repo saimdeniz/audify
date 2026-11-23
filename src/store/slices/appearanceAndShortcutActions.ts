@@ -8,7 +8,6 @@ import {
 import {
   AUDIFY_STORAGE_KEYS,
   isStandaloneSettingsWindow,
-  loadSavedSettingsTab,
   normalizeSettingsTab,
   postCrossWindowSync,
   safeGetItem,
@@ -178,9 +177,12 @@ export function createAppearanceAndModalActions(
       }
 
       if (isSettingsOpen) {
+        const persistedTabRaw = safeGetItem(SETTINGS_TAB_STORAGE_KEY);
         const targetTab = tab
           ? normalizeSettingsTab(tab)
-          : normalizeSettingsTab(get().settingsTab || loadSavedSettingsTab());
+          : persistedTabRaw
+            ? normalizeSettingsTab(persistedTabRaw)
+            : normalizeSettingsTab(get().settingsTab);
         safeSetItem(SETTINGS_TAB_STORAGE_KEY, targetTab);
         set({ isSettingsOpen: false, settingsTab: targetTab });
         void invoke("open_settings_window", {

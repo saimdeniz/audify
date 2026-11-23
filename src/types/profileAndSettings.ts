@@ -29,6 +29,8 @@ export interface CollectionRuleTemplate {
 export type ThemeMode = "dark" | "light" | "contrast";
 export type WaveformSensitivity = "logarithmic" | "high_boost" | "linear";
 export type WaveformStyle = "solid_baseline" | "symmetric";
+export type ExportAudioPreset = "original" | "wav_24" | "nle_48k_24";
+export type MiniDockEdgeSide = "right" | "left";
 
 export type WallpaperKind = "none" | "image" | "ascii_preset" | "ascii_magic";
 export type AsciiMagicLook =
@@ -204,6 +206,8 @@ export interface KeyboardShortcuts {
   toggleAutoPreview: string;
   toggleMute: string;
   toggleFavorite: string;
+  markSliceIn?: string;
+  markSliceOut?: string;
   saveSlice?: string;
   clearSlice: string;
   removeFromCollection: string;
@@ -268,12 +272,17 @@ export interface ProfileSettings {
   isShuffle?: boolean;
   volume?: number;
   sliceMicroFade?: boolean;
+  exportAudioPreset?: ExportAudioPreset;
+  skipLeadingSilence?: boolean;
+  miniDockEdgePeek?: boolean;
+  miniDockEdgeSide?: MiniDockEdgeSide;
   normalizePreview?: boolean;
   autoAnalyzeBpmKey?: boolean;
   smartSearchSynonyms?: boolean;
   autoBinOnNleDrag?: boolean;
   binSampleIds?: number[];
   enableMica?: boolean;
+  sidebarCompactHover?: boolean;
   themeTintIntensity?: number;
   customBgImage?: string;
   customBgBlur?: number;

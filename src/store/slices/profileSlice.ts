@@ -294,6 +294,7 @@ export function createProfileSlice(
             autoBinOnNleDrag: get().autoBinOnNleDrag,
             binSampleIds: [],
             enableMica: get().enableMica,
+            sidebarCompactHover: get().sidebarCompactHover,
             themeTintIntensity: get().themeTintIntensity,
             customBgImage: "",
             customBgBlur: 0,

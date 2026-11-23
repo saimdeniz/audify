@@ -1,9 +1,9 @@
 use super::decode::{copy_packet_samples, open_audio_decoder};
-use super::{file_identity_hash8, fnv1a_hash64};
 use super::pcm_ops::{
-    apply_anti_click_micro_fade, push_frame_downmixed, resample_interleaved_varispeed,
-    write_wav_i16,
+    apply_anti_click_micro_fade_f32, push_frame_downmixed, push_frame_downmixed_f32,
+    resample_interleaved_f32, write_wav_i16, write_wav_pcm_f32,
 };
+use super::{file_identity_hash8, fnv1a_hash64};
 use crate::security::{
     display_leaf, has_ntfs_ads_colon, is_unc_or_network_path, normalize_clean_path, sanitize_err,
 };
@@ -16,7 +16,33 @@ use symphonia::core::errors::Error as SymphoniaError;
 
 const MAX_SLICE_DURATION_SEC: f64 = 600.0;
 const MAX_PCM_BUFFER_SAMPLES: usize = (256 * 1024 * 1024) / std::mem::size_of::<i16>();
+const MAX_PCM_F32_SAMPLES: usize = (256 * 1024 * 1024) / std::mem::size_of::<f32>();
 static TRANSCODE_TMP_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportAudioPreset {
+    Original,
+    Wav24,
+    Nle48k24,
+}
+
+impl ExportAudioPreset {
+    pub fn from_opt_str(raw: Option<&str>) -> Self {
+        match raw.map(str::trim) {
+            Some("wav_24") => Self::Wav24,
+            Some("nle_48k_24") => Self::Nle48k24,
+            _ => Self::Original,
+        }
+    }
+
+    pub fn filename_suffix(self) -> &'static str {
+        match self {
+            Self::Original => "",
+            Self::Wav24 => "_24b",
+            Self::Nle48k24 => "_48k24b",
+        }
+    }
+}
 
 #[cfg(test)]
 pub fn export_wav_slice(
@@ -28,15 +54,17 @@ pub fn export_wav_slice(
     export_wav_slice_with_options(source_path, slices_dir, start_sec, end_sec, None, None)
 }
 
-pub fn build_default_slice_file_name(
+pub fn build_default_slice_file_name_with_preset(
     source_path: &Path,
     start_sec: f64,
     end_sec: f64,
     pitch_semitones: Option<f32>,
     apply_micro_fade: Option<bool>,
+    export_preset: Option<&str>,
 ) -> String {
     let semitones = pitch_semitones.unwrap_or(0.0).clamp(-24.0, 24.0);
     let micro_fade = apply_micro_fade.unwrap_or(false);
+    let preset = ExportAudioPreset::from_opt_str(export_preset);
     let stem = source_path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -59,9 +87,10 @@ pub fn build_default_slice_file_name(
         String::new()
     };
     let fade_suffix = if micro_fade { "_mf3ms" } else { "" };
+    let preset_suffix = preset.filename_suffix();
     format!(
-        "{}_{}_slice_{:.3}s_{:.3}s{}{}.wav",
-        safe_stem, hash8, start_sec, end_sec, pitch_suffix, fade_suffix
+        "{}_{}_slice_{:.3}s_{:.3}s{}{}{}.wav",
+        safe_stem, hash8, start_sec, end_sec, pitch_suffix, fade_suffix, preset_suffix
     )
 }
 
@@ -82,14 +111,34 @@ fn validate_readable_audio_source(source_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn write_wav_i16_atomic(
+fn finalize_atomic_tmp_file(
+    tmp_path: &Path,
     out_path: &Path,
     parent_dir: &Path,
-    sample_rate: u32,
-    channels: u16,
-    pcm_samples: &[i16],
     skip_if_existing_valid: bool,
 ) -> Result<(), String> {
+    if let Err(rename_err) = fs::rename(tmp_path, out_path) {
+        if skip_if_existing_valid
+            && fs::metadata(out_path)
+                .map(|m| m.len() > 44)
+                .unwrap_or(false)
+        {
+            let _ = fs::remove_file(tmp_path);
+            return Ok(());
+        }
+        let _ = fs::remove_file(out_path);
+        if let Err(retry_err) = fs::rename(tmp_path, out_path) {
+            let _ = fs::remove_file(tmp_path);
+            return Err(sanitize_err(
+                parent_dir,
+                &format!("{}; {}", rename_err, retry_err),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn make_atomic_tmp_path(out_path: &Path, parent_dir: &Path) -> std::path::PathBuf {
     let leaf = out_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -101,32 +150,43 @@ fn write_wav_i16_atomic(
         std::process::id(),
         TRANSCODE_TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
     );
-    let tmp_path = parent_dir.join(tmp_name);
+    parent_dir.join(tmp_name)
+}
+
+fn write_wav_i16_atomic(
+    out_path: &Path,
+    parent_dir: &Path,
+    sample_rate: u32,
+    channels: u16,
+    pcm_samples: &[i16],
+    skip_if_existing_valid: bool,
+) -> Result<(), String> {
+    let tmp_path = make_atomic_tmp_path(out_path, parent_dir);
     if let Err(e) = write_wav_i16(&tmp_path, sample_rate, channels, pcm_samples) {
         let _ = fs::remove_file(&tmp_path);
         return Err(sanitize_err(parent_dir, &e.to_string()));
     }
-    if let Err(rename_err) = fs::rename(&tmp_path, out_path) {
-        if skip_if_existing_valid
-            && fs::metadata(out_path)
-                .map(|m| m.len() > 44)
-                .unwrap_or(false)
-        {
-            let _ = fs::remove_file(&tmp_path);
-            return Ok(());
-        }
-        let _ = fs::remove_file(out_path);
-        if let Err(retry_err) = fs::rename(&tmp_path, out_path) {
-            let _ = fs::remove_file(&tmp_path);
-            return Err(sanitize_err(
-                parent_dir,
-                &format!("{}; {}", rename_err, retry_err),
-            ));
-        }
-    }
-    Ok(())
+    finalize_atomic_tmp_file(&tmp_path, out_path, parent_dir, skip_if_existing_valid)
 }
 
+fn write_wav_pcm_f32_atomic(
+    out_path: &Path,
+    parent_dir: &Path,
+    sample_rate: u32,
+    channels: u16,
+    bits_per_sample: u16,
+    pcm_samples: &[f32],
+    skip_if_existing_valid: bool,
+) -> Result<(), String> {
+    let tmp_path = make_atomic_tmp_path(out_path, parent_dir);
+    if let Err(e) = write_wav_pcm_f32(&tmp_path, sample_rate, channels, bits_per_sample, pcm_samples) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(sanitize_err(parent_dir, &e.to_string()));
+    }
+    finalize_atomic_tmp_file(&tmp_path, out_path, parent_dir, skip_if_existing_valid)
+}
+
+#[cfg(test)]
 pub fn export_wav_slice_with_options(
     source_path: &Path,
     slices_dir: &Path,
@@ -134,6 +194,26 @@ pub fn export_wav_slice_with_options(
     end_sec: f64,
     pitch_semitones: Option<f32>,
     apply_micro_fade: Option<bool>,
+) -> Result<String, String> {
+    export_wav_slice_with_preset(
+        source_path,
+        slices_dir,
+        start_sec,
+        end_sec,
+        pitch_semitones,
+        apply_micro_fade,
+        None,
+    )
+}
+
+pub fn export_wav_slice_with_preset(
+    source_path: &Path,
+    slices_dir: &Path,
+    start_sec: f64,
+    end_sec: f64,
+    pitch_semitones: Option<f32>,
+    apply_micro_fade: Option<bool>,
+    export_preset: Option<&str>,
 ) -> Result<String, String> {
     if is_unc_or_network_path(&slices_dir.to_string_lossy()) {
         return Err("Network and UNC paths are not allowed".to_string());
@@ -144,31 +224,34 @@ pub fn export_wav_slice_with_options(
             sanitize_err(slices_dir, &e.to_string())
         )
     })?;
-    let file_name = build_default_slice_file_name(
+    let file_name = build_default_slice_file_name_with_preset(
         source_path,
         start_sec,
         end_sec,
         pitch_semitones,
         apply_micro_fade,
+        export_preset,
     );
     let out_path = slices_dir.join(file_name);
-    export_wav_slice_to_path(
+    export_wav_slice_to_path_with_preset(
         source_path,
         &out_path,
         start_sec,
         end_sec,
         pitch_semitones,
         apply_micro_fade,
+        export_preset,
     )
 }
 
-pub fn export_wav_slice_to_path(
+pub fn export_wav_slice_to_path_with_preset(
     source_path: &Path,
     out_path: &Path,
     start_sec: f64,
     end_sec: f64,
     pitch_semitones: Option<f32>,
     apply_micro_fade: Option<bool>,
+    export_preset: Option<&str>,
 ) -> Result<String, String> {
     if !start_sec.is_finite() || !end_sec.is_finite() || start_sec < 0.0 || end_sec <= start_sec {
         return Err(
@@ -196,6 +279,7 @@ pub fn export_wav_slice_to_path(
         )
     })?;
 
+    let preset = ExportAudioPreset::from_opt_str(export_preset);
     let opened = open_audio_decoder(source_path)
         .map_err(|e| sanitize_err(parent_dir, &e))?;
     let mut format = opened.format;
@@ -203,6 +287,18 @@ pub fn export_wav_slice_to_path(
     let track_id = opened.track_id;
     let mut sample_rate = opened.sample_rate;
     let mut out_channels = opened.channels.clamp(0, 2);
+    let source_bit_depth = opened.bit_depth;
+
+    let out_bits: u16 = match preset {
+        ExportAudioPreset::Original => {
+            if source_bit_depth > 16 {
+                24
+            } else {
+                16
+            }
+        }
+        ExportAudioPreset::Wav24 | ExportAudioPreset::Nle48k24 => 24,
+    };
 
     let init_sr = if sample_rate > 0 { sample_rate } else { 48000 };
     let max_init_frames = (10.0 * init_sr as f64) as usize;
@@ -211,16 +307,61 @@ pub fn export_wav_slice_to_path(
         .min(max_init_frames)
         .saturating_mul(if out_channels > 0 { out_channels } else { 2 });
 
-    let max_wav_samples = ((u32::MAX as usize).saturating_sub(44) / 2).min(MAX_PCM_BUFFER_SAMPLES);
-    let mut pcm_samples: Vec<i16> = Vec::with_capacity(init_cap);
+    let bytes_per_sample = (out_bits / 8) as usize;
+    let max_wav_samples =
+        ((u32::MAX as usize).saturating_sub(44) / bytes_per_sample).min(MAX_PCM_F32_SAMPLES);
+    let mut pcm_samples: Vec<f32> = Vec::with_capacity(init_cap);
     let mut current_frame: u64 = 0;
     let mut sample_buf_slot: Option<(SignalSpec, usize, SampleBuffer<f32>)> = None;
+
+    // Fast coarse seek for deep slices (> 2s) so extracting a 2s clip from minute 45
+    // doesn't decode the entire preceding file from byte 0.
+    if start_sec > 2.0 && sample_rate > 0 {
+        let seek_target_sec = (start_sec - 0.5).max(0.0);
+        if let Ok(seeked) = format.seek(
+            symphonia::core::formats::SeekMode::Coarse,
+            symphonia::core::formats::SeekTo::Time {
+                time: symphonia::core::units::Time::from(seek_target_sec),
+                track_id: Some(track_id),
+            },
+        ) {
+            let time_base = format
+                .tracks()
+                .iter()
+                .find(|t| t.id == track_id)
+                .and_then(|t| t.codec_params.time_base);
+            let actual_frame = if let Some(tb) = time_base {
+                let t = tb.calc_time(seeked.actual_ts);
+                ((t.seconds as f64 + t.frac) * (sample_rate as f64)).round().max(0.0) as u64
+            } else {
+                seeked.actual_ts
+            };
+            if actual_frame <= (start_sec * sample_rate as f64).floor() as u64 {
+                decoder.reset();
+                current_frame = actual_frame;
+            } else {
+                // Coarse seek overshot start_sec -> fall back to clean decode from 0
+                let _ = format.seek(
+                    symphonia::core::formats::SeekMode::Coarse,
+                    symphonia::core::formats::SeekTo::Time {
+                        time: symphonia::core::units::Time::from(0.0),
+                        track_id: Some(track_id),
+                    },
+                );
+                decoder.reset();
+                current_frame = 0;
+            }
+        }
+    }
 
     loop {
         let packet = match format.next_packet() {
             Ok(p) => p,
-            Err(SymphoniaError::IoError(_)) | Err(SymphoniaError::ResetRequired) => break,
-            Err(_) => break,
+            Err(SymphoniaError::ResetRequired) => {
+                decoder.reset();
+                continue;
+            }
+            Err(SymphoniaError::IoError(_)) | Err(_) => break,
         };
         if packet.track_id() != track_id {
             continue;
@@ -259,7 +400,7 @@ pub fn export_wav_slice_to_path(
                     break;
                 }
                 let frame_slice = &samples[f_idx * ch..(f_idx + 1) * ch];
-                push_frame_downmixed(frame_slice, out_channels, &mut pcm_samples);
+                push_frame_downmixed_f32(frame_slice, out_channels, &mut pcm_samples);
             }
 
             current_frame = packet_end;
@@ -275,26 +416,39 @@ pub fn export_wav_slice_to_path(
         return Err("No audio frames could be decoded in the selected slice range".to_string());
     }
 
+    let out_sample_rate: u32 = match preset {
+        ExportAudioPreset::Nle48k24 => 48_000,
+        ExportAudioPreset::Original | ExportAudioPreset::Wav24 => sample_rate,
+    };
+
     let semitones = pitch_semitones.unwrap_or(0.0).clamp(-24.0, 24.0);
-    if semitones.is_finite() && semitones.abs() >= 0.01 {
-        pcm_samples = resample_interleaved_varispeed(
+    let pitch_ratio = if semitones.is_finite() && semitones.abs() >= 0.01 {
+        2.0_f64.powf((semitones as f64) / 12.0)
+    } else {
+        1.0
+    };
+    let sr_ratio = (sample_rate as f64) / (out_sample_rate as f64);
+    let combined_ratio = pitch_ratio * sr_ratio;
+    if (combined_ratio - 1.0).abs() > 1e-5 {
+        pcm_samples = resample_interleaved_f32(
             &pcm_samples,
             out_channels,
-            semitones,
+            combined_ratio,
             max_wav_samples,
         );
     }
 
     let micro_fade = apply_micro_fade.unwrap_or(false);
     if micro_fade {
-        apply_anti_click_micro_fade(&mut pcm_samples, sample_rate, out_channels);
+        apply_anti_click_micro_fade_f32(&mut pcm_samples, out_sample_rate, out_channels);
     }
 
-    write_wav_i16_atomic(
+    write_wav_pcm_f32_atomic(
         out_path,
         parent_dir,
-        sample_rate,
+        out_sample_rate,
         out_channels as u16,
+        out_bits,
         &pcm_samples,
         false,
     )

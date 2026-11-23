@@ -59,11 +59,28 @@ export function sliceEntryToRenameAdapter(entry: SliceHistoryEntry): SampleItem 
 
 export interface SliceFilterSortOptions {
   searchQuery: string;
+  folderFilter?: string | null;
   sliceHideMissing: boolean;
   sliceFavoriteOnly: boolean;
   slicePitchOnly: boolean;
   sliceSortKey: SliceSortKey | null;
   sliceSortDir: SortDir;
+}
+
+export function matchesSliceSourceFolder(
+  sourceFilePath: string,
+  folderFilter: string | null | undefined
+): boolean {
+  if (!folderFilter) return true;
+  if (!sourceFilePath) return false;
+  const normFilter = folderFilter.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  if (!normFilter) return true;
+  const normSource = sourceFilePath.replace(/\\/g, "/");
+  const lastSlash = normSource.lastIndexOf("/");
+  const parentFolder = (lastSlash > 0 ? normSource.slice(0, lastSlash) : normSource)
+    .replace(/\/+$/, "")
+    .toLowerCase();
+  return parentFolder === normFilter || parentFolder.startsWith(`${normFilter}/`);
 }
 
 export function getVisibleSortedSlices(
@@ -75,6 +92,9 @@ export function getVisibleSortedSlices(
     if (opts.sliceHideMissing && !item.file_exists) return false;
     if (opts.sliceFavoriteOnly && !item.is_favorite) return false;
     if (opts.slicePitchOnly && Math.abs(item.pitch_semitones) < 0.01) {
+      return false;
+    }
+    if (opts.folderFilter && !matchesSliceSourceFolder(item.source_file_path, opts.folderFilter)) {
       return false;
     }
     if (!q) return true;

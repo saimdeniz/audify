@@ -218,7 +218,10 @@ pub(super) fn commit_synced_samples_with_status(
                         ELSE samples.camelot_key
                     END,
                     peaks_json = excluded.peaks_json,
-                    file_modified_at = COALESCE(excluded.file_modified_at, samples.file_modified_at)",
+                    file_modified_at = COALESCE(excluded.file_modified_at, samples.file_modified_at),
+                    is_trashed = 0,
+                    trashed_at = NULL,
+                    original_file_path = NULL",
             )
             .map_err(|e| format!("Failed to prepare sample upsert: {}", e))?;
 

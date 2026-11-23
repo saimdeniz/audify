@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import { ASCII_PRESETS } from "../constants/asciiPresets";
+import {
+  isAppWindowActive,
+  setAppFocusedState,
+  setEdgePeekCollapsedState,
+  subscribeAppActivity,
+} from "../utils/appFocusMonitor";
 import { evictAsciiMagicAutoAccentCache } from "../utils/autoAccent";
 import { isGifWallpaperPath } from "../utils/thumbnailCache";
 import {
@@ -15,6 +21,7 @@ import {
   normalizeWallpaperKind,
   safeRemoveItem,
   safeSetItem,
+  SETTINGS_TAB_STORAGE_KEY,
 } from "./storageHelpers";
 
 const invokeMock = vi.fn();
@@ -128,6 +135,36 @@ describe("appearance backdrop & settings tab persistence", () => {
       "open_settings_window",
       expect.objectContaining({ tab: "appearance" })
     );
+
+    // Simulates standalone Settings switching to "audio" in localStorage while main's store still holds "appearance"
+    safeSetItem(SETTINGS_TAB_STORAGE_KEY, "audio", { broadcast: false });
+    store.setSettingsOpen(true);
+    expect(useSampleStore.getState().settingsTab).toBe("audio");
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "open_settings_window",
+      expect.objectContaining({ tab: "audio" })
+    );
+  });
+
+  it("pauses app activity immediately when Mini Dock Edge-Peek collapses even if window remains focused", () => {
+    setAppFocusedState(true);
+    setEdgePeekCollapsedState(false);
+    expect(isAppWindowActive()).toBe(true);
+
+    const listener = vi.fn();
+    const unsub = subscribeAppActivity(listener);
+    try {
+      setEdgePeekCollapsedState(true);
+      expect(isAppWindowActive()).toBe(false);
+      expect(listener).toHaveBeenCalledTimes(1);
+
+      setEdgePeekCollapsedState(false);
+      expect(isAppWindowActive()).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(2);
+    } finally {
+      unsub();
+      setEdgePeekCollapsedState(false);
+    }
   });
 
   it("extracts and updates theme accent automatically when Auto Accent is enabled for catalog scenes", async () => {

@@ -144,23 +144,29 @@ export function createFilterSlice(
     },
 
     setFolderFilter: (folder: string | null) => {
-      const fav = get().favoriteOnly;
-      const dups = get().duplicatesFilterActive;
-      const trash = get().trashFilterActive;
-      if (!trash) {
+      const st = get();
+      const fav = st.favoriteOnly;
+      const bin = st.binFilterActive;
+      const dups = st.duplicatesFilterActive;
+      const trash = st.trashFilterActive;
+      const slices = st.slicesFilterActive;
+      if (!trash && !bin && !slices && !dups) {
         persistNavigationFilters(folder, null, fav, null);
       }
       set({
         folderFilter: folder,
         selectedLicenseGroupId: null,
-        binFilterActive: false,
+        binFilterActive: bin,
         trashFilterActive: trash,
         duplicatesFilterActive: dups,
-        slicesFilterActive: false,
+        slicesFilterActive: slices,
         favoriteOnly: fav,
         recentOnly: false,
         selectedCollectionId: null,
       });
+      if (slices || (trash && st.trashViewTab === "slices")) {
+        return;
+      }
       if (!applyInstantMemoryFilter({ preserveMultiSelect: false })) {
         void get().fetchSamples({ preserveMultiSelect: false });
       }

@@ -2,7 +2,7 @@ import React from "react";
 import { createPortal } from "react-dom";
 import { Check } from "lucide-react";
 import { Z_INDEX } from "../../constants/zIndex";
-import { VisibleColumnsState } from "./tableLayout";
+import { COLUMN_LAYOUT_PRESETS, VisibleColumnsState } from "./tableLayout";
 
 const PICKER_COLUMNS: readonly {
   key: keyof VisibleColumnsState;
@@ -26,6 +26,7 @@ interface HeaderColumnPickerMenuProps {
   menuPos: { top: number; right: number };
   visibleCols: VisibleColumnsState;
   toggleVisibleCol: (key: keyof VisibleColumnsState) => void;
+  applyVisibleColsPreset?: (cols: VisibleColumnsState) => void;
   resetTableLayout: () => void;
 }
 
@@ -33,6 +34,7 @@ export const HeaderColumnPickerMenu: React.FC<HeaderColumnPickerMenuProps> = ({
   menuPos,
   visibleCols,
   toggleVisibleCol,
+  applyVisibleColsPreset,
   resetTableLayout,
 }) => {
   const menu = (
@@ -65,6 +67,24 @@ export const HeaderColumnPickerMenu: React.FC<HeaderColumnPickerMenuProps> = ({
           Reset Layout
         </button>
       </div>
+      {applyVisibleColsPreset && (
+        <div className="grid grid-cols-3 gap-1 pb-1 border-b border-line">
+          {COLUMN_LAYOUT_PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              title={preset.title}
+              onClick={(e) => {
+                e.stopPropagation();
+                applyVisibleColsPreset(preset.cols);
+              }}
+              className="h-[22px] px-1 rounded-xs bg-surface-3 hover:bg-accent-soft hover:text-accent-fg border border-line hover:border-accent text-[9.5px] font-mono font-medium text-fg-2 transition-colors truncate"
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="space-y-0.5">
         {PICKER_COLUMNS.map((col) => {
           const enabled = visibleCols[col.key];

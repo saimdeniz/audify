@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { APP_VERSION } from "../../constants/appInfo";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
 
 describe("SettingsSidebarNav UI component", () => {
@@ -30,5 +31,6 @@ describe("SettingsSidebarNav UI component", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Licenses" }));
     expect(onSelectTab).toHaveBeenCalledWith("licenses");
+    expect(screen.getByText(`v${APP_VERSION}`)).toBeTruthy();
   });
 });

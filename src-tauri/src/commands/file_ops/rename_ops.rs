@@ -108,7 +108,7 @@ pub(crate) fn rename_sample_file_with_conn(
     let norm_new_path = normalize_clean_path(&target_pb.to_string_lossy());
     let norm_old_path = normalize_clean_path(&resolved_src.to_string_lossy());
 
-    let is_case_only_rename = norm_new_path.eq_ignore_ascii_case(&norm_old_path);
+    let is_case_only_rename = norm_new_path.to_lowercase() == norm_old_path.to_lowercase();
     if !is_case_only_rename && target_pb.exists() {
         return Err(format!(
             "A file named '{}' already exists in this folder",

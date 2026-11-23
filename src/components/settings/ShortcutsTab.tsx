@@ -91,6 +91,16 @@ const SHORTCUT_GROUPS: {
         desc: "Search acoustically similar tracks from selected sample",
       },
       {
+        key: "markSliceIn",
+        label: "Mark slice In",
+        desc: "Set waveform slice start at current playhead (I)",
+      },
+      {
+        key: "markSliceOut",
+        label: "Mark slice Out",
+        desc: "Set waveform slice end at current playhead (O)",
+      },
+      {
         key: "saveSlice",
         label: "Save active slice",
         desc: "Save waveform slice to export folder & Slices tab",

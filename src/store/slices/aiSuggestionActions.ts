@@ -94,7 +94,7 @@ export async function runBatchSuggestionMutation(
         ? [
             get().refreshAfterCatalogMutation({
               reloadSamples: true,
-              syncCatalog: !isStandaloneSettingsWindow(),
+              syncCatalog: true,
             }),
           ]
         : []),

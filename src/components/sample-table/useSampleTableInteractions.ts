@@ -42,7 +42,6 @@ interface UseSampleTableInteractionsParams {
 }
 
 export function useSampleTableInteractions({
-  samples,
   autoBinOnNleDrag,
   searchInputRef,
   rowTagPopover,
@@ -108,7 +107,7 @@ export function useSampleTableInteractions({
             const sourcePool =
               stateNow.allProfileSamples.length > 0
                 ? stateNow.allProfileSamples
-                : samples;
+                : stateNow.samples;
             const ids: number[] = [];
             for (const s of sourcePool) {
               if (pathSet.has(s.file_path)) ids.push(s.id);
@@ -130,7 +129,7 @@ export function useSampleTableInteractions({
         }, 140);
       }
     },
-    [autoBinOnNleDrag, samples, addSamplesToBin, setInAppDragSample]
+    [autoBinOnNleDrag, addSamplesToBin, setInAppDragSample]
   );
 
   // Global CTRL+F shortcut to focus search bar

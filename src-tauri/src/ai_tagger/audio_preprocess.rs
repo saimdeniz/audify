@@ -25,15 +25,48 @@ pub fn resample_mono_to_16k(mono: &[f32], in_sr: u32, max_samples: usize) -> Vec
     let est_out = ((mono.len() as f64) / ratio).floor().max(1.0) as usize;
     let out_len = est_out.min(max_samples);
     let mut out = Vec::with_capacity(out_len);
-    let last_idx = mono.len() - 1;
+    let last_idx = (mono.len() - 1) as isize;
+    let use_aa_sinc = ratio > 1.05;
+    let aa_cutoff = (0.92 / ratio).min(1.0);
+    let aa_radius = if use_aa_sinc {
+        ((2.0 * ratio).ceil() as isize).clamp(3, 12)
+    } else {
+        0
+    };
 
     for i in 0..out_len {
         let src_pos = (i as f64) * ratio;
-        let idx = (src_pos.floor() as usize).min(last_idx);
-        let frac = (src_pos - (idx as f64)) as f32;
-        let a = mono[idx];
-        let b = mono[(idx + 1).min(last_idx)];
-        let sample = a + (b - a) * frac;
+        let idx = src_pos.floor() as isize;
+        let sample = if use_aa_sinc {
+            // Hann-windowed sinc low-pass filter prevents HF cymbal/transient aliasing into 16 kHz YAMNet band
+            let r_f64 = aa_radius as f64;
+            let mut acc = 0.0_f64;
+            let mut w_sum = 0.0_f64;
+            for k in -aa_radius..=aa_radius {
+                let s_idx = (idx + k).clamp(0, last_idx) as usize;
+                let dx = (idx + k) as f64 - src_pos;
+                if dx.abs() >= r_f64 {
+                    continue;
+                }
+                let x = std::f64::consts::PI * dx * aa_cutoff;
+                let sinc = if x.abs() < 1e-9 { 1.0 } else { x.sin() / x };
+                let win = 0.5 * (1.0 + (std::f64::consts::PI * dx / r_f64).cos());
+                let w = sinc * win;
+                w_sum += w;
+                acc += (mono[s_idx] as f64) * w;
+            }
+            if w_sum.abs() > 1e-9 {
+                (acc / w_sum) as f32
+            } else {
+                mono[idx.clamp(0, last_idx) as usize]
+            }
+        } else {
+            let idx_u = idx.clamp(0, last_idx) as usize;
+            let frac = (src_pos - (idx as f64)) as f32;
+            let a = mono[idx_u];
+            let b = mono[(idx_u + 1).min(last_idx as usize)];
+            a + (b - a) * frac
+        };
         out.push(if sample.is_finite() {
             sample.clamp(-1.0, 1.0)
         } else {

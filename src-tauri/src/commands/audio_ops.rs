@@ -1,6 +1,6 @@
 use super::with_read_conn;
 use crate::audio::{
-    compute_hires_peaks, compute_preview_norm_gain, export_wav_slice_with_options,
+    compute_hires_peaks, compute_preview_norm_gain, export_wav_slice_with_preset,
     resolve_metadata_titles_validated, transcode_audio_to_pcm_wav,
 };
 use crate::db::AppState;
@@ -67,6 +67,33 @@ pub(crate) fn resolve_slice_export_dir(
     Ok(user_dir.join("slices"))
 }
 
+pub(crate) fn resolve_active_export_preset(
+    conn: &Connection,
+    explicit: Option<&str>,
+) -> Option<String> {
+    if let Some(raw) = explicit {
+        let trimmed = raw.trim();
+        if matches!(trimmed, "original" | "wav_24" | "nle_48k_24") {
+            return Some(trimmed.to_string());
+        }
+    }
+    if let Ok(settings_json) = conn.query_row(
+        "SELECT settings_json FROM profiles WHERE is_active = 1 ORDER BY id ASC LIMIT 1",
+        [],
+        |row| row.get::<_, String>(0),
+    ) {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&settings_json) {
+            if let Some(preset) = parsed.get("exportAudioPreset").and_then(|v| v.as_str()) {
+                let trimmed = preset.trim();
+                if matches!(trimmed, "original" | "wav_24" | "nle_48k_24") {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn export_audio_slice(
@@ -79,13 +106,14 @@ pub async fn export_audio_slice(
     pitch_semitones: Option<f32>,
     apply_micro_fade: Option<bool>,
     cache_only: Option<bool>,
+    export_preset: Option<String>,
 ) -> Result<String, String> {
     let state_owned = state.inner().clone();
     let app_clone = app.clone();
     let user_dir_err = state.user_dir.clone();
     let use_temp_cache = cache_only.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
-        let (source_path, slices_dir) = with_read_conn(&state_owned, |conn| {
+        let (source_path, slices_dir, resolved_preset) = with_read_conn(&state_owned, |conn| {
             let src = validate_audio_path_in_scope(conn, &state_owned.user_dir, &file_path)
                 .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
             let dir = if use_temp_cache {
@@ -93,7 +121,8 @@ pub async fn export_audio_slice(
             } else {
                 resolve_slice_export_dir(conn, &state_owned.user_dir, custom_dir.as_deref())?
             };
-            Ok((src, dir))
+            let preset = resolve_active_export_preset(conn, export_preset.as_deref());
+            Ok((src, dir, preset))
         })?;
 
         if has_ntfs_ads_colon(&slices_dir.to_string_lossy()) {
@@ -111,13 +140,14 @@ pub async fn export_audio_slice(
             &slices_dir,
         );
 
-        export_wav_slice_with_options(
+        export_wav_slice_with_preset(
             &source_path,
             &slices_dir,
             start_sec,
             end_sec,
             pitch_semitones,
             apply_micro_fade,
+            resolved_preset.as_deref(),
         )
     })
     .await

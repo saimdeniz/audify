@@ -217,10 +217,20 @@ pub(crate) fn build_duplicate_group(
 
 /// Queries active-profile non-trashed candidates using the WAL read connection so the
 /// connection can be released immediately before Stage 2/3 parallel disk I/O runs.
+#[cfg(test)]
 pub(crate) fn load_duplicate_candidates(
     conn: &Connection,
     mode: DuplicateScanMode,
     library_id: Option<i64>,
+) -> Result<DuplicateLoadBundle, String> {
+    load_duplicate_candidates_for_model(conn, mode, library_id, None)
+}
+
+pub(crate) fn load_duplicate_candidates_for_model(
+    conn: &Connection,
+    mode: DuplicateScanMode,
+    library_id: Option<i64>,
+    active_model_id: Option<&str>,
 ) -> Result<DuplicateLoadBundle, String> {
     let active_profile_id = get_active_profile_id(conn);
 
@@ -266,14 +276,19 @@ pub(crate) fn load_duplicate_candidates(
              NULL AS cached_partial_hash, NULL AS cached_full_hash"
         }
     };
+    let model_filter = active_model_id.unwrap_or("");
     let emb_join = match mode {
         DuplicateScanMode::Exact => "LEFT JOIN sample_hashes sh ON sh.sample_id = s.id",
+        DuplicateScanMode::Similar if !model_filter.is_empty() => {
+            "LEFT JOIN sample_embeddings e ON e.sample_id = s.id AND e.model_id = ?2"
+        }
         DuplicateScanMode::Similar => "LEFT JOIN sample_embeddings e ON e.sample_id = s.id",
     };
-    let lib_filter = if library_id.is_some() {
-        "AND s.library_id = ?2"
-    } else {
-        ""
+    let use_model_param = mode == DuplicateScanMode::Similar && !model_filter.is_empty();
+    let lib_filter = match (use_model_param, library_id.is_some()) {
+        (true, true) => "AND s.library_id = ?3",
+        (false, true) => "AND s.library_id = ?2",
+        (_, false) => "",
     };
 
     let sql = format!(
@@ -292,7 +307,7 @@ pub(crate) fn load_duplicate_candidates(
                 FROM sample_tags st
                 INNER JOIN samples s2 ON s2.id = st.sample_id
                 INNER JOIN libraries l2 ON l2.id = s2.library_id
-                WHERE COALESCE(s2.is_trashed, 0) = 0
+                WHERE s2.is_trashed = 0
                   AND (l2.is_global = 1
                        OR l2.id IN (SELECT pl.library_id FROM profile_libraries pl WHERE pl.profile_id = ?1))
                 GROUP BY st.sample_id
@@ -305,7 +320,7 @@ pub(crate) fn load_duplicate_candidates(
                 GROUP BY ci.sample_id
          ) cc ON cc.sample_id = s.id
          {}
-         WHERE COALESCE(s.is_trashed, 0) = 0
+         WHERE s.is_trashed = 0
            AND (l.is_global = 1 OR l.id IN (SELECT pl.library_id FROM profile_libraries pl WHERE pl.profile_id = ?1))
            {}
          ORDER BY s.id ASC",
@@ -356,10 +371,13 @@ pub(crate) fn load_duplicate_candidates(
         })
     };
 
-    let rows = if let Some(lib_id) = library_id {
-        stmt.query_map(params![active_profile_id, lib_id], row_mapper)
-    } else {
-        stmt.query_map(params![active_profile_id], row_mapper)
+    let rows = match (use_model_param, library_id) {
+        (true, Some(lib_id)) => {
+            stmt.query_map(params![active_profile_id, model_filter, lib_id], row_mapper)
+        }
+        (true, None) => stmt.query_map(params![active_profile_id, model_filter], row_mapper),
+        (false, Some(lib_id)) => stmt.query_map(params![active_profile_id, lib_id], row_mapper),
+        (false, None) => stmt.query_map(params![active_profile_id], row_mapper),
     }
     .map_err(|e| format!("Failed scanning duplicate candidates: {}", e))?;
 

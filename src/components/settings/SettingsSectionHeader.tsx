@@ -18,7 +18,6 @@ import {
   Zap,
 } from "lucide-react";
 import { useSampleStore } from "../../store/useSampleStore";
-import { formatVolumeDb } from "../../utils/format";
 import { ModernToggleSwitch } from "./ModernToggleSwitch";
 import { SettingsProfileMenus } from "./SettingsProfileMenus";
 
@@ -81,7 +80,6 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
   const settingsTab = useSampleStore((s) => s.settingsTab);
   const profilesCount = useSampleStore((s) => s.profiles.length);
   const activeProfile = useSampleStore((s) => s.activeProfile);
-  const volume = useSampleStore((s) => s.volume);
   const libraries = useSampleStore((s) => s.libraries);
   const librariesCount = libraries.length;
   const totalSamplesCount = useSampleStore((s) => s.samples.length);
@@ -133,7 +131,7 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
       title: "Appearance",
       badge: activeProfile?.name || "Default",
     },
-    audio: { Icon: Sliders, title: "Audio", badge: formatVolumeDb(volume) },
+    audio: { Icon: Sliders, title: "Audio", badge: null },
     ai: {
       Icon: Sparkles,
       title: "AI",

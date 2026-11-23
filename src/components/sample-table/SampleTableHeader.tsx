@@ -30,9 +30,15 @@ const SortHeader: React.FC<{
   const sortDir = useSampleStore((s) => s.sortDir);
   const cycleSort = useSampleStore((s) => s.cycleSort);
   const active = sortKey === sortId;
+  const ariaSort = active
+    ? sortDir === "asc"
+      ? "ascending"
+      : "descending"
+    : "none";
   return (
     <button
       type="button"
+      aria-sort={ariaSort}
       onClick={() => cycleSort(sortId)}
       className={`group/hdr flex items-center justify-center tracking-wider uppercase font-semibold transition-colors active:scale-[0.98] ${
         active ? "text-accent-fg" : "text-fg-head hover:text-fg"
@@ -52,6 +58,7 @@ interface SampleTableHeaderProps {
   setColumnOrder: React.Dispatch<React.SetStateAction<ColumnId[]>>;
   visibleCols: VisibleColumnsState;
   toggleVisibleCol: (key: keyof VisibleColumnsState) => void;
+  applyVisibleColsPreset?: (cols: VisibleColumnsState) => void;
   colWidths: Record<ResizableColKey, number>;
   setColWidths: React.Dispatch<
     React.SetStateAction<Record<ResizableColKey, number>>
@@ -70,6 +77,7 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
   setColumnOrder,
   visibleCols,
   toggleVisibleCol,
+  applyVisibleColsPreset,
   colWidths,
   setColWidths,
   resetTableLayout,
@@ -508,6 +516,7 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
         setShowColumnPicker={setShowColumnPicker}
         visibleCols={visibleCols}
         toggleVisibleCol={toggleVisibleCol}
+        applyVisibleColsPreset={applyVisibleColsPreset}
         resetTableLayout={resetTableLayout}
       />
     </div>

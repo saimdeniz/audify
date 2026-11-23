@@ -220,13 +220,13 @@ pub fn estimate_bpm_from_mono(mono: &[f32], sample_rate: u32) -> Option<f64> {
         return None;
     }
 
-    // Parabolic sub-sample lag refinement
+    // Parabolic sub-sample lag refinement on the same weighted curve where best_lag peaked
     let refined_lag = if best_lag > min_lag && best_lag < max_lag {
-        let y_prev = corr[best_lag - 1];
-        let y_curr = corr[best_lag];
-        let y_next = corr[best_lag + 1];
+        let y_prev = weighted[best_lag - 1];
+        let y_curr = weighted[best_lag];
+        let y_next = weighted[best_lag + 1];
         let denom = y_prev - 2.0 * y_curr + y_next;
-        if denom.abs() > 1e-9 {
+        if denom < -1e-9 {
             let delta = (0.5 * (y_prev - y_next) / denom).clamp(-0.5, 0.5);
             best_lag as f64 + delta
         } else {

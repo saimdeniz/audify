@@ -10,6 +10,7 @@ interface FolderTreeRowProps {
   row: FlatFolderRow;
   virtualStart: number;
   virtualSize: number;
+  readOnlyScope?: boolean;
   enableAdvancedFileOps: boolean;
   isAnyDragActive: boolean;
   isExternalFileDragActive: boolean;
@@ -69,6 +70,7 @@ export const FolderTreeRow: React.FC<FolderTreeRowProps> = React.memo(({
   row,
   virtualStart,
   virtualSize,
+  readOnlyScope = false,
   enableAdvancedFileOps,
   isAnyDragActive,
   isExternalFileDragActive,
@@ -168,10 +170,10 @@ export const FolderTreeRow: React.FC<FolderTreeRowProps> = React.memo(({
       isSubfolderSelected,
     } = row;
     const dropKey = `folder:${lib.id}:${lib.path}`;
-    const canDropHere = enableAdvancedFileOps && !lib.is_read_only;
+    const canDropHere = !readOnlyScope && enableAdvancedFileOps && !lib.is_read_only;
     const isDropHovered =
       canDropHere && isAnyDragActive && dragHoverTarget === dropKey;
-    const isDropFlashed = dropFlashTarget === dropKey;
+    const isDropFlashed = !readOnlyScope && dropFlashTarget === dropKey;
 
     return (
       <SidebarTreeRow
@@ -201,6 +203,7 @@ export const FolderTreeRow: React.FC<FolderTreeRowProps> = React.memo(({
             : null
         }
         actions={
+          readOnlyScope ? undefined : (
           <>
             {enableAdvancedFileOps &&
               (lib.is_read_only ? (
@@ -238,6 +241,7 @@ export const FolderTreeRow: React.FC<FolderTreeRowProps> = React.memo(({
               />
             </button>
           </>
+          )
         }
         data-sidebar-drop={canDropHere ? dropKey : undefined}
         onClick={() => setFolderFilter(isLibRootSelected ? null : lib.path)}
@@ -254,23 +258,33 @@ export const FolderTreeRow: React.FC<FolderTreeRowProps> = React.memo(({
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          setFolderContextMenu({
-            x: e.clientX,
-            y: e.clientY,
-            title: lib.name,
-            explorerTargets: [{ label: "Show in Explorer", path: lib.path }],
-            primaryCopyPath: lib.path,
-            onSyncFolder: () => void syncFolderIncremental(lib.path),
-            isReadOnlyVault: Boolean(lib.is_read_only),
-            onCreateSubfolder: enableAdvancedFileOps
-              ? () => startCreatingSubfolder(lib, lib.path, 0)
-              : undefined,
-            onImportAudioFiles: enableAdvancedFileOps
-              ? () => void handleImportDialogForFolder(lib, lib.path)
-              : undefined,
-            onOpenSettings: () => setSettingsOpen(true, "libraries"),
-            settingsLabel: "Manage Library in Settings",
-          });
+          setFolderContextMenu(
+            readOnlyScope
+              ? {
+                  x: e.clientX,
+                  y: e.clientY,
+                  title: lib.name,
+                  explorerTargets: [{ label: "Show in Explorer", path: lib.path }],
+                  primaryCopyPath: lib.path,
+                }
+              : {
+                  x: e.clientX,
+                  y: e.clientY,
+                  title: lib.name,
+                  explorerTargets: [{ label: "Show in Explorer", path: lib.path }],
+                  primaryCopyPath: lib.path,
+                  onSyncFolder: () => void syncFolderIncremental(lib.path),
+                  isReadOnlyVault: Boolean(lib.is_read_only),
+                  onCreateSubfolder: enableAdvancedFileOps
+                    ? () => startCreatingSubfolder(lib, lib.path, 0)
+                    : undefined,
+                  onImportAudioFiles: enableAdvancedFileOps
+                    ? () => void handleImportDialogForFolder(lib, lib.path)
+                    : undefined,
+                  onOpenSettings: () => setSettingsOpen(true, "libraries"),
+                  settingsLabel: "Manage Library in Settings",
+                }
+          );
         }}
         style={{
           position: "absolute",
@@ -289,12 +303,13 @@ export const FolderTreeRow: React.FC<FolderTreeRowProps> = React.memo(({
   const hasChildren = node.children.length > 0;
   const nodeLower = normalizeTreeKey(node.fullPath);
   const dropKey = `folder:${lib.id}:${node.fullPath}`;
-  const canDropHere = enableAdvancedFileOps && !lib.is_read_only;
+  const canDropHere = !readOnlyScope && enableAdvancedFileOps && !lib.is_read_only;
   const isDropHovered =
     canDropHere && isAnyDragActive && dragHoverTarget === dropKey;
-  const isDropFlashed = dropFlashTarget === dropKey;
+  const isDropFlashed = !readOnlyScope && dropFlashTarget === dropKey;
   const isRenamingThisFolder = Boolean(
-    renamingFolderTarget &&
+    !readOnlyScope &&
+      renamingFolderTarget &&
       renamingFolderTarget.libraryId === lib.id &&
       normalizeTreeKey(renamingFolderTarget.folderPath) === nodeLower
   );
@@ -366,7 +381,7 @@ export const FolderTreeRow: React.FC<FolderTreeRowProps> = React.memo(({
         ) : undefined
       }
       actions={
-        !isRenamingThisFolder ? (
+        !readOnlyScope && !isRenamingThisFolder ? (
           <>
             {enableAdvancedFileOps && !lib.is_read_only && (
               <button
@@ -416,35 +431,45 @@ export const FolderTreeRow: React.FC<FolderTreeRowProps> = React.memo(({
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        setFolderContextMenu({
-          x: e.clientX,
-          y: e.clientY,
-          title: node.name,
-          explorerTargets: [{ label: "Show in Explorer", path: node.fullPath }],
-          primaryCopyPath: node.fullPath,
-          onSyncFolder: () => void syncFolderIncremental(lib.path, node.fullPath),
-          isReadOnlyVault: Boolean(lib.is_read_only),
-          onCreateSubfolder: enableAdvancedFileOps
-            ? () => startCreatingSubfolder(lib, node.fullPath, node.depth + 1)
-            : undefined,
-          onImportAudioFiles: enableAdvancedFileOps
-            ? () => void handleImportDialogForFolder(lib, node.fullPath)
-            : undefined,
-          onRenameSubfolder: enableAdvancedFileOps
-            ? () => startRenamingSubfolder(lib, node.fullPath, node.name)
-            : undefined,
-          onTrashSubfolder: enableAdvancedFileOps
-            ? () =>
-                void requestTrashSubfolder(
-                  lib.id,
-                  node.fullPath,
-                  node.name,
-                  node.count
-                )
-            : undefined,
-          onOpenSettings: () => setSettingsOpen(true, "libraries"),
-          settingsLabel: "Manage Library in Settings",
-        });
+        setFolderContextMenu(
+          readOnlyScope
+            ? {
+                x: e.clientX,
+                y: e.clientY,
+                title: node.name,
+                explorerTargets: [{ label: "Show in Explorer", path: node.fullPath }],
+                primaryCopyPath: node.fullPath,
+              }
+            : {
+                x: e.clientX,
+                y: e.clientY,
+                title: node.name,
+                explorerTargets: [{ label: "Show in Explorer", path: node.fullPath }],
+                primaryCopyPath: node.fullPath,
+                onSyncFolder: () => void syncFolderIncremental(lib.path, node.fullPath),
+                isReadOnlyVault: Boolean(lib.is_read_only),
+                onCreateSubfolder: enableAdvancedFileOps
+                  ? () => startCreatingSubfolder(lib, node.fullPath, node.depth + 1)
+                  : undefined,
+                onImportAudioFiles: enableAdvancedFileOps
+                  ? () => void handleImportDialogForFolder(lib, node.fullPath)
+                  : undefined,
+                onRenameSubfolder: enableAdvancedFileOps
+                  ? () => startRenamingSubfolder(lib, node.fullPath, node.name)
+                  : undefined,
+                onTrashSubfolder: enableAdvancedFileOps
+                  ? () =>
+                      void requestTrashSubfolder(
+                        lib.id,
+                        node.fullPath,
+                        node.name,
+                        node.count
+                      )
+                  : undefined,
+                onOpenSettings: () => setSettingsOpen(true, "libraries"),
+                settingsLabel: "Manage Library in Settings",
+              }
+        );
       }}
       style={{
         position: "absolute",

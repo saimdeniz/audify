@@ -164,7 +164,7 @@ describe("Slices UI Unification, Favorites, Undo/Redo & Guards", () => {
     });
   });
 
-  it("renders General mode buttons in order and SliceGeneralControls with clean 'Open Folder' label", async () => {
+  it("renders Tools mode buttons (Slices, Duplicates without redundant sidebar views) and SliceGeneralControls with clean 'Open Folder' label", async () => {
     localStorage.setItem("audify_filter_drawer_open", "true");
     localStorage.setItem("audify_filter_drawer_tab", "general");
 
@@ -183,21 +183,13 @@ describe("Slices UI Unification, Favorites, Undo/Redo & Guards", () => {
 
     render(<FilterDrawer />);
 
-    const favBtn = await screen.findByRole("button", { name: /Favorites/i });
-    const binBtn = screen.getByRole("button", { name: /Session Bin/i });
-    const recBtn = screen.getByRole("button", { name: /Recent/i });
-    const slicesBtn = screen.getByRole("button", { name: /^Slices$/i });
+    expect(await screen.findByRole("button", { name: /^Tools$/i })).toBeTruthy();
+    const slicesBtn = await screen.findByRole("button", { name: /^Slices$/i });
     const dupBtn = screen.getByRole("button", { name: /^Duplicates$/i });
 
-    expect(
-      favBtn.compareDocumentPosition(binBtn) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
-    expect(
-      binBtn.compareDocumentPosition(recBtn) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
-    expect(
-      recBtn.compareDocumentPosition(slicesBtn) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Favorites$/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Session Bin$/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Recent$/i })).toBeNull();
     expect(
       slicesBtn.compareDocumentPosition(dupBtn) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();

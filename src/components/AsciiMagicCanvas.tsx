@@ -22,10 +22,11 @@ export interface AsciiMagicCanvasProps {
   motionSpeed: number;
   themeMode: ThemeMode;
   fit?: "cover" | "contain";
+  blurPx?: number;
 }
 
 export const AsciiMagicCanvas: React.FC<AsciiMagicCanvasProps> = React.memo(
-  ({ slug, look, motionSpeed, themeMode, fit = "cover" }) => {
+  ({ slug, look, motionSpeed, themeMode, fit = "cover", blurPx = 0 }) => {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const metaRef = useRef<AsciiMagicPieceMeta | null>(null);
     const frameRef = useRef<AsciiMagicFrame | null>(null);
@@ -41,16 +42,44 @@ export const AsciiMagicCanvas: React.FC<AsciiMagicCanvasProps> = React.memo(
       motionSpeed,
       themeMode,
       fit,
+      blurPx,
     });
-    configRef.current = { slug, look, motionSpeed, themeMode, fit };
+    configRef.current = { slug, look, motionSpeed, themeMode, fit, blurPx };
     const warnedSlugErrorRef = useRef<string | null>(null);
+    const sandboxRetainedRef = useRef(false);
+    const idleReleaseTimerRef = useRef<number | null>(null);
+    const resumeLoopRef = useRef<(() => void) | null>(null);
+
+    const ensureSandboxRetained = () => {
+      if (idleReleaseTimerRef.current !== null) {
+        window.clearTimeout(idleReleaseTimerRef.current);
+        idleReleaseTimerRef.current = null;
+      }
+      if (!sandboxRetainedRef.current) {
+        asciiMagicSandbox.retainConsumer();
+        sandboxRetainedRef.current = true;
+      }
+    };
+
+    const scheduleIdleSandboxRelease = () => {
+      if (idleReleaseTimerRef.current !== null || !sandboxRetainedRef.current) {
+        return;
+      }
+      idleReleaseTimerRef.current = window.setTimeout(() => {
+        idleReleaseTimerRef.current = null;
+        if (sandboxRetainedRef.current) {
+          asciiMagicSandbox.releaseConsumer();
+          sandboxRetainedRef.current = false;
+        }
+      }, 8000);
+    };
 
     const paintCurrent = () => {
       const canvas = canvasRef.current;
       const meta = metaRef.current;
       const frame = frameRef.current;
       if (!canvas || !meta || !frame) return;
-      const ctx = canvas.getContext("2d");
+      const ctx = canvas.getContext("2d", { alpha: false });
       if (!ctx) return;
       const { width, height, dpr } = sizeRef.current;
       if (width <= 0 || height <= 0) return;
@@ -65,7 +94,7 @@ export const AsciiMagicCanvas: React.FC<AsciiMagicCanvasProps> = React.memo(
     const clearCanvas = () => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      const ctx = canvas.getContext("2d");
+      const ctx = canvas.getContext("2d", { alpha: false });
       if (!ctx) return;
       const { width, height, dpr } = sizeRef.current;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -82,8 +111,15 @@ export const AsciiMagicCanvas: React.FC<AsciiMagicCanvasProps> = React.memo(
         const width = Math.max(0, Math.round(rect.width));
         const height = Math.max(0, Math.round(rect.height));
         const rawDpr = window.devicePixelRatio || 1;
-        const dpr =
+        const blur = configRef.current.blurPx;
+        const baseDpr =
           width > 640 ? Math.min(1.25, rawDpr) : Math.min(1.5, rawDpr);
+        const dpr =
+          blur >= 6
+            ? Math.min(0.5, baseDpr)
+            : blur >= 2
+              ? Math.min(0.75, baseDpr)
+              : baseDpr;
         const targetW = Math.max(1, Math.round(width * dpr));
         const targetH = Math.max(1, Math.round(height * dpr));
         if (canvas.width !== targetW || canvas.height !== targetH) {
@@ -94,16 +130,23 @@ export const AsciiMagicCanvas: React.FC<AsciiMagicCanvasProps> = React.memo(
         paintCurrent();
       };
 
-      asciiMagicSandbox.retainConsumer();
+      ensureSandboxRetained();
       updateSize();
       const observer = new ResizeObserver(updateSize);
       observer.observe(canvas);
       return () => {
         observer.disconnect();
+        if (idleReleaseTimerRef.current !== null) {
+          window.clearTimeout(idleReleaseTimerRef.current);
+          idleReleaseTimerRef.current = null;
+        }
         releaseCanvasRenderCaches(canvas, true);
-        asciiMagicSandbox.releaseConsumer();
+        if (sandboxRetainedRef.current) {
+          asciiMagicSandbox.releaseConsumer();
+          sandboxRetainedRef.current = false;
+        }
       };
-    }, []);
+    }, [blurPx]);
 
     // Load active piece in sandbox & subscribe to install updates for this slug.
     useEffect(() => {
@@ -119,6 +162,7 @@ export const AsciiMagicCanvas: React.FC<AsciiMagicCanvasProps> = React.memo(
       let loadVersion = "";
 
       const loadTarget = () => {
+        ensureSandboxRetained();
         versionRef.current = loadVersion;
         void asciiMagicSandbox
           .loadPiece(slug, loadVersion)
@@ -128,6 +172,11 @@ export const AsciiMagicCanvas: React.FC<AsciiMagicCanvasProps> = React.memo(
             metaRef.current = loaded.meta;
             frameRef.current = loaded.frame;
             paintCurrent();
+            if (loaded.meta.still || configRef.current.motionSpeed <= 0) {
+              scheduleIdleSandboxRelease();
+            } else {
+              resumeLoopRef.current?.();
+            }
           })
           .catch((err) => {
             if (cancelled) return;
@@ -162,7 +211,11 @@ export const AsciiMagicCanvas: React.FC<AsciiMagicCanvasProps> = React.memo(
 
     // Drive smooth animation loop throttled by piece FPS x motionSpeed.
     useEffect(() => {
-      if (!slug || motionSpeed <= 0) return;
+      if (!slug || motionSpeed <= 0) {
+        resumeLoopRef.current = null;
+        scheduleIdleSandboxRelease();
+        return;
+      }
 
       const reducedMotionQuery =
         typeof window !== "undefined" &&
@@ -183,15 +236,19 @@ export const AsciiMagicCanvas: React.FC<AsciiMagicCanvasProps> = React.memo(
 
       const tick = (now: number) => {
         if (cancelled) return;
+        const meta = metaRef.current;
+        if (!meta || meta.still) {
+          rafId = 0;
+          if (meta?.still) scheduleIdleSandboxRelease();
+          return;
+        }
         if (isMotionPaused()) {
           rafId = 0;
           lastTickMs = now;
+          scheduleIdleSandboxRelease();
           return;
         }
         rafId = requestAnimationFrame(tick);
-
-        const meta = metaRef.current;
-        if (!meta || meta.still) return;
 
         const targetFps = Math.max(1, Math.min(60, (meta.fps || 15) * motionSpeed));
         const intervalMs = 1000 / targetFps;
@@ -199,6 +256,7 @@ export const AsciiMagicCanvas: React.FC<AsciiMagicCanvasProps> = React.memo(
           return;
         }
 
+        ensureSandboxRetained();
         const dt = Math.min(0.25, Math.max(0, (now - lastTickMs) / 1000));
         lastTickMs = now;
         elapsedSec += dt * motionSpeed;
@@ -225,9 +283,13 @@ export const AsciiMagicCanvas: React.FC<AsciiMagicCanvasProps> = React.memo(
 
       const startLoopIfNeeded = () => {
         if (cancelled || rafId !== 0 || isMotionPaused()) return;
+        const meta = metaRef.current;
+        if (!meta || meta.still) return;
+        ensureSandboxRetained();
         lastTickMs = performance.now();
         rafId = requestAnimationFrame(tick);
       };
+      resumeLoopRef.current = startLoopIfNeeded;
 
       const handlePauseChange = () => {
         if (isMotionPaused()) {
@@ -235,6 +297,7 @@ export const AsciiMagicCanvas: React.FC<AsciiMagicCanvasProps> = React.memo(
             cancelAnimationFrame(rafId);
             rafId = 0;
           }
+          scheduleIdleSandboxRelease();
         } else {
           startLoopIfNeeded();
         }
@@ -245,6 +308,7 @@ export const AsciiMagicCanvas: React.FC<AsciiMagicCanvasProps> = React.memo(
       startLoopIfNeeded();
       return () => {
         cancelled = true;
+        resumeLoopRef.current = null;
         unsubscribeActivity();
         reducedMotionQuery?.removeEventListener?.("change", handlePauseChange);
         if (rafId !== 0) {

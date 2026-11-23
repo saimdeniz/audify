@@ -3,7 +3,7 @@ mod export;
 mod metadata;
 mod pcm_ops;
 
-pub(crate) use decode::open_audio_decoder;
+pub(crate) use decode::{copy_packet_samples, open_audio_decoder, OpenedAudioDecoder};
 pub use decode::{
     compute_bins_from_blocks, compute_hires_peaks, compute_preview_norm_gain,
     decode_audio_and_peaks, fallback_lofty_props,
@@ -11,9 +11,11 @@ pub use decode::{
 #[cfg(test)]
 pub use export::export_wav_slice;
 pub use export::{
-    build_default_slice_file_name, export_wav_slice_to_path, export_wav_slice_with_options,
-    transcode_audio_to_pcm_wav,
+    build_default_slice_file_name_with_preset, export_wav_slice_to_path_with_preset,
+    export_wav_slice_with_preset, transcode_audio_to_pcm_wav,
 };
+#[cfg(test)]
+pub use export::export_wav_slice_with_options;
 pub use metadata::{
     detect_audio_genre, extract_embedded_audio_meta, extract_embedded_meta_and_bpm_key,
     extract_embedded_meta_batch, resolve_metadata_titles_validated,
@@ -274,6 +276,86 @@ mod tests {
             faded_last.abs() <= 100,
             "3ms micro-fade must ramp end down to zero (got {})",
             faded_last
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn export_wav_slice_preserves_24bit_and_supports_nle_48k_24bit_preset() {
+        let root = std::env::temp_dir().join(format!("audify_24bit_nle_{}", std::process::id()));
+        let slices = root.join("slices");
+        fs::create_dir_all(&slices).unwrap();
+
+        // 1. 44.1 kHz 16-bit mono source (0.50s = 22050 frames)
+        let src_44k = root.join("sfx_44k16.wav");
+        let samples_44k: Vec<i16> = (0..22_050)
+            .map(|i| (((i as f32) * 0.05).sin() * 20_000.0) as i16)
+            .collect();
+        write_wav_i16(&src_44k, 44_100, 1, &samples_44k).unwrap();
+
+        // Preset wav_24 keeps 44.1 kHz and outputs 24-bit PCM (3 bytes/sample)
+        let out_24 = export_wav_slice_with_preset(
+            &src_44k,
+            &slices,
+            0.0,
+            0.25,
+            None,
+            Some(false),
+            Some("wav_24"),
+        )
+        .unwrap();
+        assert!(out_24.contains("_24b.wav"));
+        let bytes_24 = fs::read(&out_24).unwrap();
+        let sr_24 = u32::from_le_bytes([bytes_24[24], bytes_24[25], bytes_24[26], bytes_24[27]]);
+        let bits_24 = u16::from_le_bytes([bytes_24[34], bytes_24[35]]);
+        assert_eq!(sr_24, 44_100);
+        assert_eq!(bits_24, 24);
+        assert_eq!((bytes_24.len() - 44) % 3, 0);
+
+        // Preset nle_48k_24 resamples 44.1 kHz -> 48 kHz and outputs 24-bit PCM
+        let out_nle = export_wav_slice_with_preset(
+            &src_44k,
+            &slices,
+            0.0,
+            0.25,
+            None,
+            Some(false),
+            Some("nle_48k_24"),
+        )
+        .unwrap();
+        assert!(out_nle.contains("_48k24b.wav"));
+        let bytes_nle = fs::read(&out_nle).unwrap();
+        let sr_nle = u32::from_le_bytes([bytes_nle[24], bytes_nle[25], bytes_nle[26], bytes_nle[27]]);
+        let bits_nle = u16::from_le_bytes([bytes_nle[34], bytes_nle[35]]);
+        let frames_nle = (bytes_nle.len() - 44) / 3;
+        assert_eq!(sr_nle, 48_000);
+        assert_eq!(bits_nle, 24);
+        assert!(
+            (frames_nle as isize - 12_000).abs() <= 16,
+            "0.25s resampled to 48kHz should yield ~12000 frames (got {})",
+            frames_nle
+        );
+
+        // 2. 48 kHz 32-bit float source exported with "original" preserves lossless 24-bit (not 16-bit)
+        let src_f32 = root.join("hi_res_32f.wav");
+        let f32_samples: Vec<f32> = (0..12_000).map(|i| ((i as f32) * 0.02).sin() * 0.5).collect();
+        write_test_wav_f32(&src_f32, 48_000, 1, &f32_samples);
+        let out_orig_hi = export_wav_slice_with_preset(
+            &src_f32,
+            &slices,
+            0.0,
+            0.20,
+            None,
+            Some(false),
+            Some("original"),
+        )
+        .unwrap();
+        let bytes_orig_hi = fs::read(&out_orig_hi).unwrap();
+        let bits_orig_hi = u16::from_le_bytes([bytes_orig_hi[34], bytes_orig_hi[35]]);
+        assert_eq!(
+            bits_orig_hi, 24,
+            "Original preset must preserve 24-bit headroom on >16-bit lossless sources"
         );
 
         let _ = fs::remove_dir_all(&root);

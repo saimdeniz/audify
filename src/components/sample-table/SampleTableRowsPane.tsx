@@ -120,9 +120,10 @@ export const SampleTableRowsPane: React.FC<SampleTableRowsPaneProps> = ({
       }}
       className="flex-1 overflow-auto relative outline-none"
       tabIndex={0}
-      role="listbox"
+      role="grid"
       aria-label="Samples"
       aria-multiselectable="true"
+      aria-rowcount={samples.length}
     >
       <div
         style={{

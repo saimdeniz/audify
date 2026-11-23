@@ -59,6 +59,7 @@ export const CreditToastBanner: React.FC<{
     onMouseEnter={onPause}
     onMouseLeave={onResume}
     style={{ zIndex: Z_INDEX.creditToast }}
+    data-mica-overlay="true"
     className={`fixed bottom-8 right-4 w-[396px] max-w-[92vw] rounded-md bg-surface-2 border p-3 shadow-2xl space-y-2 ${
       toast.isWarning ? "border-accent" : "border-ok"
     }`}

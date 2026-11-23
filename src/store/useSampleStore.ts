@@ -21,6 +21,7 @@ import {
   applyProfileSettingsToStore,
   buildProfileSettingsJsonFromStore,
 } from "./profileSettingsBridge";
+import { resetPlayheadClock } from "./playheadClock";
 import { createAiSlice, invalidateAiSliceAsyncState } from "./slices/aiSlice";
 import { createCatalogMutationSlice } from "./slices/catalogMutationSlice";
 import { createCatalogSyncSlice } from "./slices/catalogSyncSlice";
@@ -195,12 +196,24 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
     clearSearchDebounceTimer();
     persistNavigationFilters(null, null, false, null);
     clearSmartSearchCache();
+    resetPlayheadClock(0);
     const prevSim = get().similaritySession;
     set({
       allProfileSamples: [],
       trashedProfileSamples: [],
       favoritesCount: 0,
       knownSampleIds: EMPTY_SAMPLE_ID_SET,
+      selectedSample: null,
+      isPlaying: false,
+      currentTimeSec: 0,
+      sliceRange: null,
+      fileOpUndoStack: [],
+      fileOpRedoStack: [],
+      pendingTrashRequest: null,
+      pendingFileConflictPrompt: null,
+      batchRenameSampleIds: null,
+      aiSuggestionsBySampleId: {},
+      pendingAiSuggestionsCount: 0,
       searchQuery: "",
       folderFilter: null,
       selectedCollectionId: null,
@@ -338,6 +351,12 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
         preserveMultiSelect
       );
 
+      const selectionChanged =
+        (reconciled.nextSelected?.id ?? null) !== (live.selectedSample?.id ?? null);
+      if (selectionChanged) {
+        resetPlayheadClock(0);
+      }
+
       set({
         rawSamples: searchedResult,
         samples: filtered,
@@ -347,6 +366,7 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
         durationSec: reconciled.nextSelected
           ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
           : live.durationSec,
+        ...(selectionChanged ? { sliceRange: null, currentTimeSec: 0 } : {}),
       });
     };
 

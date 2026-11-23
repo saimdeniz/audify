@@ -11,7 +11,7 @@ const MAX_SAMPLE_INDEX_CACHE = 250000;
 export function tokenizeSearchWords(raw: string): string[] {
   if (!raw) return [];
   const tokens = new Set<string>();
-  const chunks = raw.split(/[^a-zA-Z0-9\u00C0-\u024F\u011E-\u015F]+/);
+  const chunks = raw.split(/[^\p{L}\p{N}]+/u);
 
   for (const chunk of chunks) {
     if (!chunk) continue;
@@ -151,7 +151,7 @@ export function getIndexedSample(sample: SampleItem): IndexedSampleEntry {
     dotIdx > 0 ? sample.file_name.slice(0, dotIdx) : sample.file_name;
   const foldedStem = foldSearchText(rawStem);
   const normalizedPhraseStem = foldedStem
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
   const foldedExt = foldSearchText(sample.extension || "").replace(/^\./, "");
   const foldedGenre = foldSearchText(rawGenre);

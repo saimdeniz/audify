@@ -4,7 +4,7 @@ use super::{
 };
 use crate::audio::decode_audio_and_peaks;
 use crate::db::{get_active_profile_id, AppState};
-use crate::security::{normalize_clean_path, sanitize_err};
+use crate::security::{ensure_inside, normalize_clean_path, sanitize_err};
 use rusqlite::{params, Connection};
 use std::fs;
 use std::path::Path;
@@ -63,6 +63,7 @@ pub(crate) fn ensure_source_not_a_slice(conn: &Connection, source_path: &Path) -
 
 pub(crate) fn upsert_slice_history_with_meta(
     conn: &Connection,
+    user_dir: Option<&Path>,
     entry: &SliceHistoryUpsert<'_>,
     predecoded: Option<(i64, i64, i64, i64, String)>,
 ) -> Result<SliceHistoryRecord, String> {
@@ -94,24 +95,27 @@ pub(crate) fn upsert_slice_history_with_meta(
         0.0
     };
 
-    if let Ok(Some(old_trash_path)) = conn.query_row(
-        "SELECT trash_file_path FROM sample_slices
-         WHERE profile_id = ?1 AND slice_path = ?2 AND COALESCE(is_trashed, 0) = 1
-         LIMIT 1",
-        params![entry.profile_id, slice_path_str],
-        |r| r.get::<_, Option<String>>(0),
-    ) {
-        let tp = old_trash_path.trim();
-        if !tp.is_empty()
-            && !crate::security::is_unc_or_network_path(tp)
-            && !crate::security::has_ntfs_ads_colon(tp)
-            && normalize_clean_path(tp)
-                .to_lowercase()
-                .contains("/cache/slice_trash/")
-        {
-            if let Ok(meta) = fs::symlink_metadata(tp) {
-                if !meta.file_type().is_symlink() && meta.is_file() {
-                    let _ = fs::remove_file(tp);
+    if let Some(ud) = user_dir {
+        if let Ok(Some(old_trash_path)) = conn.query_row(
+            "SELECT trash_file_path FROM sample_slices
+             WHERE profile_id = ?1 AND slice_path = ?2 AND COALESCE(is_trashed, 0) = 1
+             LIMIT 1",
+            params![entry.profile_id, slice_path_str],
+            |r| r.get::<_, Option<String>>(0),
+        ) {
+            let tp = old_trash_path.trim();
+            let slice_trash_root = ud.join("cache").join("slice_trash");
+            if !tp.is_empty()
+                && !crate::security::is_unc_or_network_path(tp)
+                && !crate::security::has_ntfs_ads_colon(tp)
+                && slice_trash_root.is_dir()
+            {
+                if let Ok(safe_trash) = ensure_inside(&slice_trash_root, Path::new(tp)) {
+                    if let Ok(meta) = fs::symlink_metadata(&safe_trash) {
+                        if !meta.file_type().is_symlink() && meta.is_file() {
+                            let _ = fs::remove_file(&safe_trash);
+                        }
+                    }
                 }
             }
         }
@@ -171,7 +175,7 @@ pub(crate) fn upsert_slice_history_with_conn(
     conn: &Connection,
     entry: &SliceHistoryUpsert<'_>,
 ) -> Result<SliceHistoryRecord, String> {
-    upsert_slice_history_with_meta(conn, entry, None)
+    upsert_slice_history_with_meta(conn, None, entry, None)
 }
 
 pub(super) fn row_to_slice_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<SliceHistoryRecord> {

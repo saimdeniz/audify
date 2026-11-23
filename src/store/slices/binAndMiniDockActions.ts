@@ -83,13 +83,25 @@ export function createBinAndMiniDockActions(ctx: StoreSliceContext) {
     },
 
     removeSampleFromBin: (sampleId: number) => {
-      const next = get().binSampleIds.filter((id) => id !== sampleId);
+      get().removeSamplesFromBin([sampleId]);
+    },
+
+    removeSamplesFromBin: (sampleIds: number[]) => {
+      if (!sampleIds || sampleIds.length === 0) return;
+      const removeSet = new Set(sampleIds);
+      const current = get().binSampleIds;
+      const next = current.filter((id) => !removeSet.has(id));
+      const removedCount = current.length - next.length;
+      if (removedCount === 0) return;
       safeSetItem(AUDIFY_STORAGE_KEYS.binSampleIds, JSON.stringify(next));
       const shouldDisableFilter = next.length === 0 && get().binFilterActive;
       set({
         binSampleIds: next,
-        ...(shouldDisableFilter ? { binFilterActive: false } : {}),
-        statusMessage: `Removed track from Session Bin (${next.length} remaining)`,
+        ...(shouldDisableFilter ? { binFilterActive: false, folderFilter: null } : {}),
+        statusMessage:
+          removedCount === 1
+            ? `Removed track from Session Bin (${next.length} remaining)`
+            : `Removed ${removedCount} tracks from Session Bin (${next.length} remaining)`,
       });
       if (get().binFilterActive || shouldDisableFilter) {
         if (
@@ -131,6 +143,37 @@ export function createBinAndMiniDockActions(ctx: StoreSliceContext) {
         statusMessage: autoBinOnNleDrag
           ? "Auto-Add to Session Bin on NLE drag enabled"
           : "Auto-Add to Session Bin on NLE drag disabled",
+      });
+      void get().persistActiveProfileSettings();
+    },
+
+    setSidebarCollapsed: (sidebarCollapsed: boolean) => {
+      safeSetItem(AUDIFY_STORAGE_KEYS.sidebarCollapsed, String(sidebarCollapsed), {
+        broadcast: false,
+        markEdited: false,
+      });
+      set({ sidebarCollapsed });
+    },
+
+    toggleSidebarCollapsed: () => {
+      const next = !get().sidebarCollapsed;
+      safeSetItem(AUDIFY_STORAGE_KEYS.sidebarCollapsed, String(next), {
+        broadcast: false,
+        markEdited: false,
+      });
+      set({ sidebarCollapsed: next });
+    },
+
+    setSidebarCompactHover: (sidebarCompactHover: boolean) => {
+      safeSetItem(
+        AUDIFY_STORAGE_KEYS.sidebarCompactHover,
+        String(sidebarCompactHover)
+      );
+      set({
+        sidebarCompactHover,
+        statusMessage: sidebarCompactHover
+          ? "Compact sidebar hover overlay enabled"
+          : "Compact sidebar hover overlay disabled",
       });
       void get().persistActiveProfileSettings();
     },
@@ -224,34 +267,41 @@ export function createBinAndMiniDockActions(ctx: StoreSliceContext) {
           }
 
           const initScale = scaleFactor || monitor?.scaleFactor || 1;
-          const monLogicalW = monitor
-            ? Math.round(monitor.size.width / initScale)
+          const workArea =
+            monitor?.workArea ??
+            (monitor
+              ? { position: monitor.position, size: monitor.size }
+              : null);
+          const workLogicalW = workArea
+            ? Math.round(workArea.size.width / initScale)
             : 1920;
-          const monLogicalH = monitor
-            ? Math.round(monitor.size.height / initScale)
-            : 1080;
+          const workLogicalH = workArea
+            ? Math.round(workArea.size.height / initScale)
+            : 1040;
 
-          let dockW = Math.max(480, Math.min(580, Math.round(monLogicalW * 0.27)));
-          let dockH = Math.max(700, Math.min(960, Math.round(monLogicalH * 0.82)));
+          let dockW = Math.max(460, Math.min(560, Math.round(workLogicalW * 0.265)));
+          let dockH = Math.max(540, workLogicalH);
+          const maxDockW = Math.max(440, Math.min(840, workLogicalW));
+          const maxDockH = Math.max(500, workLogicalH);
           let savedDockX: number | null = null;
           let savedDockY: number | null = null;
           try {
-            const raw = safeGetItem(AUDIFY_STORAGE_KEYS.miniDockBoundsV3);
+            const raw = safeGetItem(AUDIFY_STORAGE_KEYS.miniDockBoundsV4);
             if (raw) {
               const parsed = JSON.parse(raw);
               if (
                 typeof parsed?.width === "number" &&
                 parsed.width >= 440 &&
-                parsed.width <= 780
+                parsed.width <= 840
               ) {
-                dockW = Math.round(parsed.width);
+                dockW = Math.min(maxDockW, Math.round(parsed.width));
               }
               if (
                 typeof parsed?.height === "number" &&
                 parsed.height >= 500 &&
-                parsed.height <= 1200
+                parsed.height <= 2400
               ) {
-                dockH = Math.round(parsed.height);
+                dockH = Math.min(maxDockH, Math.round(parsed.height));
               }
               if (
                 typeof parsed?.x === "number" &&
@@ -274,39 +324,58 @@ export function createBinAndMiniDockActions(ctx: StoreSliceContext) {
           }
           await appWindow.setMaximizable(false).catch(() => {});
           await appWindow.setMinSize(new LogicalSize(440, 500)).catch(() => {});
+          await appWindow
+            .setMaxSize(new LogicalSize(maxDockW, maxDockH))
+            .catch(() => {});
           await appWindow.setSize(new LogicalSize(dockW, dockH)).catch(() => {});
 
-          if (monitor) {
-            const scale = scaleFactor || monitor.scaleFactor || 1;
-            const monLeft = monitor.position.x;
-            const monTop = monitor.position.y;
-            const monRight = monLeft + monitor.size.width;
-            const monBottom = monTop + monitor.size.height;
+          if (workArea) {
+            const scale = scaleFactor || monitor?.scaleFactor || 1;
+            const workLeft = workArea.position.x;
+            const workTop = workArea.position.y;
+            const workRight = workLeft + workArea.size.width;
+            const workBottom = workTop + workArea.size.height;
             const physDockW = Math.round(dockW * scale);
 
             const hasValidSavedPos =
               savedDockX !== null &&
               savedDockY !== null &&
-              savedDockX >= monLeft - 20 &&
-              savedDockX <= monRight - 100 &&
-              savedDockY >= monTop - 10 &&
-              savedDockY <= monBottom - 120;
+              savedDockX >= workLeft - 20 &&
+              savedDockX <= workRight - 100 &&
+              savedDockY >= workTop - 10 &&
+              savedDockY <= workBottom - 120;
 
+            const physDockH = Math.round(dockH * scale);
             const targetX = hasValidSavedPos
               ? savedDockX!
-              : Math.max(monLeft + 16, monRight - physDockW - Math.round(24 * scale));
-            const targetY = hasValidSavedPos
-              ? savedDockY!
-              : monTop + Math.round(48 * scale);
+              : Math.max(workLeft, workRight - physDockW);
+            const rawTargetY = hasValidSavedPos ? savedDockY! : workTop;
+            const targetY = Math.max(
+              workTop,
+              Math.min(rawTargetY, Math.max(workTop, workBottom - physDockH))
+            );
 
             await appWindow
               .setPosition(new PhysicalPosition(targetX, targetY))
               .catch(() => {});
           }
 
-          await appWindow.setAlwaysOnTop(get().isMiniDockPinned).catch(() => {});
-          void syncSettingsWindowAlwaysOnTop(get().isMiniDockPinned);
+          const shouldPin = get().isMiniDockPinned || get().miniDockEdgePeek;
+          await appWindow.setAlwaysOnTop(shouldPin).catch(() => {});
+          void syncSettingsWindowAlwaysOnTop(shouldPin);
+          if (get().miniDockEdgePeek) {
+            await invoke("mini_dock_set_edge_peek", {
+              enabled: true,
+              side: get().miniDockEdgeSide,
+            }).catch(() => {});
+          }
         } else {
+          // Ensure Windows Edge-Peek region clip is fully cleared before restoring full studio
+          await invoke("mini_dock_set_edge_peek", {
+            enabled: false,
+            side: null,
+          }).catch(() => {});
+
           // Persist user's Mini Dock size & position before restoring full studio
           try {
             const [isMaxNow, innerSize, outerPos, scale] = await Promise.all([
@@ -318,9 +387,9 @@ export function createBinAndMiniDockActions(ctx: StoreSliceContext) {
             if (!isMaxNow && innerSize && outerPos && scale > 0) {
               const logicalW = Math.round(innerSize.width / scale);
               const logicalH = Math.round(innerSize.height / scale);
-              if (logicalW >= 440 && logicalW <= 780) {
+              if (logicalW >= 440 && logicalW <= 840) {
                 safeSetItem(
-                  AUDIFY_STORAGE_KEYS.miniDockBoundsV3,
+                  AUDIFY_STORAGE_KEYS.miniDockBoundsV4,
                   JSON.stringify({
                     width: logicalW,
                     height: logicalH,
@@ -338,6 +407,7 @@ export function createBinAndMiniDockActions(ctx: StoreSliceContext) {
           void syncSettingsWindowAlwaysOnTop(false);
           await appWindow.setMaximizable(true).catch(() => {});
           await appWindow.unmaximize().catch(() => {});
+          await appWindow.setMaxSize(null).catch(() => {});
           await appWindow.setMinSize(new LogicalSize(1024, 640)).catch(() => {});
 
           const restore = savedNormalWindowBounds;

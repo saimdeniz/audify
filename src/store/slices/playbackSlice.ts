@@ -394,19 +394,11 @@ export function createPlaybackSlice(
     setDurationSec: (durationSec: number) => set({ durationSec }),
 
     requestSeek: (timeSec: number, playImmediately = true) => {
-      const { sliceRange, durationSec } = get();
-      let clampedTime = timeSec;
-      if (sliceRange) {
-        if (timeSec < sliceRange.startSec || timeSec >= sliceRange.endSec) {
-          clampedTime = sliceRange.startSec;
-        } else {
-          clampedTime = timeSec;
-        }
-      } else if (durationSec > 0) {
-        clampedTime = Math.max(0, Math.min(durationSec, timeSec));
-      } else {
-        clampedTime = Math.max(0, timeSec);
-      }
+      const { durationSec } = get();
+      const clampedTime =
+        durationSec > 0
+          ? Math.max(0, Math.min(durationSec, timeSec))
+          : Math.max(0, timeSec);
 
       resetPlayheadClock(clampedTime);
       const seq = (get().seekRequest?.seq || 0) + 1;

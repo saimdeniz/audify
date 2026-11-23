@@ -1,9 +1,21 @@
 import React, { Suspense, lazy, useEffect, useState } from "react";
 import { useSampleStore } from "../store/useSampleStore";
 import {
+  isAppWindowActive,
+  subscribeAppActivity,
+} from "../utils/appFocusMonitor";
+import {
   getCachedViewportUrl,
   getWallpaperViewportUrl,
+  isGifWallpaperPath,
+  isVideoWallpaperPath,
 } from "../utils/thumbnailCache";
+import {
+  canPreBlurWallpaper,
+  getBlurredWallpaperUrl,
+  getCachedBlurredWallpaperUrl,
+} from "../utils/wallpaperBlurCache";
+import { WallpaperVideoLayer } from "./WallpaperVideoLayer";
 
 const LazyAsciiWallpaperCanvas = lazy(() =>
   import("./AsciiWallpaperCanvas").then((m) => ({
@@ -38,29 +50,85 @@ export const AppAtmosphereViewport: React.FC = React.memo(() => {
   const asciiMotionSpeed = useSampleStore((s) => s.asciiMotionSpeed);
   const isPlaying = useSampleStore((s) => s.isPlaying);
 
-  const needsImageUrl = wallpaperKind === "image" && !!customBgImage;
-  const [bgImageUrl, setBgImageUrl] = useState<string>(() =>
-    needsImageUrl ? getCachedViewportUrl(customBgImage) || "" : ""
+  const needsMediaUrl = wallpaperKind === "image" && !!customBgImage;
+  const isVideoBg = needsMediaUrl && isVideoWallpaperPath(customBgImage);
+  const isGifBg = needsMediaUrl && !isVideoBg && isGifWallpaperPath(customBgImage);
+  const [gifPlaybackActive, setGifPlaybackActive] = useState<boolean>(() =>
+    isAppWindowActive()
+  );
+
+  useEffect(() => {
+    if (!isGifBg) return;
+    setGifPlaybackActive(isAppWindowActive());
+    return subscribeAppActivity(() => {
+      setGifPlaybackActive(isAppWindowActive());
+    });
+  }, [isGifBg]);
+
+  const [bgMediaUrl, setBgMediaUrl] = useState<string>(() =>
+    needsMediaUrl ? getCachedViewportUrl(customBgImage) || "" : ""
   );
 
   useEffect(() => {
     let active = true;
-    if (!needsImageUrl || themeMode === "contrast") {
-      setBgImageUrl("");
+    if (!needsMediaUrl || themeMode === "contrast") {
+      setBgMediaUrl("");
       return;
     }
     const cached = getCachedViewportUrl(customBgImage);
     if (cached) {
-      setBgImageUrl(cached);
+      setBgMediaUrl(cached);
     } else {
-      getWallpaperViewportUrl(customBgImage).then((url) => {
-        if (active) setBgImageUrl(url);
+      void getWallpaperViewportUrl(customBgImage).then((url) => {
+        if (active) setBgMediaUrl(url);
       });
     }
     return () => {
       active = false;
     };
-  }, [needsImageUrl, customBgImage, themeMode]);
+  }, [needsMediaUrl, customBgImage, themeMode]);
+
+  const roundedBlur = Math.round(customBgBlur);
+  const preBlurEligible =
+    needsMediaUrl &&
+    themeMode !== "contrast" &&
+    canPreBlurWallpaper(customBgImage, roundedBlur);
+  const blurRequestKey = preBlurEligible
+    ? `${customBgImage}|${roundedBlur}`
+    : "";
+
+  const [preBlurred, setPreBlurred] = useState<{
+    key: string;
+    url: string;
+  } | null>(() => {
+    if (!preBlurEligible) return null;
+    const cached = getCachedBlurredWallpaperUrl(customBgImage, roundedBlur);
+    return cached ? { key: blurRequestKey, url: cached } : null;
+  });
+
+  useEffect(() => {
+    if (!preBlurEligible) {
+      setPreBlurred(null);
+      return;
+    }
+    const cached = getCachedBlurredWallpaperUrl(customBgImage, roundedBlur);
+    if (cached) {
+      setPreBlurred({ key: blurRequestKey, url: cached });
+      return;
+    }
+    let active = true;
+    const timer = window.setTimeout(() => {
+      void getBlurredWallpaperUrl(customBgImage, roundedBlur).then((url) => {
+        if (active && url) {
+          setPreBlurred({ key: blurRequestKey, url });
+        }
+      });
+    }, 90);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [preBlurEligible, customBgImage, roundedBlur, blurRequestKey]);
 
   if (themeMode === "contrast") {
     return null;
@@ -68,8 +136,16 @@ export const AppAtmosphereViewport: React.FC = React.memo(() => {
 
   const showAsciiLayer = wallpaperKind === "ascii_preset";
   const showMagicLayer = wallpaperKind === "ascii_magic" && !!asciiMagicSlug;
-  const showImageLayer = wallpaperKind === "image" && !!bgImageUrl;
-  const hasBackdrop = showAsciiLayer || showMagicLayer || showImageLayer;
+  const showVideoLayer = isVideoBg && !!bgMediaUrl;
+  const showImageLayer = wallpaperKind === "image" && !isVideoBg && !!bgMediaUrl;
+  const hasBackdrop =
+    showAsciiLayer || showMagicLayer || showVideoLayer || showImageLayer;
+
+  const activePreBlurredUrl =
+    showImageLayer && preBlurred?.key === blurRequestKey ? preBlurred.url : "";
+  const effectiveImageUrl = activePreBlurredUrl || bgMediaUrl;
+  const needsLiveBlur =
+    hasBackdrop && customBgBlur > 0 && !activePreBlurredUrl;
 
   return (
     <div
@@ -95,62 +171,71 @@ export const AppAtmosphereViewport: React.FC = React.memo(() => {
         />
       )}
 
-      {showAsciiLayer && (
-        <div
-          className="absolute inset-0"
-          style={{ opacity: customBgOpacity, willChange: "opacity" }}
-        >
-          <Suspense fallback={null}>
-            <LazyAsciiWallpaperCanvas
-              wallpaperKind={wallpaperKind}
-              asciiPreset={asciiPreset}
-              motionSpeed={asciiMotionSpeed}
-              accentHex={accentColor}
-              themeMode={themeMode}
-              isPlaying={isPlaying}
-            />
-          </Suspense>
-        </div>
-      )}
+      {/* Dedicated isolation group keeps live backdrop-filter scoped strictly to media */}
+      <div className="absolute inset-0" style={{ isolation: "isolate" }}>
+        {showAsciiLayer && (
+          <div
+            className="absolute inset-0"
+            style={{ opacity: customBgOpacity, willChange: "opacity" }}
+          >
+            <Suspense fallback={null}>
+              <LazyAsciiWallpaperCanvas
+                wallpaperKind={wallpaperKind}
+                asciiPreset={asciiPreset}
+                motionSpeed={asciiMotionSpeed}
+                accentHex={accentColor}
+                themeMode={themeMode}
+                isPlaying={isPlaying}
+                blurPx={customBgBlur}
+              />
+            </Suspense>
+          </div>
+        )}
 
-      {showMagicLayer && (
-        <div
-          className="absolute inset-0"
-          style={{ opacity: customBgOpacity, willChange: "opacity" }}
-        >
-          <Suspense fallback={null}>
-            <LazyAsciiMagicCanvas
-              slug={asciiMagicSlug}
-              look={asciiMagicLook}
-              motionSpeed={asciiMotionSpeed}
-              themeMode={themeMode}
-              fit={asciiMagicFit}
-            />
-          </Suspense>
-        </div>
-      )}
+        {showMagicLayer && (
+          <div
+            className="absolute inset-0"
+            style={{ opacity: customBgOpacity, willChange: "opacity" }}
+          >
+            <Suspense fallback={null}>
+              <LazyAsciiMagicCanvas
+                slug={asciiMagicSlug}
+                look={asciiMagicLook}
+                motionSpeed={asciiMotionSpeed}
+                themeMode={themeMode}
+                fit={asciiMagicFit}
+                blurPx={customBgBlur}
+              />
+            </Suspense>
+          </div>
+        )}
 
-      {showImageLayer && (
-        <div
-          className="absolute inset-0 bg-cover bg-center bg-no-repeat"
-          style={{
-            backgroundImage: `url("${bgImageUrl}")`,
-            opacity: customBgOpacity,
-            willChange: "opacity",
-          }}
-        />
-      )}
+        {showVideoLayer && (
+          <WallpaperVideoLayer src={bgMediaUrl} opacity={customBgOpacity} />
+        )}
 
-      {/* In-place optical blur layer keeps exact 1:1 image framing with zero zoom jump */}
-      {hasBackdrop && customBgBlur > 0 && (
-        <div
-          className="absolute inset-0 pointer-events-none"
-          style={{
-            backdropFilter: `blur(${customBgBlur}px)`,
-            WebkitBackdropFilter: `blur(${customBgBlur}px)`,
-          }}
-        />
-      )}
+        {showImageLayer && (!isGifBg || gifPlaybackActive) && (
+          <div
+            className="absolute inset-0 bg-cover bg-center bg-no-repeat"
+            style={{
+              backgroundImage: `url("${effectiveImageUrl}")`,
+              opacity: customBgOpacity,
+              willChange: "opacity",
+            }}
+          />
+        )}
+
+        {/* Live optical blur only mounts for motion backdrops or while pre-blur settles */}
+        {needsLiveBlur && (
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{
+              backdropFilter: `blur(${customBgBlur}px)`,
+              WebkitBackdropFilter: `blur(${customBgBlur}px)`,
+            }}
+          />
+        )}
+      </div>
 
       {hasBackdrop && (
         <div

@@ -499,7 +499,7 @@ export function createAiSlice(ctx: StoreSliceContext): AiSliceActions {
         if (approve) {
           await get().refreshAfterCatalogMutation({
             reloadSamples: true,
-            syncCatalog: !isStandaloneSettingsWindow(),
+            syncCatalog: true,
           });
         } else {
           postCrossWindowSync("catalog");

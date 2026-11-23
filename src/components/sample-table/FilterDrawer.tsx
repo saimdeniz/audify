@@ -77,8 +77,6 @@ interface FilterDrawerProps {
 export const FilterDrawer: React.FC<FilterDrawerProps> = ({
   compact = false,
 }) => {
-  const favoriteOnly = useSampleStore((s) => s.favoriteOnly);
-  const recentOnly = useSampleStore((s) => s.recentOnly);
   const binFilterActive = useSampleStore((s) => s.binFilterActive);
   const duplicatesFilterActive = useSampleStore(
     (s) => s.duplicatesFilterActive
@@ -91,51 +89,57 @@ export const FilterDrawer: React.FC<FilterDrawerProps> = ({
   const selectedTagIds = useSampleStore((s) => s.selectedTagIds);
   const searchQuery = useSampleStore((s) => s.searchQuery);
 
+  const isContextualToolsView = trashFilterActive || binFilterActive;
+
   const [isOpen, setIsOpen] = useState<boolean>(
-    () => trashFilterActive || safeGetItem(DRAWER_OPEN_KEY) === "true"
+    () => isContextualToolsView || safeGetItem(DRAWER_OPEN_KEY) === "true"
   );
 
   const [activeTab, setActiveTab] = useState<FilterDrawerTabId>(() => {
-    if (trashFilterActive) return "general";
+    if (isContextualToolsView) return "general";
     const saved = safeGetItem(DRAWER_TAB_KEY) as FilterDrawerTabId | null;
-    return saved && VALID_TABS.includes(saved) ? saved : "type";
+    return saved && VALID_TABS.includes(saved) ? saved : "general";
   });
 
-  const prevTrashActiveRef = useRef<boolean>(trashFilterActive);
-  const preTrashDrawerStateRef = useRef<{
+  const prevContextualActiveRef = useRef<boolean>(isContextualToolsView);
+  const preContextualDrawerStateRef = useRef<{
     isOpen: boolean;
     activeTab: FilterDrawerTabId;
   } | null>(
-    trashFilterActive
+    isContextualToolsView
       ? {
           isOpen: safeGetItem(DRAWER_OPEN_KEY) === "true",
           activeTab: (() => {
             const saved = safeGetItem(DRAWER_TAB_KEY) as FilterDrawerTabId | null;
-            return saved && VALID_TABS.includes(saved) ? saved : "type";
+            return saved && VALID_TABS.includes(saved) ? saved : "general";
           })(),
         }
       : null
   );
 
-  // Auto-expand FilterDrawer to General when Trash opens, and restore user's prior drawer state on exit
+  // Auto-expand FilterDrawer to Tools when Trash or Session Bin opens, and restore user's prior drawer state on exit
   useEffect(() => {
-    const wasTrashActive = prevTrashActiveRef.current;
-    prevTrashActiveRef.current = trashFilterActive;
+    const wasActive = prevContextualActiveRef.current;
+    prevContextualActiveRef.current = isContextualToolsView;
 
-    if (!wasTrashActive && trashFilterActive) {
-      preTrashDrawerStateRef.current = { isOpen, activeTab };
+    if (!wasActive && isContextualToolsView) {
+      preContextualDrawerStateRef.current = { isOpen, activeTab };
       setActiveTab("general");
       setIsOpen(true);
-    } else if (wasTrashActive && !trashFilterActive && preTrashDrawerStateRef.current) {
-      const saved = preTrashDrawerStateRef.current;
-      preTrashDrawerStateRef.current = null;
+    } else if (
+      wasActive &&
+      !isContextualToolsView &&
+      preContextualDrawerStateRef.current
+    ) {
+      const saved = preContextualDrawerStateRef.current;
+      preContextualDrawerStateRef.current = null;
       setIsOpen(saved.isOpen);
       setActiveTab(saved.activeTab);
     }
-  }, [trashFilterActive, isOpen, activeTab]);
+  }, [isContextualToolsView, isOpen, activeTab]);
 
   useEffect(() => {
-    if (trashFilterActive) return;
+    if (isContextualToolsView) return;
     safeSetItem(DRAWER_OPEN_KEY, String(isOpen), {
       broadcast: false,
       markEdited: false,
@@ -144,7 +148,7 @@ export const FilterDrawer: React.FC<FilterDrawerProps> = ({
       broadcast: false,
       markEdited: false,
     });
-  }, [isOpen, activeTab, trashFilterActive]);
+  }, [isOpen, activeTab, isContextualToolsView]);
 
   const activeCount = useActiveDrawerFilterCount();
 
@@ -165,11 +169,9 @@ export const FilterDrawer: React.FC<FilterDrawerProps> = ({
   }> = [
     {
       id: "general",
-      label: "General",
-      shortLabel: "General",
+      label: "Tools",
+      shortLabel: "Tools",
       hasActive:
-        favoriteOnly ||
-        recentOnly ||
         binFilterActive ||
         slicesFilterActive ||
         duplicatesFilterActive ||

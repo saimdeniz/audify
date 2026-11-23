@@ -1,7 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { Search, Sparkles, X } from "lucide-react";
 import { useSampleStore } from "../../store/useSampleStore";
 import { SampleItem } from "../../types";
+import { setEdgePeekCollapsedState } from "../../utils/appFocusMonitor";
 import {
   isOsDragCurrentlyInFlight,
   startNativePitchedSampleDrag,
@@ -17,7 +20,14 @@ import {
 } from "./MiniDockContextMenu";
 import { MiniDockHeader } from "./MiniDockHeader";
 import { MiniDockList } from "./MiniDockList";
+import { MiniDockSortDropdown } from "./MiniDockSortDropdown";
 import { MiniDockTransport } from "./MiniDockTransport";
+
+const LazySlicesTableView = lazy(() =>
+  import("../sample-table/SlicesTableView").then((m) => ({
+    default: m.SlicesTableView,
+  }))
+);
 
 export const MiniDockShell: React.FC = () => {
   const samples = useSampleStore((s) => s.samples);
@@ -29,6 +39,13 @@ export const MiniDockShell: React.FC = () => {
   const autoBinOnNleDrag = useSampleStore((s) => s.autoBinOnNleDrag);
   const statusMessage = useSampleStore((s) => s.statusMessage);
   const miniDockShortcut = useSampleStore((s) => s.shortcuts.toggleMiniDock);
+  const slicesFilterActive = useSampleStore((s) => s.slicesFilterActive);
+  const trashFilterActive = useSampleStore((s) => s.trashFilterActive);
+  const trashViewTab = useSampleStore((s) => s.trashViewTab);
+  const miniDockEdgePeek = useSampleStore((s) => s.miniDockEdgePeek);
+  const miniDockEdgeSide = useSampleStore((s) => s.miniDockEdgeSide);
+  const themeMode = useSampleStore((s) => s.themeMode);
+  const accentColor = useSampleStore((s) => s.accentColor);
 
   const setSearchQuery = useSampleStore((s) => s.setSearchQuery);
   const setSmartSearchSynonyms = useSampleStore(
@@ -37,6 +54,9 @@ export const MiniDockShell: React.FC = () => {
   const setInAppDragSample = useSampleStore((s) => s.setInAppDragSample);
   const addSamplesToBin = useSampleStore((s) => s.addSamplesToBin);
 
+  const showSlicesTable =
+    slicesFilterActive || (trashFilterActive && trashViewTab === "slices");
+
   const searchInputRef = useRef<HTMLInputElement>(null);
   const osDragCleanupTimerRef = useRef<number | null>(null);
   const [miniContextMenu, setMiniContextMenu] =
@@ -44,6 +64,108 @@ export const MiniDockShell: React.FC = () => {
   const [batchPopover, setBatchPopover] = useState<
     "collection" | "tag" | "genre" | null
   >(null);
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
+
+  // Sync Windows Edge-Peek controller with store preference & pause animations when collapsed
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | null = null;
+
+    void listen<{ enabled: boolean; collapsed: boolean; side: string }>(
+      "audify:edge-peek-state",
+      (ev) => {
+        if (!active || !ev.payload) return;
+        setEdgePeekCollapsedState(
+          Boolean(ev.payload.enabled && ev.payload.collapsed)
+        );
+      }
+    )
+      .then((fn) => {
+        if (!active) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+
+    return () => {
+      active = false;
+      setEdgePeekCollapsedState(false);
+      unlisten?.();
+    };
+  }, []);
+
+  // Push live theme & accent RGB colors to the native Win32 Edge-Peek pill
+  useEffect(() => {
+    const surfaceHex =
+      themeMode === "light"
+        ? "#EAECEF"
+        : themeMode === "contrast"
+          ? "#050505"
+          : "#141417";
+    const borderHex =
+      themeMode === "light"
+        ? "#B0B4C2"
+        : themeMode === "contrast"
+          ? "#666666"
+          : "#2E2E38";
+    const accentHex = /^#[0-9a-f]{6}$/i.test(accentColor)
+      ? accentColor
+      : "#38BDF8";
+    void invoke("mini_dock_edge_peek_set_theme", {
+      surfaceHex,
+      borderHex,
+      accentHex,
+      isLight: themeMode === "light",
+    }).catch(() => {});
+  }, [themeMode, accentColor, miniDockEdgePeek]);
+
+  useEffect(() => {
+    if (!miniDockEdgePeek) {
+      setEdgePeekCollapsedState(false);
+    }
+    void invoke("mini_dock_set_edge_peek", {
+      enabled: miniDockEdgePeek,
+      side: miniDockEdgeSide,
+    }).catch(() => {});
+  }, [miniDockEdgePeek, miniDockEdgeSide]);
+
+  useEffect(() => {
+    return () => {
+      setEdgePeekCollapsedState(false);
+      void invoke("mini_dock_set_edge_peek", {
+        enabled: false,
+        side: null,
+      }).catch(() => {});
+    };
+  }, []);
+
+  // Keep Edge-Peek expanded whenever menus, modals, popovers, or search input are active
+  useEffect(() => {
+    if (!miniDockEdgePeek) return;
+    const syncHold = () => {
+      const hasPortal = Boolean(
+        document.querySelector(
+          "[data-context-menu-portal], [data-quick-create-portal], [data-color-picker-portal], [data-modal-portal], [role='dialog'], [role='menu'], [role='listbox']"
+        )
+      );
+      const shouldHold =
+        hasPortal ||
+        miniContextMenu !== null ||
+        batchPopover !== null ||
+        isSearchFocused;
+      void invoke("mini_dock_edge_peek_set_hold", { hold: shouldHold }).catch(
+        () => {}
+      );
+    };
+    syncHold();
+    const observer = new MutationObserver(syncHold);
+    observer.observe(document.body, { childList: true });
+    return () => {
+      observer.disconnect();
+      void invoke("mini_dock_edge_peek_set_hold", { hold: false }).catch(
+        () => {}
+      );
+    };
+  }, [miniDockEdgePeek, miniContextMenu, batchPopover, isSearchFocused]);
 
   useEffect(() => {
     return () => {
@@ -183,6 +305,8 @@ export const MiniDockShell: React.FC = () => {
                 data-search-input="true"
                 type="text"
                 value={searchQuery}
+                onFocus={() => setIsSearchFocused(true)}
+                onBlur={() => setIsSearchFocused(false)}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Escape") {
@@ -225,23 +349,34 @@ export const MiniDockShell: React.FC = () => {
                 <Sparkles className="w-3.5 h-3.5" />
               </button>
             </div>
+            {!showSlicesTable && <MiniDockSortDropdown />}
           </div>
 
           <ActiveFilterBanner />
 
-          <MiniDockList
-            onStartSampleDrag={startSampleDrag}
-            onOpenContextMenu={setMiniContextMenu}
-            batchPopover={batchPopover}
-            setBatchPopover={setBatchPopover}
-          />
+          {showSlicesTable ? (
+            <Suspense fallback={null}>
+              <LazySlicesTableView />
+            </Suspense>
+          ) : (
+            <MiniDockList
+              onStartSampleDrag={startSampleDrag}
+              onOpenContextMenu={setMiniContextMenu}
+              batchPopover={batchPopover}
+              setBatchPopover={setBatchPopover}
+            />
+          )}
 
           <FilterDrawer compact={true} />
         </div>
       </div>
 
       {/* Colored Compact Dock Status Footer */}
-      <footer className="h-[22px] bg-accent-soft border-t border-accent/40 px-2.5 flex items-center justify-between font-mono text-[10px] text-accent-fg shrink-0">
+      <footer
+        role="status"
+        aria-live="polite"
+        className="h-[22px] bg-accent-soft border-t border-accent/40 px-2.5 flex items-center justify-between font-mono text-[10px] text-accent-fg shrink-0"
+      >
         <span className="truncate font-semibold">
           {statusMessage ||
             `${samples.length.toLocaleString()} / ${totalProfileSamplesCount.toLocaleString()} files`}

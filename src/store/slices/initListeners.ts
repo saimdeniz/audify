@@ -73,6 +73,7 @@ function applyRemoteSettingsFromStorage(get: StoreGet, set: StoreSet): void {
     playheadLatencyMs: snap.playheadLatencyMs,
     audioOutputDeviceId: snap.audioOutputDeviceId,
     enableMica: snap.enableMica,
+    sidebarCompactHover: snap.sidebarCompactHover,
     themeTintIntensity: snap.themeTintIntensity,
     customBgImage: snap.customBgImage,
     customBgBlur: snap.customBgBlur,
@@ -92,6 +93,10 @@ function applyRemoteSettingsFromStorage(get: StoreGet, set: StoreSet): void {
     isShuffle: snap.isShuffle,
     volume: snap.volume,
     sliceMicroFade: snap.sliceMicroFade,
+    exportAudioPreset: snap.exportAudioPreset,
+    skipLeadingSilence: snap.skipLeadingSilence,
+    miniDockEdgePeek: snap.miniDockEdgePeek,
+    miniDockEdgeSide: snap.miniDockEdgeSide,
     normalizePreview: snap.normalizePreview,
     autoAnalyzeBpmKey: snap.autoAnalyzeBpmKey,
     enableAdvancedFileOps: snap.enableAdvancedFileOps,
@@ -129,8 +134,10 @@ function applyRemoteSettingsFromStorage(get: StoreGet, set: StoreSet): void {
     const protectedPatch = preserveRecentLocalProfileFields(state, candidate);
     nextKind = protectedPatch.wallpaperKind;
     return {
-      settingsTab: loadSavedSettingsTab(),
       ...protectedPatch,
+      ...(!isStandaloneSettingsWindow()
+        ? { settingsTab: loadSavedSettingsTab() }
+        : {}),
       activeProfile: state.activeProfile
         ? { ...state.activeProfile, color: protectedPatch.accentColor }
         : null,
@@ -515,9 +522,19 @@ export function registerStoreListenersOnce({
   }).catch(onError("bpm-key-progress listener"));
 
   listen<AiDownloadProgressPayload>("ai-download-progress", (event) => {
+    const stage = (event.payload.stage || "").toLowerCase();
+    const isTerminal =
+      stage === "done" ||
+      stage === "complete" ||
+      stage === "completed" ||
+      stage === "cancelled" ||
+      stage === "canceled" ||
+      stage === "error" ||
+      stage === "failed" ||
+      event.payload.percentage >= 100;
     set({
-      aiDownloadProgress: event.payload,
-      isDownloadingAiModel: true,
+      aiDownloadProgress: isTerminal ? null : event.payload,
+      isDownloadingAiModel: !isTerminal,
     });
   }).catch(onError("ai-download-progress listener"));
 

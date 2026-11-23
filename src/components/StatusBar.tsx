@@ -1,6 +1,13 @@
 import React, { Suspense, lazy, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ChevronDown, Hash, PictureInPicture2, Star } from "lucide-react";
+import {
+  ChevronDown,
+  Hash,
+  PanelLeft,
+  PanelLeftClose,
+  PictureInPicture2,
+  Star,
+} from "lucide-react";
 import { useSampleStore } from "../store/useSampleStore";
 import { beginWindowTitlebarDrag } from "../utils/drag";
 import { CollectionIcon } from "./CollectionIcon";
@@ -69,8 +76,13 @@ export const TopHeaderBar: React.FC = React.memo(() => {
   const filteredCount = useSampleStore((s) => s.samples.length);
   const libraries = useSampleStore((s) => s.libraries);
   const miniDockShortcut = useSampleStore((s) => s.shortcuts.toggleMiniDock);
+  const sidebarCollapsed = useSampleStore((s) => s.sidebarCollapsed);
+  const sidebarCompactHover = useSampleStore((s) => s.sidebarCompactHover);
   const setSettingsOpen = useSampleStore((s) => s.setSettingsOpen);
   const toggleMiniDock = useSampleStore((s) => s.toggleMiniDock);
+  const toggleSidebarCollapsed = useSampleStore(
+    (s) => s.toggleSidebarCollapsed
+  );
   const switchProfile = useSampleStore((s) => s.switchProfile);
   const createProfile = useSampleStore((s) => s.createProfile);
 
@@ -179,8 +191,8 @@ export const TopHeaderBar: React.FC = React.memo(() => {
       onDoubleClick={handleTitlebarDoubleClick}
       className="h-[32px] bg-surface-1 border-b border-line flex items-center justify-between pl-2.5 pr-0 shrink-0 select-none cursor-default relative z-30"
     >
-      {/* Left: Brand Logo + Fast Workspace Profile Switcher */}
-      <div className="flex items-center space-x-3">
+      {/* Left: Brand Logo + Compact Sidebar Toggle + Fast Workspace Profile Switcher */}
+      <div className="flex items-center space-x-2.5">
         <div
           data-tauri-drag-region
           className="flex items-center space-x-1.5 pointer-events-none"
@@ -190,6 +202,34 @@ export const TopHeaderBar: React.FC = React.memo(() => {
             Audify
           </span>
         </div>
+
+        <button
+          type="button"
+          data-no-drag="true"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={toggleSidebarCollapsed}
+          aria-pressed={sidebarCollapsed}
+          title={
+            sidebarCollapsed
+              ? sidebarCompactHover
+                ? "Expand sidebar (currently Compact Hover mode)"
+                : "Expand sidebar"
+              : sidebarCompactHover
+              ? "Compact sidebar (hover icon rail to peek)"
+              : "Collapse sidebar to icon rail"
+          }
+          className={`w-[22px] h-[22px] rounded-sm border flex items-center justify-center shrink-0 transition-colors cursor-pointer ${
+            sidebarCollapsed
+              ? "bg-accent-soft border-accent text-accent-fg"
+              : "bg-surface-3 border-line text-fg-2 hover:text-fg hover:border-accent"
+          }`}
+        >
+          {sidebarCollapsed ? (
+            <PanelLeft className="w-3.5 h-3.5 shrink-0" />
+          ) : (
+            <PanelLeftClose className="w-3.5 h-3.5 shrink-0" />
+          )}
+        </button>
 
         {/* Profile Switcher Dropdown */}
         <div
@@ -306,7 +346,11 @@ export const BottomStatusBar: React.FC = React.memo(() => {
       : undefined;
 
   return (
-    <footer className="h-[24px] bg-surface-1 border-t border-line px-3 flex items-center justify-between font-mono tabular-nums text-[11px] text-fg-2 shrink-0 select-none">
+    <footer
+      role="status"
+      aria-live="polite"
+      className="h-[24px] bg-surface-1 border-t border-line px-3 flex items-center justify-between font-mono tabular-nums text-[11px] text-fg-2 shrink-0 select-none"
+    >
       <div className="flex items-center space-x-3 min-w-0 truncate">
         {isScanning && scanProgress ? (
           <div className="flex items-center space-x-2">

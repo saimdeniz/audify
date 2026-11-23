@@ -184,6 +184,7 @@ export interface AudifyCommandMap {
       pitchSemitones?: number | null;
       applyMicroFade?: boolean | null;
       customName?: string | null;
+      exportPreset?: string | null;
     };
     result: PromotedSliceResult;
   };
@@ -214,6 +215,7 @@ export interface AudifyCommandMap {
       pitchSemitones?: number | null;
       applyMicroFade?: boolean | null;
       customName?: string | null;
+      exportPreset?: string | null;
     };
     result: SliceHistoryEntry;
   };

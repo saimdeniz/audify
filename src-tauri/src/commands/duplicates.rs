@@ -1,7 +1,9 @@
+use crate::ai_tagger::model_manager::active_model_id_and_path;
 use crate::db::{open_read_conn, AppState};
 use crate::duplicates::{
-    compute_duplicates_with_progress, load_duplicate_candidates, persist_sample_hash_cache,
-    DuplicateScanMode, DuplicateScanProgressPayload, DuplicateScanResult,
+    compute_duplicates_with_progress, load_duplicate_candidates_for_model,
+    persist_sample_hash_cache, DuplicateScanMode, DuplicateScanProgressPayload,
+    DuplicateScanResult,
 };
 use std::sync::Arc;
 use tauri::{Emitter, State};
@@ -40,11 +42,26 @@ pub async fn scan_duplicate_samples(
             },
         );
 
+        let active_model_id = if scan_mode == DuplicateScanMode::Similar {
+            Some(active_model_id_and_path(&state_owned.user_dir).0)
+        } else {
+            None
+        };
         let bundle = match open_read_conn(&state_owned.user_dir) {
-            Ok(read_conn) => load_duplicate_candidates(&read_conn, scan_mode, library_id)?,
+            Ok(read_conn) => load_duplicate_candidates_for_model(
+                &read_conn,
+                scan_mode,
+                library_id,
+                active_model_id.as_deref(),
+            )?,
             Err(_) => {
                 let conn = state_owned.lock_db();
-                load_duplicate_candidates(&conn, scan_mode, library_id)?
+                load_duplicate_candidates_for_model(
+                    &conn,
+                    scan_mode,
+                    library_id,
+                    active_model_id.as_deref(),
+                )?
             }
         };
 

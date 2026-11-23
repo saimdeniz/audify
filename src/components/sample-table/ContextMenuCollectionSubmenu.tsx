@@ -80,25 +80,27 @@ export const ContextMenuCollectionSubmenu: React.FC<
       className={`absolute ${submenuPositionClass} w-[236px] bg-surface-2 border border-line-strong rounded-md text-fg shadow-2xl z-40 max-h-[340px] flex flex-col overflow-hidden`}
     >
       {manualRootCollections.length > 2 && (
-        <div className="p-1.5 border-b border-line flex items-center space-x-1.5 bg-surface-1 shrink-0">
-          <Search className="w-3.5 h-3.5 text-fg-3 shrink-0" />
-          <input
-            type="text"
-            value={collectionMenuSearch}
-            onChange={(e) => setCollectionMenuSearch(e.target.value)}
-            placeholder="Filter collections..."
-            autoFocus
-            className="flex-1 min-w-0 bg-transparent text-[11px] text-fg placeholder:text-fg-3 outline-none"
-          />
-          {collectionMenuSearch && (
-            <button
-              type="button"
-              onClick={() => setCollectionMenuSearch("")}
-              className="text-fg-3 hover:text-fg p-0.5"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          )}
+        <div className="p-2 border-b border-line bg-surface-1 shrink-0">
+          <div className="relative flex items-center">
+            <Search className="w-3 h-3 text-fg-3 absolute left-2 pointer-events-none" />
+            <input
+              type="text"
+              value={collectionMenuSearch}
+              onChange={(e) => setCollectionMenuSearch(e.target.value)}
+              placeholder="Filter collections..."
+              autoFocus
+              className="w-full h-[22px] bg-surface-3 border border-line focus:border-accent pl-6 pr-5 text-[11px] text-fg placeholder:text-fg-3 outline-none rounded-xs"
+            />
+            {collectionMenuSearch && (
+              <button
+                type="button"
+                onClick={() => setCollectionMenuSearch("")}
+                className="absolute right-1.5 text-fg-3 hover:text-fg"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
         </div>
       )}
 

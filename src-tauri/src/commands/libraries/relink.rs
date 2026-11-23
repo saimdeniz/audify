@@ -6,12 +6,28 @@ use tauri::{AppHandle, State};
 
 fn strip_prefix_safe<'a>(value: &'a str, prefix_with_slash: &str, prefix_lower: &str, ci: bool) -> Option<&'a str> {
     if ci {
-        let head = value.get(..prefix_with_slash.len())?;
-        if head.to_lowercase() == prefix_lower {
-            value.get(prefix_with_slash.len()..)
-        } else {
-            None
+        // Char-by-char Unicode case-insensitive prefix matching (safe for Turkish İ/ı where UTF-8 byte lengths differ)
+        let mut val_chars = value.char_indices();
+        let mut target_chars = prefix_lower.chars().peekable();
+        while let Some(expected_ch) = target_chars.peek().copied() {
+            let (_byte_idx, actual_ch) = val_chars.next()?;
+            let mut lower_iter = actual_ch.to_lowercase();
+            let first_lower = lower_iter.next()?;
+            if first_lower != expected_ch {
+                return None;
+            }
+            target_chars.next();
+            for extra_lower in lower_iter {
+                if target_chars.next() != Some(extra_lower) {
+                    return None;
+                }
+            }
         }
+        let rest_start = val_chars
+            .next()
+            .map(|(idx, _)| idx)
+            .unwrap_or(value.len());
+        value.get(rest_start..)
     } else {
         value.strip_prefix(prefix_with_slash)
     }

@@ -56,6 +56,7 @@ pub fn validate_path_in_libraries_or_cache(
     }
 
     let raw_target = Path::new(trimmed);
+    super::reject_symlink_ancestors(raw_target)?;
     let sym = fs::symlink_metadata(raw_target).map_err(|_| {
         format!(
             "Path does not exist or cannot be accessed: {}",
@@ -232,7 +233,7 @@ impl AuthorizedAudioScope {
     }
 
     pub fn has_authorized_prefix(&self, raw: &str) -> bool {
-        if raw.contains("..") {
+        if crate::security::has_parent_dir_traversal(raw) {
             return false;
         }
         self.raw_prefixes

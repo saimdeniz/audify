@@ -8,9 +8,13 @@ pub use ops::*;
 pub use trash::*;
 pub use trash_manage::*;
 
-use super::audio_ops::{resolve_slice_cache_dir, resolve_slice_export_dir};
+use super::audio_ops::{
+    resolve_active_export_preset, resolve_slice_cache_dir, resolve_slice_export_dir,
+};
 pub(super) use super::with_read_conn;
-use crate::audio::{build_default_slice_file_name, export_wav_slice_to_path};
+use crate::audio::{
+    build_default_slice_file_name_with_preset, export_wav_slice_to_path_with_preset,
+};
 use crate::db::{get_active_profile_id, AppState};
 use crate::security::{
     collect_profile_slice_dirs, display_leaf, has_ntfs_ads_colon, is_unc_or_network_path,
@@ -73,6 +77,7 @@ pub(crate) struct SliceExportInput {
     pub end_sec: f64,
     pub pitch_semitones: Option<f32>,
     pub apply_micro_fade: Option<bool>,
+    pub export_preset: Option<String>,
     pub cached_slice_path: Option<String>,
     pub custom_name: Option<String>,
 }
@@ -296,12 +301,13 @@ pub(crate) fn promote_or_export_slice_sync(
         let clean_stem = sanitize_custom_slice_stem(raw_custom)?;
         pick_collision_safe_wav_path(&input.export_dir, &clean_stem)
     } else {
-        let default_name = build_default_slice_file_name(
+        let default_name = build_default_slice_file_name_with_preset(
             &input.source_path,
             input.start_sec,
             input.end_sec,
             input.pitch_semitones,
             input.apply_micro_fade,
+            input.export_preset.as_deref(),
         );
         input.export_dir.join(default_name)
     };
@@ -338,13 +344,14 @@ pub(crate) fn promote_or_export_slice_sync(
         });
     }
 
-    let written = export_wav_slice_to_path(
+    let written = export_wav_slice_to_path_with_preset(
         &input.source_path,
         &out_path,
         input.start_sec,
         input.end_sec,
         input.pitch_semitones,
         input.apply_micro_fade,
+        input.export_preset.as_deref(),
     )?;
 
     Ok(PromotedSliceResult {
@@ -378,18 +385,20 @@ pub async fn promote_slice_to_export(
     pitch_semitones: Option<f32>,
     apply_micro_fade: Option<bool>,
     custom_name: Option<String>,
+    export_preset: Option<String>,
 ) -> Result<PromotedSliceResult, String> {
     let state_owned = state.inner().clone();
     let app_clone = app.clone();
     let user_dir_err = state.user_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let (source_path, export_dir) = with_read_conn(&state_owned, |conn| {
+        let (source_path, export_dir, resolved_preset) = with_read_conn(&state_owned, |conn| {
             let src = validate_audio_path_in_scope(conn, &state_owned.user_dir, &file_path)
                 .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
             ensure_source_not_a_slice(conn, &src)?;
             let dir =
                 resolve_slice_export_dir(conn, &state_owned.user_dir, custom_dir.as_deref())?;
-            Ok((src, dir))
+            let preset = resolve_active_export_preset(conn, export_preset.as_deref());
+            Ok((src, dir, preset))
         })?;
         fs::create_dir_all(&export_dir).map_err(|e| {
             format!(
@@ -412,6 +421,7 @@ pub async fn promote_slice_to_export(
                 end_sec,
                 pitch_semitones,
                 apply_micro_fade,
+                export_preset: resolved_preset,
                 cached_slice_path,
                 custom_name,
             },
@@ -458,6 +468,7 @@ pub async fn record_slice_export(
         let conn = state_owned.lock_db();
         history::upsert_slice_history_with_meta(
             &conn,
+            Some(&state_owned.user_dir),
             &SliceHistoryUpsert {
                 profile_id,
                 slice_path: &resolved_slice,
@@ -490,20 +501,23 @@ pub async fn save_slice_to_export(
     pitch_semitones: Option<f32>,
     apply_micro_fade: Option<bool>,
     custom_name: Option<String>,
+    export_preset: Option<String>,
 ) -> Result<SliceHistoryRecord, String> {
     let state_owned = state.inner().clone();
     let app_clone = app.clone();
     let user_dir_err = state.user_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let (source_path, export_dir, profile_id) = with_read_conn(&state_owned, |conn| {
-            let src = validate_audio_path_in_scope(conn, &state_owned.user_dir, &file_path)
-                .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
-            ensure_source_not_a_slice(conn, &src)?;
-            let dir =
-                resolve_slice_export_dir(conn, &state_owned.user_dir, custom_dir.as_deref())?;
-            let pid = get_active_profile_id(conn);
-            Ok((src, dir, pid))
-        })?;
+        let (source_path, export_dir, profile_id, resolved_preset) =
+            with_read_conn(&state_owned, |conn| {
+                let src = validate_audio_path_in_scope(conn, &state_owned.user_dir, &file_path)
+                    .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
+                ensure_source_not_a_slice(conn, &src)?;
+                let dir =
+                    resolve_slice_export_dir(conn, &state_owned.user_dir, custom_dir.as_deref())?;
+                let pid = get_active_profile_id(conn);
+                let preset = resolve_active_export_preset(conn, export_preset.as_deref());
+                Ok((src, dir, pid, preset))
+            })?;
         fs::create_dir_all(&export_dir).map_err(|e| {
             format!(
                 "Failed to create slice export directory: {}",
@@ -525,6 +539,7 @@ pub async fn save_slice_to_export(
                 end_sec,
                 pitch_semitones,
                 apply_micro_fade,
+                export_preset: resolved_preset,
                 cached_slice_path,
                 custom_name,
             },
@@ -538,6 +553,7 @@ pub async fn save_slice_to_export(
         let conn = state_owned.lock_db();
         history::upsert_slice_history_with_meta(
             &conn,
+            Some(&state_owned.user_dir),
             &SliceHistoryUpsert {
                 profile_id,
                 slice_path: Path::new(&promoted.slice_path),
@@ -611,6 +627,7 @@ mod tests {
                 end_sec: 2.85,
                 pitch_semitones: Some(2.0),
                 apply_micro_fade: Some(true),
+                export_preset: None,
                 cached_slice_path: Some(cached_wav.to_string_lossy().to_string()),
                 custom_name: Some("Wolf Bark".to_string()),
             },
@@ -628,6 +645,7 @@ mod tests {
                 end_sec: 2.85,
                 pitch_semitones: None,
                 apply_micro_fade: None,
+                export_preset: None,
                 cached_slice_path: Some(cached_wav.to_string_lossy().to_string()),
                 custom_name: Some("Wolf Bark".to_string()),
             },

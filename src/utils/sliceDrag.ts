@@ -27,9 +27,15 @@ function getActiveCustomSliceDir(): string {
   return (safeGetItem(AUDIFY_STORAGE_KEYS.customSliceExportPath) || "").trim();
 }
 
+function getActiveExportAudioPreset(): string {
+  const raw = (safeGetItem(AUDIFY_STORAGE_KEYS.exportAudioPreset) || "").trim();
+  return raw === "wav_24" || raw === "nle_48k_24" ? raw : "original";
+}
+
 export interface SliceExportOptions {
   pitchSemitones?: number;
   applyMicroFade?: boolean;
+  exportPreset?: string;
   cacheOnly?: boolean;
 }
 
@@ -39,7 +45,8 @@ function makeSliceCacheKey(
   endSec: number,
   pitchSemitones = 0,
   applyMicroFade = false,
-  cacheOnly = false
+  cacheOnly = false,
+  exportPreset = getActiveExportAudioPreset()
 ): string {
   const s = Math.max(0, startSec).toFixed(3);
   const e = Math.max(0.02, endSec).toFixed(3);
@@ -47,7 +54,7 @@ function makeSliceCacheKey(
   const mf = applyMicroFade ? "1" : "0";
   const scopePrefix = cacheOnly ? "__cache__" : getActiveCustomSliceDir();
   const normSource = normalizePathForMatch(sourceFilePath);
-  return `${scopePrefix}::${normSource}::${s}-${e}::p=${p}::mf=${mf}`;
+  return `${scopePrefix}::${normSource}::${s}-${e}::p=${p}::mf=${mf}::fmt=${exportPreset}`;
 }
 
 export function getCachedPreviewSlicePath(
@@ -62,7 +69,8 @@ export function getCachedPreviewSlicePath(
     endSec,
     opts?.pitchSemitones ?? 0,
     Boolean(opts?.applyMicroFade),
-    true
+    true,
+    opts?.exportPreset ?? getActiveExportAudioPreset()
   );
   return slicePathCache.get(key) || null;
 }
@@ -95,13 +103,15 @@ export async function preExportAudioSlice(
   const pitch = opts?.pitchSemitones ?? 0;
   const microFade = Boolean(opts?.applyMicroFade);
   const cacheOnly = Boolean(opts?.cacheOnly);
+  const exportPreset = opts?.exportPreset ?? getActiveExportAudioPreset();
   const key = makeSliceCacheKey(
     sourceFilePath,
     startSec,
     endSec,
     pitch,
     microFade,
-    cacheOnly
+    cacheOnly,
+    exportPreset
   );
   const cached = slicePathCache.get(key);
   if (cached) {
@@ -126,6 +136,7 @@ export async function preExportAudioSlice(
         pitchSemitones: Math.abs(pitch) >= 0.01 ? pitch : null,
         applyMicroFade: microFade,
         cacheOnly,
+        ...(exportPreset !== "original" ? { exportPreset } : {}),
       });
       if (slicedWavPath && slicedWavPath.trim().length > 0) {
         const normalized = normalizeOsPath(slicedWavPath);
@@ -166,11 +177,12 @@ export async function startNativeSliceDrag(
   try {
     const pitch = opts?.pitchSemitones ?? 0;
     const microFade = Boolean(opts?.applyMicroFade);
+    const exportPreset = opts?.exportPreset ?? getActiveExportAudioPreset();
     const cachedPreview = getCachedPreviewSlicePath(
       sourceFilePath,
       startSec,
       endSec,
-      { pitchSemitones: pitch, applyMicroFade: microFade }
+      { pitchSemitones: pitch, applyMicroFade: microFade, exportPreset }
     );
     const customDir = getActiveCustomSliceDir();
 
@@ -183,6 +195,7 @@ export async function startNativeSliceDrag(
       pitchSemitones: Math.abs(pitch) >= 0.01 ? pitch : null,
       applyMicroFade: microFade,
       customName: null,
+      ...(exportPreset !== "original" ? { exportPreset } : {}),
     });
     const normalizedSlicePath = promoted?.slice_path
       ? normalizeOsPath(promoted.slice_path)

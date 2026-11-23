@@ -20,10 +20,11 @@ mod drop_source;
 use com_defs::*;
 use data_object::create_sync_file_data_object;
 use drop_source::create_sync_drop_source;
+use std::cell::Cell;
 use std::ffi::c_void;
 use std::path::PathBuf;
 use std::ptr::null_mut;
-use std::sync::Once;
+use std::sync::atomic::{AtomicBool, Ordering};
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, SIZE};
 use windows::Win32::Graphics::Gdi::{CreateBitmap, DeleteObject, GetObjectW, BITMAP, HBITMAP};
 use windows::Win32::Graphics::Imaging::{
@@ -38,7 +39,21 @@ use windows::Win32::System::Ole::{
 };
 use windows::Win32::UI::Shell::{CLSID_DragDropHelper, IDragSourceHelper, SHDRAGIMAGE};
 
-static OLE_INIT_ONCE: Once = Once::new();
+thread_local! {
+    static OLE_INITIALIZED: Cell<bool> = const { Cell::new(false) };
+}
+static DRAG_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+pub fn is_native_file_drag_active() -> bool {
+    DRAG_ACTIVE.load(Ordering::Acquire)
+}
+
+struct DragActiveGuard;
+impl Drop for DragActiveGuard {
+    fn drop(&mut self) {
+        DRAG_ACTIVE.store(false, Ordering::Release);
+    }
+}
 
 unsafe fn is_primary_mouse_button_down() -> bool {
     let vkey = if GetSystemMetrics(SM_SWAPBUTTON_INDEX) != 0 {
@@ -127,8 +142,13 @@ unsafe fn is_cursor_over_external_window(owner_hwnd: HWND) -> bool {
 }
 
 fn ensure_ole_initialized() {
-    OLE_INIT_ONCE.call_once(|| unsafe {
-        let _ = OleInitialize(Some(null_mut()));
+    OLE_INITIALIZED.with(|flag| {
+        if !flag.get() {
+            unsafe {
+                let _ = OleInitialize(Some(null_mut()));
+            }
+            flag.set(true);
+        }
     });
 }
 
@@ -217,6 +237,13 @@ pub fn start_explorer_file_drag(
     if files.is_empty() {
         return Ok(false);
     }
+    if DRAG_ACTIVE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Ok(false);
+    }
+    let _drag_guard = DragActiveGuard;
 
     ensure_ole_initialized();
 

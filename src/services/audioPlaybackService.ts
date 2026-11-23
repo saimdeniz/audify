@@ -1,7 +1,10 @@
+import { getPlayheadSec } from "../store/playheadClock";
+import { nativeAudioReleaseHandle } from "./nativeAudioClient";
+
 let activeAudioElementRef: HTMLAudioElement | null = null;
 
 /**
- * Registers the singleton `<audio>` element mounted by `<AudioEngine />`.
+ * Registers the singleton `<audio>` element mounted by `<AudioEngine />` fallback.
  */
 export function registerAudioElement(el: HTMLAudioElement | null): void {
   activeAudioElementRef = el;
@@ -35,14 +38,21 @@ async function releaseMatchedHandle(
 ): Promise<AudioHandleReleaseSnapshot> {
   const audio = activeAudioElementRef;
   const wasPlaying = ctx.isPlaying;
+  const liveClock = getPlayheadSec();
   const resumeTimeSec =
     audio && Number.isFinite(audio.currentTime)
       ? audio.currentTime
-      : ctx.currentTimeSec;
+      : liveClock > 0
+        ? liveClock
+        : ctx.currentTimeSec;
 
   if (wasPlaying) {
     ctx.stopPlaying();
   }
+
+  // Synchronously closes any streaming Rust Symphonia handle before Windows file ops
+  await nativeAudioReleaseHandle(ctx.activeFilePath || undefined);
+
   if (audio) {
     try {
       audio.pause();
@@ -51,9 +61,9 @@ async function releaseMatchedHandle(
     } catch {
       // ignore
     }
+    // Brief yield so WebView2's media pipeline closes the Win32 file handle
+    await new Promise((resolve) => setTimeout(resolve, 40));
   }
-  // Brief yield so WebView2's media pipeline closes the Win32 file handle
-  await new Promise((resolve) => setTimeout(resolve, 40));
   return { wasMatched: true, wasPlaying, resumeTimeSec };
 }
 

@@ -8,10 +8,12 @@ import {
   Collection,
   CollectionRuleTemplate,
   DuplicateScanMode,
+  ExportAudioPreset,
   FolderDropResult,
   Genre,
   KeyboardShortcuts,
   LicenseGroup,
+  MiniDockEdgeSide,
   SampleItem,
   SliceHistoryEntry,
   SliceSortKey,
@@ -222,8 +224,12 @@ export interface SampleProfileAndLicenseActions {
 export interface SampleSettingsAndMutationActions {
   addSamplesToBin: (sampleIds: number[]) => void;
   removeSampleFromBin: (sampleId: number) => void;
+  removeSamplesFromBin: (sampleIds: number[]) => void;
   clearBin: () => void;
   setAutoBinOnNleDrag: (enabled: boolean) => void;
+  setSidebarCollapsed: (collapsed: boolean) => void;
+  toggleSidebarCollapsed: () => void;
+  setSidebarCompactHover: (enabled: boolean) => void;
   setBinFilterActive: (active: boolean) => void;
   setCustomSliceExportPath: (path: string) => void;
   pickCustomSliceExportPath: () => Promise<void>;
@@ -293,11 +299,15 @@ export interface SampleSettingsAndMutationActions {
   setPlayheadLatencyMs: (ms: number | null) => void;
   setAudioOutputDeviceId: (deviceId: string) => void;
   setSliceMicroFade: (enabled: boolean) => void;
+  setExportAudioPreset: (preset: ExportAudioPreset) => void;
+  setSkipLeadingSilence: (enabled: boolean) => void;
   setNormalizePreview: (enabled: boolean) => void;
   setAutoAnalyzeBpmKey: (enabled: boolean) => void;
   setEnableLiveFolderWatch: (enabled: boolean) => void;
   toggleMiniDock: () => Promise<void>;
   setMiniDockPinned: (pinned: boolean) => Promise<void>;
+  setMiniDockEdgePeek: (enabled: boolean) => void;
+  setMiniDockEdgeSide: (side: MiniDockEdgeSide) => void;
   setEnableMica: (enabled: boolean) => void;
   setThemeTintIntensity: (intensity: number) => void;
   setCustomBgImage: (pathOrUrl: string) => void;

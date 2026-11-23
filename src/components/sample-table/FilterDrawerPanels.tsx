@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { CopyCheck, History, Inbox, Scissors, Star, X } from "lucide-react";
+import { CopyCheck, Scissors, X } from "lucide-react";
 import { DuplicateGeneralControls } from "./DuplicateGeneralControls";
+import { SessionBinGeneralControls } from "./SessionBinGeneralControls";
 import { SliceGeneralControls } from "./SliceGeneralControls";
 import { TrashGeneralControls } from "./TrashGeneralControls";
 import {
@@ -43,8 +44,6 @@ export const FilterDrawerPanel: React.FC<FilterDrawerPanelProps> = ({
   bpmTokens,
   keyTokens,
 }) => {
-  const favoriteOnly = useSampleStore((s) => s.favoriteOnly);
-  const recentOnly = useSampleStore((s) => s.recentOnly);
   const binFilterActive = useSampleStore((s) => s.binFilterActive);
   const duplicatesFilterActive = useSampleStore(
     (s) => s.duplicatesFilterActive
@@ -59,9 +58,6 @@ export const FilterDrawerPanel: React.FC<FilterDrawerPanelProps> = ({
   const tags = useSampleStore((s) => s.tags);
   const searchQuery = useSampleStore((s) => s.searchQuery);
 
-  const setFavoriteOnly = useSampleStore((s) => s.setFavoriteOnly);
-  const setRecentOnly = useSampleStore((s) => s.setRecentOnly);
-  const setBinFilterActive = useSampleStore((s) => s.setBinFilterActive);
   const setDuplicatesFilterActive = useSampleStore(
     (s) => s.setDuplicatesFilterActive
   );
@@ -184,57 +180,12 @@ export const FilterDrawerPanel: React.FC<FilterDrawerPanelProps> = ({
           >
             <button
               type="button"
-              onClick={() => setFavoriteOnly(!favoriteOnly)}
-              className={`${
-                compact ? "h-[22px] px-1.5 gap-1 text-[10.5px]" : "h-[24px] px-2.5 gap-1.5 text-[11px]"
-              } rounded-[3px] border inline-flex items-center whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                favoriteOnly
-                  ? "bg-accent-soft border-accent text-accent-fg font-medium"
-                  : "bg-surface-3 border-line text-fg-2 hover:text-fg hover:border-line-strong"
-              }`}
-            >
-              <Star className={`w-3 h-3 ${favoriteOnly ? "fill-current" : ""}`} />
-              <span>Favorites</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setBinFilterActive(!binFilterActive)}
-              className={`${
-                compact ? "h-[22px] px-1.5 gap-1 text-[10.5px]" : "h-[24px] px-2.5 gap-1.5 text-[11px]"
-              } rounded-[3px] border inline-flex items-center whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                binFilterActive
-                  ? "bg-accent-soft border-accent text-accent-fg font-medium"
-                  : "bg-surface-3 border-line text-fg-2 hover:text-fg hover:border-line-strong"
-              }`}
-            >
-              <Inbox className="w-3 h-3" />
-              <span>Session Bin</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setRecentOnly(!recentOnly)}
-              className={`${
-                compact ? "h-[22px] px-1.5 gap-1 text-[10.5px]" : "h-[24px] px-2.5 gap-1.5 text-[11px]"
-              } rounded-[3px] border inline-flex items-center whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                recentOnly
-                  ? "bg-accent-soft border-accent text-accent-fg font-medium"
-                  : "bg-surface-3 border-line text-fg-2 hover:text-fg hover:border-line-strong"
-              }`}
-            >
-              <History className="w-3 h-3" />
-              <span>Recent</span>
-            </button>
-
-            <button
-              type="button"
               onClick={() => setSlicesFilterActive(!slicesFilterActive)}
               className={`${
                 compact ? "h-[22px] px-1.5 gap-1 text-[10.5px]" : "h-[24px] px-2.5 gap-1.5 text-[11px]"
-              } rounded-[3px] border inline-flex items-center whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+              } rounded-[3px] border font-medium inline-flex items-center whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                 slicesFilterActive
-                  ? "bg-accent-soft border-accent text-accent-fg font-medium"
+                  ? "bg-accent-soft border-accent text-accent-fg"
                   : "bg-surface-3 border-line text-fg-2 hover:text-fg hover:border-line-strong"
               }`}
               title="Browse exported & saved waveform slices with source track origin"
@@ -248,9 +199,9 @@ export const FilterDrawerPanel: React.FC<FilterDrawerPanelProps> = ({
               onClick={() => setDuplicatesFilterActive(!duplicatesFilterActive)}
               className={`${
                 compact ? "h-[22px] px-1.5 gap-1 text-[10.5px]" : "h-[24px] px-2.5 gap-1.5 text-[11px]"
-              } rounded-[3px] border inline-flex items-center whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+              } rounded-[3px] border font-medium inline-flex items-center whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                 duplicatesFilterActive
-                  ? "bg-accent-soft border-accent text-accent-fg font-medium"
+                  ? "bg-accent-soft border-accent text-accent-fg"
                   : "bg-surface-3 border-line text-fg-2 hover:text-fg hover:border-line-strong"
               }`}
               title="Find exact and similar duplicate audio files"
@@ -264,6 +215,7 @@ export const FilterDrawerPanel: React.FC<FilterDrawerPanelProps> = ({
           {duplicatesFilterActive && (
             <DuplicateGeneralControls compact={compact} />
           )}
+          {binFilterActive && <SessionBinGeneralControls compact={compact} />}
           {trashFilterActive && <TrashGeneralControls compact={compact} />}
         </div>
       );
@@ -351,9 +303,9 @@ export const FilterDrawerPanel: React.FC<FilterDrawerPanelProps> = ({
                 key={g.id}
                 type="button"
                 onClick={() => setSelectedGenre(g.name)}
-                className={`h-[23px] px-2 rounded-[3px] border text-[11px] inline-flex items-center gap-1.5 transition-colors ${
+                className={`h-[23px] px-2 rounded-[3px] border font-medium text-[11px] inline-flex items-center gap-1.5 transition-colors ${
                   active
-                    ? "bg-accent-soft border-accent text-accent-fg font-medium"
+                    ? "bg-accent-soft border-accent text-accent-fg"
                     : "bg-surface-3 border-line text-fg-2 hover:text-fg hover:border-line-strong"
                 }`}
                 title={`${g.name} (${g.sample_count.toLocaleString()})`}
@@ -384,9 +336,9 @@ export const FilterDrawerPanel: React.FC<FilterDrawerPanelProps> = ({
                 key={t.id}
                 type="button"
                 onClick={() => toggleTagFilter(t.id)}
-                className={`h-[23px] px-2 rounded-[3px] border text-[11px] inline-flex items-center gap-1.5 transition-colors ${
+                className={`h-[23px] px-2 rounded-[3px] border font-medium text-[11px] inline-flex items-center gap-1.5 transition-colors ${
                   active
-                    ? "bg-accent-soft border-accent text-accent-fg font-medium"
+                    ? "bg-accent-soft border-accent text-accent-fg"
                     : "bg-surface-3 border-line text-fg-2 hover:text-fg hover:border-line-strong"
                 }`}
                 title={`${t.name} (${t.sample_count.toLocaleString()})`}
@@ -519,12 +471,16 @@ export const FilterDrawerPanel: React.FC<FilterDrawerPanelProps> = ({
                   type="button"
                   disabled={!activeCamelotCode}
                   onClick={handleToggleHarmonic}
-                  className={`ml-auto h-[22px] px-2 rounded-[3px] border font-mono text-[10.5px] transition-colors disabled:opacity-40 ${
+                  className={`ml-2 h-[22px] px-2 rounded-[3px] border font-mono text-[10.5px] transition-colors disabled:opacity-40 ${
                     isHarmonicActive
                       ? "bg-accent-soft border-accent text-accent-fg font-semibold"
                       : "bg-surface-3 border-line text-fg-2 hover:text-fg"
                   }`}
-                  title="Include harmonically compatible Camelot neighbor keys (±1 fifth & relative Major/Minor)"
+                  title={
+                    activeCamelotCode
+                      ? "Include harmonically compatible Camelot neighbor keys (±1 fifth & relative Major/Minor)"
+                      : "Select a key first to include harmonically compatible Camelot neighbor keys"
+                  }
                 >
                   ~ Harmonic
                 </button>

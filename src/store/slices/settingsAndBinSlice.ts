@@ -1,6 +1,8 @@
 import { DEFAULT_SHORTCUTS } from "../../constants/shortcuts";
 import {
+  ExportAudioPreset,
   KeyboardShortcuts,
+  MiniDockEdgeSide,
   WaveformSensitivity,
   WaveformStyle,
 } from "../../types";
@@ -34,8 +36,12 @@ export function createSettingsAndBinSlice(
   | "resumeCreditToast"
   | "addSamplesToBin"
   | "removeSampleFromBin"
+  | "removeSamplesFromBin"
   | "clearBin"
   | "setAutoBinOnNleDrag"
+  | "setSidebarCollapsed"
+  | "toggleSidebarCollapsed"
+  | "setSidebarCompactHover"
   | "setBinFilterActive"
   | "setCustomSliceExportPath"
   | "pickCustomSliceExportPath"
@@ -49,11 +55,15 @@ export function createSettingsAndBinSlice(
   | "setPlayheadLatencyMs"
   | "setAudioOutputDeviceId"
   | "setSliceMicroFade"
+  | "setExportAudioPreset"
+  | "setSkipLeadingSilence"
   | "setNormalizePreview"
   | "setAutoAnalyzeBpmKey"
   | "setEnableLiveFolderWatch"
   | "toggleMiniDock"
   | "setMiniDockPinned"
+  | "setMiniDockEdgePeek"
+  | "setMiniDockEdgeSide"
   | "setEnableMica"
   | "setThemeTintIntensity"
   | "setCustomBgImage"
@@ -127,6 +137,55 @@ export function createSettingsAndBinSlice(
           ? "Slice 3ms anti-click micro-fade enabled"
           : "Slice 3ms anti-click micro-fade disabled",
       });
+      void get().persistActiveProfileSettings();
+    },
+
+    setExportAudioPreset: (exportAudioPreset: ExportAudioPreset) => {
+      safeSetItem(AUDIFY_STORAGE_KEYS.exportAudioPreset, exportAudioPreset);
+      const label =
+        exportAudioPreset === "nle_48k_24"
+          ? "48 kHz / 24-bit Broadcast WAV (NLE)"
+          : exportAudioPreset === "wav_24"
+          ? "24-bit Lossless WAV (source sample rate)"
+          : "Keep Source (preserves 24-bit on hi-res files)";
+      set({
+        exportAudioPreset,
+        statusMessage: `Slice & pitch export format: ${label}`,
+      });
+      void get().persistActiveProfileSettings();
+    },
+
+    setSkipLeadingSilence: (skipLeadingSilence: boolean) => {
+      safeSetItem(
+        AUDIFY_STORAGE_KEYS.skipLeadingSilence,
+        String(skipLeadingSilence)
+      );
+      set({
+        skipLeadingSilence,
+        statusMessage: skipLeadingSilence
+          ? "Skip leading silence on preview enabled"
+          : "Skip leading silence on preview disabled",
+      });
+      void get().persistActiveProfileSettings();
+    },
+
+    setMiniDockEdgePeek: (miniDockEdgePeek: boolean) => {
+      safeSetItem(
+        AUDIFY_STORAGE_KEYS.miniDockEdgePeek,
+        String(miniDockEdgePeek)
+      );
+      set({
+        miniDockEdgePeek,
+        statusMessage: miniDockEdgePeek
+          ? "Mini Dock Edge-Peek auto-hide enabled"
+          : "Mini Dock Edge-Peek auto-hide disabled",
+      });
+      void get().persistActiveProfileSettings();
+    },
+
+    setMiniDockEdgeSide: (miniDockEdgeSide: MiniDockEdgeSide) => {
+      safeSetItem(AUDIFY_STORAGE_KEYS.miniDockEdgeSide, miniDockEdgeSide);
+      set({ miniDockEdgeSide });
       void get().persistActiveProfileSettings();
     },
 

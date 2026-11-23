@@ -18,6 +18,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 }));
 
 import { DEFAULT_SHORTCUTS } from "../constants/shortcuts";
+import { resetPlayheadClock } from "../store/playheadClock";
 import { useSampleStore } from "../store/useSampleStore";
 import { useAppGlobalShortcuts } from "./useAppGlobalShortcuts";
 
@@ -415,5 +416,72 @@ describe("useAppGlobalShortcuts search focus & playback transport", () => {
     } finally {
       window.history.replaceState({}, "", origSearch || "/");
     }
+  });
+
+  it("marks waveform slice In (I / Turkish ı) and Out (O) from the current playhead", () => {
+    const sample = {
+      id: 99,
+      library_id: 1,
+      file_path: "F:/data/sounds/music.wav",
+      file_name: "music.wav",
+      folder_path: "F:/data/sounds",
+      extension: "wav",
+      duration_ms: 10000,
+      sample_rate: 48000,
+      channels: 2,
+      bit_depth: 24,
+      file_size: 960000,
+      is_favorite: false,
+      is_loop: false,
+      genre: "",
+      artist: "",
+      album: "",
+      year: "",
+      peaks_json: "[]",
+      created_at: "",
+      tags: [],
+    };
+    const setSliceRange = vi.fn((range) => useSampleStore.setState({ sliceRange: range }));
+    useSampleStore.setState({
+      shortcuts: { ...DEFAULT_SHORTCUTS },
+      selectedSample: sample,
+      durationSec: 10,
+      sliceRange: null,
+      setSliceRange,
+      isSettingsOpen: false,
+      batchRenameSampleIds: null,
+      pendingTrashRequest: null,
+      pendingFileConflictPrompt: null,
+    });
+
+    renderHook(() => useAppGlobalShortcuts());
+
+    resetPlayheadClock(2.5);
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ı", code: "KeyI", bubbles: true, cancelable: true })
+    );
+    expect(useSampleStore.getState().sliceRange).toEqual({
+      startSec: 2.5,
+      endSec: 10,
+    });
+
+    resetPlayheadClock(6.25);
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "o", code: "KeyO", bubbles: true, cancelable: true })
+    );
+    expect(useSampleStore.getState().sliceRange).toEqual({
+      startSec: 2.5,
+      endSec: 6.25,
+    });
+
+    // Extending Out forward after scrubbing past the previous Out point
+    resetPlayheadClock(8.0);
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "o", code: "KeyO", bubbles: true, cancelable: true })
+    );
+    expect(useSampleStore.getState().sliceRange).toEqual({
+      startSec: 2.5,
+      endSec: 8.0,
+    });
   });
 });

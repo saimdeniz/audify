@@ -38,6 +38,7 @@ pub fn reveal_file_in_explorer(file_path: &Path) -> Result<(), String> {
     if is_unc_or_network_path(&raw) {
         return Err("Network and UNC paths are not allowed".to_string());
     }
+    super::path_guards::reject_symlink_ancestors(file_path)?;
     let sym = fs::symlink_metadata(file_path)
         .map_err(|_| format!("File does not exist: {}", display_leaf(file_path)))?;
     if sym.file_type().is_symlink() {
@@ -96,6 +97,7 @@ pub fn reveal_file_in_explorer(file_path: &Path) -> Result<(), String> {
     if is_unc_or_network_path(&raw) {
         return Err("Network and UNC paths are not allowed".to_string());
     }
+    super::path_guards::reject_symlink_ancestors(file_path)?;
     let sym = fs::symlink_metadata(file_path)
         .map_err(|_| format!("File does not exist: {}", display_leaf(file_path)))?;
     if sym.file_type().is_symlink() {
@@ -137,6 +139,7 @@ pub fn open_directory_in_shell(dir_path: &Path) -> Result<(), String> {
     if is_unc_or_network_path(&raw) {
         return Err("Network and UNC paths are not allowed".to_string());
     }
+    super::path_guards::reject_symlink_ancestors(dir_path)?;
     let sym = fs::symlink_metadata(dir_path)
         .map_err(|_| format!("Directory does not exist: {}", display_leaf(dir_path)))?;
     if sym.file_type().is_symlink() {
@@ -185,6 +188,7 @@ pub fn open_directory_in_shell(dir_path: &Path) -> Result<(), String> {
     if is_unc_or_network_path(&raw) {
         return Err("Network and UNC paths are not allowed".to_string());
     }
+    super::path_guards::reject_symlink_ancestors(dir_path)?;
     let sym = fs::symlink_metadata(dir_path)
         .map_err(|_| format!("Directory does not exist: {}", display_leaf(dir_path)))?;
     if sym.file_type().is_symlink() {

@@ -291,6 +291,7 @@ export function createSliceHistoryActions(ctx: StoreSliceContext) {
         {
           pitchSemitones: st.pitchSemitones,
           applyMicroFade: st.sliceMicroFade,
+          exportPreset: st.exportAudioPreset,
         }
       );
 
@@ -306,6 +307,9 @@ export function createSliceHistoryActions(ctx: StoreSliceContext) {
             Math.abs(st.pitchSemitones) >= 0.01 ? st.pitchSemitones : null,
           applyMicroFade: st.sliceMicroFade,
           customName: customName?.trim() || null,
+          ...(st.exportAudioPreset !== "original"
+            ? { exportPreset: st.exportAudioPreset }
+            : {}),
         });
         set((prev) => ({
           sliceHistory: upsertSliceEntryInList(prev.sliceHistory, saved),

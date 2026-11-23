@@ -43,7 +43,7 @@ function matchesPhraseInSample(
   if (idx.foldedAlbum && idx.foldedAlbum.includes(phrase)) return true;
   if (idx.foldedGenre && idx.foldedGenre.includes(phrase)) return true;
   if (idx.tagNamesFolded.some((t) => t.includes(phrase))) return true;
-  const normFolderWords = idx.foldedFolder.replace(/[^a-z0-9]+/g, " ");
+  const normFolderWords = idx.foldedFolder.replace(/[^\p{L}\p{N}]+/gu, " ");
   if (normFolderWords.includes(phrase)) return true;
   return false;
 }
@@ -80,7 +80,7 @@ function scorePhraseCandidate(
   if (idx.foldedGenre && idx.foldedGenre.includes(phrase)) return 90;
   if (idx.foldedArtist && idx.foldedArtist.includes(phrase)) return 80;
   if (idx.foldedAlbum && idx.foldedAlbum.includes(phrase)) return 70;
-  const normFolderWords = idx.foldedFolder.replace(/[^a-z0-9]+/g, " ");
+  const normFolderWords = idx.foldedFolder.replace(/[^\p{L}\p{N}]+/gu, " ");
   if (normFolderWords.includes(phrase)) return 45;
   return 0;
 }
@@ -316,12 +316,24 @@ function evaluateSmartSearchStructural(
     );
     if (!allAlbumsMatch) return null;
   }
+  if (parsed.excludeAlbumTerms.length > 0) {
+    const anyExcludedAlbum = parsed.excludeAlbumTerms.some(
+      (al) => idx.foldedAlbum && idx.foldedAlbum.includes(al)
+    );
+    if (anyExcludedAlbum) return null;
+  }
 
   if (parsed.yearTerms.length > 0) {
     const allYearsMatch = parsed.yearTerms.every(
       (yr) => idx.foldedYear && idx.foldedYear.includes(yr)
     );
     if (!allYearsMatch) return null;
+  }
+  if (parsed.excludeYearTerms.length > 0) {
+    const anyExcludedYear = parsed.excludeYearTerms.some(
+      (yr) => idx.foldedYear && idx.foldedYear.includes(yr)
+    );
+    if (anyExcludedYear) return null;
   }
 
   // Negative plain terms (`-loop`, `!vocal`) & negative phrases

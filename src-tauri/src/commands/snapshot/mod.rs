@@ -12,7 +12,8 @@ use crate::commands::{BackupFileInfo, FullSnapshotManifest, FullSnapshotRestoreR
 use crate::db::{open_read_conn, AppState};
 use crate::security::{
     display_leaf, ensure_inside, is_zip_magic, sanitize_err, validate_archive_export_path,
-    validate_archive_import_path, MAX_CUSTOM_BG_BYTES, MAX_SNAPSHOT_ARCHIVE_BYTES,
+    validate_archive_import_path, ALLOWED_BG_MEDIA_EXTS, ALLOWED_BG_VIDEO_EXTS,
+    MAX_CUSTOM_BG_BYTES, MAX_CUSTOM_BG_VIDEO_BYTES, MAX_SNAPSHOT_ARCHIVE_BYTES,
 };
 use rusqlite::{params, Connection};
 use std::fs::{self, File};
@@ -32,7 +33,6 @@ const MAX_SNAPSHOT_MANIFEST_BYTES: u64 = 128 * 1024;
 const MAX_SNAPSHOT_DB_UNCOMPRESSED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_SNAPSHOT_IMAGES_COUNT: usize = 1000;
 const MAX_SNAPSHOT_TOTAL_IMAGES_BYTES: u64 = 256 * 1024 * 1024;
-const ALLOWED_IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp"];
 
 pub(super) struct TempPathGuard(pub(super) PathBuf);
 
@@ -89,13 +89,19 @@ fn collect_snapshot_images(
         };
         if meta.is_dir() {
             collect_snapshot_images(images_root, &safe, depth + 1, out);
-        } else if meta.is_file() && meta.len() <= MAX_CUSTOM_BG_BYTES {
-            let ext_ok = safe
+        } else if meta.is_file() {
+            let ext_lower = safe
                 .extension()
                 .and_then(|s| s.to_str())
-                .map(|ext| ALLOWED_IMAGE_EXTS.contains(&ext.to_ascii_lowercase().as_str()))
-                .unwrap_or(false);
-            if ext_ok {
+                .map(|s| s.to_ascii_lowercase())
+                .unwrap_or_default();
+            let ext_ok = ALLOWED_BG_MEDIA_EXTS.contains(&ext_lower.as_str());
+            let max_item_bytes = if ALLOWED_BG_VIDEO_EXTS.contains(&ext_lower.as_str()) {
+                MAX_CUSTOM_BG_VIDEO_BYTES
+            } else {
+                MAX_CUSTOM_BG_BYTES
+            };
+            if ext_ok && meta.len() <= max_item_bytes {
                 if let Ok(rel) = safe.strip_prefix(images_root) {
                     let rel_norm = rel.to_string_lossy().replace('\\', "/");
                     out.push((format!("images/{}", rel_norm), safe));

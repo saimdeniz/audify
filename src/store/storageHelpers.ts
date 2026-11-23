@@ -82,8 +82,12 @@ export function pushRecentSampleId(current: number[], sampleId: number): number[
     0,
     50
   );
-  safeSetItem(AUDIFY_STORAGE_KEYS.recentSampleIds, JSON.stringify(next));
-  safeSetItem(LAST_SELECTED_SAMPLE_ID_KEY, String(sampleId));
+  safeSetItem(AUDIFY_STORAGE_KEYS.recentSampleIds, JSON.stringify(next), {
+    broadcast: false,
+  });
+  safeSetItem(LAST_SELECTED_SAMPLE_ID_KEY, String(sampleId), {
+    broadcast: false,
+  });
   return next;
 }
 
@@ -108,8 +112,12 @@ export function loadSavedLastSample(): { id: number | null; path: string | null 
 
 export function saveLastSample(sample: SampleItem | null): void {
   if (!sample) return;
-  safeSetItem(LAST_SELECTED_SAMPLE_ID_KEY, String(sample.id));
-  safeSetItem(LAST_SELECTED_SAMPLE_PATH_KEY, sample.file_path);
+  safeSetItem(LAST_SELECTED_SAMPLE_ID_KEY, String(sample.id), {
+    broadcast: false,
+  });
+  safeSetItem(LAST_SELECTED_SAMPLE_PATH_KEY, sample.file_path, {
+    broadcast: false,
+  });
 }
 
 export function loadSavedSort(): { key: SortKey | null; dir: SortDir } {
@@ -343,31 +351,37 @@ export function persistNavigationFilters(
   favoriteOnly: boolean,
   selectedCollectionId: number | null
 ): void {
+  const noBroadcast = { broadcast: false } as const;
   if (folderFilter) {
-    safeSetItem(AUDIFY_STORAGE_KEYS.activeFolderFilter, folderFilter);
+    safeSetItem(AUDIFY_STORAGE_KEYS.activeFolderFilter, folderFilter, noBroadcast);
   } else {
-    safeRemoveItem(AUDIFY_STORAGE_KEYS.activeFolderFilter);
+    safeRemoveItem(AUDIFY_STORAGE_KEYS.activeFolderFilter, noBroadcast);
   }
 
   if (selectedLicenseGroupId) {
-    safeSetItem(AUDIFY_STORAGE_KEYS.activeLicenseGroupId, selectedLicenseGroupId);
+    safeSetItem(
+      AUDIFY_STORAGE_KEYS.activeLicenseGroupId,
+      selectedLicenseGroupId,
+      noBroadcast
+    );
   } else {
-    safeRemoveItem(AUDIFY_STORAGE_KEYS.activeLicenseGroupId);
+    safeRemoveItem(AUDIFY_STORAGE_KEYS.activeLicenseGroupId, noBroadcast);
   }
 
   if (favoriteOnly) {
-    safeSetItem(AUDIFY_STORAGE_KEYS.activeFavoriteOnly, "true");
+    safeSetItem(AUDIFY_STORAGE_KEYS.activeFavoriteOnly, "true", noBroadcast);
   } else {
-    safeRemoveItem(AUDIFY_STORAGE_KEYS.activeFavoriteOnly);
+    safeRemoveItem(AUDIFY_STORAGE_KEYS.activeFavoriteOnly, noBroadcast);
   }
 
   if (selectedCollectionId !== null) {
     safeSetItem(
       AUDIFY_STORAGE_KEYS.activeCollectionId,
-      String(selectedCollectionId)
+      String(selectedCollectionId),
+      noBroadcast
     );
   } else {
-    safeRemoveItem(AUDIFY_STORAGE_KEYS.activeCollectionId);
+    safeRemoveItem(AUDIFY_STORAGE_KEYS.activeCollectionId, noBroadcast);
   }
 }
 

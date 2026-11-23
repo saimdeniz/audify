@@ -42,7 +42,8 @@ export type SidebarTab =
   | "tags"
   | "genres"
   | "licenses"
-  | "bin";
+  | "bin"
+  | "trash";
 
 export interface FolderTreeNode {
   name: string;

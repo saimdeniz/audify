@@ -45,6 +45,7 @@ export function createFileOpsSlice(ctx: StoreSliceContext) {
         get,
         applyInstantMemoryFilter,
         emitNotice,
+        getProfileEpoch: ctx.getProfileEpoch,
         releaseMatchingAudioHandle,
         pushBoundedHistory,
       });

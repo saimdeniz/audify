@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import {
   Pause,
   Play,
@@ -10,17 +10,29 @@ import {
   Square,
   Zap,
 } from "lucide-react";
-import { usePlayheadSec } from "../../store/playheadClock";
+import { getPlayheadSec, subscribePlayhead } from "../../store/playheadClock";
 import { useSampleStore } from "../../store/useSampleStore";
 import { formatSecondsCode } from "../../utils/format";
 import { MasterVolumeControl } from "../common/MasterVolumeControl";
 import { VarispeedPitchStepper } from "../common/VarispeedPitchStepper";
 
 const PlayheadTimecodeReadout: React.FC = React.memo(() => {
-  const playheadSec = usePlayheadSec();
+  const spanRef = useRef<HTMLSpanElement | null>(null);
+  useEffect(() => {
+    const sync = () => {
+      if (spanRef.current) {
+        spanRef.current.textContent = formatSecondsCode(getPlayheadSec());
+      }
+    };
+    sync();
+    return subscribePlayhead(sync);
+  }, []);
   return (
-    <span className="font-mono tabular-nums text-[12.5px] font-semibold text-accent-fg">
-      {formatSecondsCode(playheadSec)}
+    <span
+      ref={spanRef}
+      className="font-mono tabular-nums text-[12.5px] font-semibold text-accent-fg"
+    >
+      {formatSecondsCode(getPlayheadSec())}
     </span>
   );
 });

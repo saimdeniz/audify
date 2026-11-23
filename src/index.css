@@ -182,8 +182,8 @@ button:disabled {
   cursor: not-allowed;
 }
 
-/* Press: 1px physical push + neutral overlay (works on any theme/accent) */
-button:not(:disabled):active,
+/* Press: 1px physical push + neutral overlay (works on any theme/accent); skip OS window caption buttons */
+button:not(:disabled):not([data-window-caption="true"]):active,
 [role="button"]:active {
   transform: translateY(1px);
   box-shadow: inset 0 0 0 999px rgb(128 128 128 / 0.22);
@@ -305,9 +305,7 @@ html[data-theme="light"][data-has-bg="true"] .audify-row-surface {
   background-color: rgba(255, 255, 255, 0.58);
 }
 html[data-theme="light"][data-mica="true"][data-has-bg="true"] .audify-row-surface {
-  background-color: rgba(255, 255, 255, 0.56);
-  -webkit-backdrop-filter: blur(8px) saturate(140%);
-  backdrop-filter: blur(8px) saturate(140%);
+  background-color: rgba(255, 255, 255, 0.68);
 }
 html[data-theme="dark"][data-has-bg="true"] .audify-row-surface {
   background-color: rgba(12, 13, 18, 0.34);

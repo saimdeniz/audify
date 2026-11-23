@@ -102,7 +102,7 @@ pub(crate) fn move_samples_to_trash_with_conn(
             || safe_leaf_name.contains('/')
             || safe_leaf_name.contains('\\')
             || safe_leaf_name.contains(':')
-            || safe_leaf_name.contains("..")
+            || safe_leaf_name == ".."
             || is_dos_device_name(safe_leaf_name)
         {
             rollback_disk_moves(&completed_disk_moves);

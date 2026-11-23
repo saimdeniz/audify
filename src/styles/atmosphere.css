@@ -49,19 +49,7 @@ html[data-theme="light"][data-mica="true"] {
   --c-line-strong: color-mix(in srgb, rgb(var(--accent-rgb)) var(--tint-line-strong), rgba(15, 23, 42, 0.20));
 }
 
-html[data-theme="contrast"][data-mica="true"] {
-  --c-surface-0: color-mix(in srgb, rgb(var(--accent-rgb) / 0.72) var(--tint-s0), rgba(0, 0, 0, 0.72));
-  --c-surface-1: color-mix(in srgb, rgb(var(--accent-rgb) / 0.82) var(--tint-s1), rgba(8, 8, 10, 0.82));
-  --c-surface-2: color-mix(in srgb, rgb(var(--accent-rgb) / 0.88) var(--tint-s2), rgba(16, 16, 18, 0.88));
-  --c-surface-3: color-mix(in srgb, rgb(var(--accent-rgb) / 0.90) var(--tint-s3), rgba(24, 24, 28, 0.90));
-  --c-surface-rail: color-mix(in srgb, rgb(var(--accent-rgb) / 0.84) var(--tint-rail), rgba(6, 6, 8, 0.84));
-  --c-surface-header: color-mix(in srgb, rgb(var(--accent-rgb) / 0.86) var(--tint-head), rgba(12, 12, 14, 0.86));
-  --c-surface-badge: color-mix(in srgb, rgb(var(--accent-rgb) / 0.90) var(--tint-badge), rgba(24, 24, 28, 0.90));
-  --c-surface-hover: color-mix(in srgb, rgb(var(--accent-rgb) / 0.90) var(--tint-hover), rgba(28, 28, 34, 0.90));
-  --c-line: color-mix(in srgb, rgb(var(--accent-rgb)) var(--tint-line), rgba(255, 255, 255, 0.28));
-  --c-line-subtle: color-mix(in srgb, rgb(var(--accent-rgb)) var(--tint-line-subtle), rgba(255, 255, 255, 0.14));
-  --c-line-strong: color-mix(in srgb, rgb(var(--accent-rgb)) var(--tint-line-strong), rgba(255, 255, 255, 0.45));
-}
+/* High Contrast mode intentionally stays solid opaque (no Mica translucency/blur) */
 
 /* 2. WALLPAPER ACTIVE WITHOUT MICA (Semi-opaque matte surfaces, no backdrop blur) */
 html[data-theme="dark"][data-has-bg="true"]:not([data-mica="true"]) {
@@ -106,28 +94,18 @@ html[data-theme="contrast"][data-has-bg="true"]:not([data-mica="true"]) {
   --c-line-strong: color-mix(in srgb, rgb(var(--accent-rgb)) var(--tint-line-strong), #6A6A76);
 }
 
-html[data-mica="true"] aside,
-html[data-mica="true"] header,
-html[data-mica="true"] section,
-html[data-mica="true"] footer,
-html[data-mica="true"] .audify-frosted-bar {
-  backdrop-filter: blur(28px) saturate(165%);
+html[data-mica="true"][data-has-bg="true"]:not([data-theme="contrast"]) aside,
+html[data-mica="true"][data-has-bg="true"]:not([data-theme="contrast"]) header,
+html[data-mica="true"][data-has-bg="true"]:not([data-theme="contrast"]) footer,
+html[data-mica="true"][data-has-bg="true"]:not([data-theme="contrast"]) .audify-frosted-bar {
+  backdrop-filter: blur(16px) saturate(150%);
 }
 
-html[data-theme="light"][data-mica="true"] aside,
-html[data-theme="light"][data-mica="true"] header,
-html[data-theme="light"][data-mica="true"] section,
-html[data-theme="light"][data-mica="true"] footer,
-html[data-theme="light"][data-mica="true"] .audify-frosted-bar {
-  backdrop-filter: blur(30px) saturate(185%) brightness(1.03);
-}
-
-html[data-theme="contrast"][data-mica="true"] aside,
-html[data-theme="contrast"][data-mica="true"] header,
-html[data-theme="contrast"][data-mica="true"] section,
-html[data-theme="contrast"][data-mica="true"] footer,
-html[data-theme="contrast"][data-mica="true"] .audify-frosted-bar {
-  backdrop-filter: blur(28px) saturate(150%);
+html[data-theme="light"][data-mica="true"][data-has-bg="true"] aside,
+html[data-theme="light"][data-mica="true"][data-has-bg="true"] header,
+html[data-theme="light"][data-mica="true"][data-has-bg="true"] footer,
+html[data-theme="light"][data-mica="true"][data-has-bg="true"] .audify-frosted-bar {
+  backdrop-filter: blur(16px) saturate(165%) brightness(1.02);
 }
 
 /* Frosted edge depth when backdrop (image / live ASCII) shines behind frame chrome */
@@ -227,7 +205,6 @@ html[data-theme="contrast"] [data-settings-dropdown-open="true"] {
   --c-fg-2: #E4E4E4;
   --c-fg-3: #BDBDBD;
   --c-fg-head: #D8D8DF;
-  backdrop-filter: blur(28px) saturate(120%);
 }
 
 /* Shared modal scrim that adapts to dark / light / high-contrast themes */

@@ -29,7 +29,9 @@ export interface ParsedSearchQuery extends TechnicalFilterCriteria {
   artistTerms: string[];
   excludeArtistTerms: string[];
   albumTerms: string[];
+  excludeAlbumTerms: string[];
   yearTerms: string[];
+  excludeYearTerms: string[];
   keyAllowedGroups: string[][];
   excludeCamelotKeys: string[];
   minDurationMs: number | null;
@@ -44,6 +46,7 @@ export interface ParsedSearchQuery extends TechnicalFilterCriteria {
 interface RawLexToken {
   text: string;
   quoted: boolean;
+  wholeQuoted: boolean;
 }
 
 /**
@@ -67,7 +70,7 @@ function lexQueryTokens(raw: string): RawLexToken[] {
       }
       if (i < n && raw[i] === quoteChar) i++;
       if (buf.trim()) {
-        out.push({ text: buf.trim(), quoted: true });
+        out.push({ text: buf.trim(), quoted: true, wholeQuoted: true });
       }
       continue;
     }
@@ -87,29 +90,15 @@ function lexQueryTokens(raw: string): RawLexToken[] {
       }
     }
     if (buf) {
-      out.push({ text: buf, quoted: hadQuotedSegment });
+      out.push({ text: buf, quoted: hadQuotedSegment, wholeQuoted: false });
     }
   }
 
   return out;
 }
 
-function trimNonAlphaNumAscii(s: string): string {
-  let start = 0;
-  let end = s.length;
-  while (start < end) {
-    const c = s.charCodeAt(start);
-    const ok = (c >= 97 && c <= 122) || (c >= 48 && c <= 57);
-    if (ok) break;
-    start++;
-  }
-  while (end > start) {
-    const c = s.charCodeAt(end - 1);
-    const ok = (c >= 97 && c <= 122) || (c >= 48 && c <= 57);
-    if (ok) break;
-    end--;
-  }
-  return s.slice(start, end);
+function trimNonAlphaNumUnicode(s: string): string {
+  return s.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
 }
 
 function parseDurationSpecMs(
@@ -202,7 +191,9 @@ export function parseSmartSearchQuery(rawQuery: string): ParsedSearchQuery {
     artistTerms: [],
     excludeArtistTerms: [],
     albumTerms: [],
+    excludeAlbumTerms: [],
     yearTerms: [],
+    excludeYearTerms: [],
     keyAllowedGroups: [],
     excludeCamelotKeys: [],
     minDurationMs: null,
@@ -243,15 +234,10 @@ export function parseSmartSearchQuery(rawQuery: string): ParsedSearchQuery {
   for (let idx = 0; idx < lexed.length; idx++) {
     const tok = lexed[idx];
 
-    // Top-level standalone quoted phrase/word: `"heavy impact"` or `"whoosh"` (disables synonyms)
-    if (
-      tok.quoted &&
-      !tok.text.includes(":") &&
-      !tok.text.startsWith("-") &&
-      !tok.text.startsWith("!")
-    ) {
+    // Top-level standalone quoted phrase/word: `"heavy impact"`, `"whoosh"`, `"-3db"` (disables synonyms)
+    if (tok.wholeQuoted) {
       const normPhrase = foldSearchText(tok.text)
-        .replace(/[^a-z0-9]+/g, " ")
+        .replace(/[^\p{L}\p{N}]+/gu, " ")
         .trim();
       if (normPhrase) {
         const isMultiWord = normPhrase.includes(" ");
@@ -260,6 +246,8 @@ export function parseSmartSearchQuery(rawQuery: string): ParsedSearchQuery {
           isPhrase: isMultiWord,
           exactQuoted: true,
         });
+      } else {
+        mergeNextWithOr = false;
       }
       continue;
     }
@@ -285,12 +273,14 @@ export function parseSmartSearchQuery(rawQuery: string): ParsedSearchQuery {
         const dur = parseDurationSpecMs(lower, false);
         if (dur) {
           applyDurationBound(result, dur);
+          mergeNextWithOr = false;
           continue;
         }
       } else if (/^\d/.test(lower)) {
         const bareRange = parseDurationSpecMs(lower, true);
         if (bareRange) {
           applyDurationBound(result, bareRange);
+          mergeNextWithOr = false;
           continue;
         }
       }
@@ -308,6 +298,7 @@ export function parseSmartSearchQuery(rawQuery: string): ParsedSearchQuery {
         if (isNegated) result.excludeTagTerms.push(tagVal);
         else result.tagTerms.push(tagVal);
       }
+      mergeNextWithOr = false;
       continue;
     }
 
@@ -318,12 +309,11 @@ export function parseSmartSearchQuery(rawQuery: string): ParsedSearchQuery {
       const val = body.slice(colonIdx + 1).trim();
 
       if (val) {
+        let handledOperator = true;
         if (key === "tag" || key === "t") {
           if (isNegated) result.excludeTagTerms.push(val);
           else result.tagTerms.push(val);
-          continue;
-        }
-        if (
+        } else if (
           key === "genre" ||
           key === "g" ||
           key === "mood" ||
@@ -331,9 +321,7 @@ export function parseSmartSearchQuery(rawQuery: string): ParsedSearchQuery {
         ) {
           if (isNegated) result.excludeGenreTerms.push(val);
           else result.genreTerms.push(val);
-          continue;
-        }
-        if (
+        } else if (
           key === "folder" ||
           key === "in" ||
           key === "dir" ||
@@ -341,30 +329,22 @@ export function parseSmartSearchQuery(rawQuery: string): ParsedSearchQuery {
         ) {
           if (isNegated) result.excludeFolderTerms.push(val);
           else result.folderTerms.push(val);
-          continue;
-        }
-        if (key === "ext" || key === "format" || key === "fmt") {
+        } else if (key === "ext" || key === "format" || key === "fmt") {
           const cleanExt = val.replace(/^\./, "");
           if (cleanExt) {
             if (isNegated) result.excludeExtTerms.push(cleanExt);
             else result.extTerms.push(cleanExt);
           }
-          continue;
-        }
-        if (key === "artist" || key === "author" || key === "by") {
+        } else if (key === "artist" || key === "author" || key === "by") {
           if (isNegated) result.excludeArtistTerms.push(val);
           else result.artistTerms.push(val);
-          continue;
-        }
-        if (key === "album" || key === "pack") {
-          if (!isNegated) result.albumTerms.push(val);
-          continue;
-        }
-        if (key === "year") {
-          if (!isNegated) result.yearTerms.push(val);
-          continue;
-        }
-        if (key === "key" || key === "camelot") {
+        } else if (key === "album" || key === "pack") {
+          if (isNegated) result.excludeAlbumTerms.push(val);
+          else result.albumTerms.push(val);
+        } else if (key === "year") {
+          if (isNegated) result.excludeYearTerms.push(val);
+          else result.yearTerms.push(val);
+        } else if (key === "key" || key === "camelot") {
           // Use raw token text after `:` so `#` / `b` accidentals (e.g. `key:F#m`, `key:Bb`, `key:~8a`) remain intact!
           const rawBody =
             tok.text.startsWith("-") || tok.text.startsWith("!")
@@ -389,17 +369,17 @@ export function parseSmartSearchQuery(rawQuery: string): ParsedSearchQuery {
             } else {
               result.keyAllowedGroups.push([parsedKey.camelotKey]);
             }
-            continue;
+          } else {
+            handledOperator = false;
           }
-        }
-        if (!isNegated && (key === "dur" || key === "time" || key === "len")) {
+        } else if (!isNegated && (key === "dur" || key === "time" || key === "len")) {
           const dur = parseDurationSpecMs(val, false);
           if (dur) {
             applyDurationBound(result, dur);
-            continue;
+          } else {
+            handledOperator = false;
           }
-        }
-        if (key === "bpm") {
+        } else if (key === "bpm") {
           const bpm = parseBpmRange(val);
           if (bpm) {
             if (isNegated) {
@@ -414,24 +394,24 @@ export function parseSmartSearchQuery(rawQuery: string): ParsedSearchQuery {
                   ? Math.min(result.maxBpm, bpm.max)
                   : bpm.max;
             }
-            continue;
+          } else {
+            handledOperator = false;
           }
-        }
-        if (key === "is" || key === "type") {
+        } else if (key === "is" || key === "type") {
           if (val === "loop" || val === "loops") {
             result.requireLoop = isNegated ? false : true;
-            continue;
-          }
-          if (val === "oneshot" || val === "one-shot" || val === "shot") {
+          } else if (val === "oneshot" || val === "one-shot" || val === "shot") {
             result.requireLoop = isNegated ? true : false;
-            continue;
-          }
-          if (val === "fav" || val === "favorite" || val === "starred") {
+          } else if (val === "fav" || val === "favorite" || val === "starred") {
             result.requireFav = isNegated ? false : true;
-            continue;
+          } else {
+            handledOperator = false;
           }
+        } else if (!applyTechnicalOperatorToken(key, val, isNegated, result)) {
+          handledOperator = false;
         }
-        if (applyTechnicalOperatorToken(key, val, isNegated, result)) {
+        if (handledOperator) {
+          mergeNextWithOr = false;
           continue;
         }
       }
@@ -440,14 +420,15 @@ export function parseSmartSearchQuery(rawQuery: string): ParsedSearchQuery {
     // 4. Negative plain terms / quoted negative phrases (`-word`, `-"bad take"`)
     if (isNegated) {
       if (tok.quoted && body.includes(" ")) {
-        const negPhrase = body.replace(/[^a-z0-9]+/g, " ").trim();
+        const negPhrase = body.replace(/[^\p{L}\p{N}]+/gu, " ").trim();
         if (negPhrase) result.negativePhrases.push(negPhrase);
       } else {
-        const negClean = trimNonAlphaNumAscii(body);
+        const negClean = trimNonAlphaNumUnicode(body);
         if (negClean) {
           result.negativeTerms.push(negClean);
         }
       }
+      mergeNextWithOr = false;
       continue;
     }
 
@@ -455,7 +436,7 @@ export function parseSmartSearchQuery(rawQuery: string): ParsedSearchQuery {
     if (!tok.quoted && lower.includes("|")) {
       const pipeAlts = lower
         .split("|")
-        .map((p) => trimNonAlphaNumAscii(p))
+        .map((p) => trimNonAlphaNumUnicode(p))
         .filter(Boolean);
       if (pipeAlts.length > 0) {
         for (let pIdx = 0; pIdx < pipeAlts.length; pIdx++) {
@@ -466,7 +447,7 @@ export function parseSmartSearchQuery(rawQuery: string): ParsedSearchQuery {
       }
     }
 
-    const subTokens = lower.split(/[^a-z0-9]+/).filter((t) => t.length > 0);
+    const subTokens = lower.split(/[^\p{L}\p{N}]+/u).filter((t) => t.length > 0);
     if (subTokens.length === 1) {
       pushPositiveCandidate({ value: subTokens[0], isPhrase: false });
     } else if (subTokens.length > 1) {
@@ -481,6 +462,8 @@ export function parseSmartSearchQuery(rawQuery: string): ParsedSearchQuery {
           pushPositiveCandidate({ value: st, isPhrase: false });
         }
       }
+    } else {
+      mergeNextWithOr = false;
     }
   }
 

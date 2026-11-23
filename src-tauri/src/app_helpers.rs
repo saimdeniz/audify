@@ -13,7 +13,7 @@ pub const AUDIFY_WEBVIEW_ARGS: &str =
 
 static SETTINGS_HIDE_SEQ: AtomicU64 = AtomicU64::new(0);
 static SETTINGS_LIFECYCLE_LOCK: Mutex<()> = Mutex::new(());
-const SETTINGS_IDLE_DESTROY_DELAY_SECS: u64 = 25;
+const SETTINGS_IDLE_DESTROY_DELAY_SECS: u64 = 8;
 
 static MAIN_WINDOW_FOCUSED: AtomicBool = AtomicBool::new(true);
 static SETTINGS_WINDOW_FOCUSED: AtomicBool = AtomicBool::new(false);
@@ -285,9 +285,12 @@ pub async fn open_settings_window(
     let bg = theme_window_bg_color(Some(clean_theme));
 
     SETTINGS_HIDE_SEQ.fetch_add(1, Ordering::SeqCst);
-    let _lifecycle_guard = SETTINGS_LIFECYCLE_LOCK.lock().ok();
+    let existing_win = {
+        let _lifecycle_guard = SETTINGS_LIFECYCLE_LOCK.lock().ok();
+        app.get_webview_window("settings")
+    };
 
-    if let Some(existing) = app.get_webview_window("settings") {
+    if let Some(existing) = existing_win {
         let _ = existing.set_background_color(Some(bg));
         let _ = existing.set_always_on_top(pin_top);
         let _ = existing.emit_to("settings", "audify:settings-visibility", true);

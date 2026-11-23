@@ -1,8 +1,9 @@
 use super::model_manager::{
-    ensure_models_dirs, sha256_file_hex, CUSTOM_MODEL_FILE, DEFAULT_MODEL_BYTES,
-    DEFAULT_MODEL_FILE, DEFAULT_MODEL_SHA256, DEFAULT_MODEL_URL, DEFAULT_ORT_WHL_BYTES,
-    DEFAULT_ORT_WHL_SHA256, DEFAULT_ORT_WHL_URL, MAX_DLL_ENTRY_BYTES, MAX_REMOTE_DOWNLOAD_BYTES,
-    ORT_DLL_NAME, ORT_DLL_SHA256, ORT_SHARED_DLL_NAME, ORT_SHARED_DLL_SHA256,
+    ensure_models_dirs, replace_file_safely, sha256_file_hex, CUSTOM_MODEL_FILE,
+    DEFAULT_MODEL_BYTES, DEFAULT_MODEL_FILE, DEFAULT_MODEL_SHA256, DEFAULT_MODEL_URL,
+    DEFAULT_ORT_WHL_BYTES, DEFAULT_ORT_WHL_SHA256, DEFAULT_ORT_WHL_URL, MAX_DLL_ENTRY_BYTES,
+    MAX_REMOTE_DOWNLOAD_BYTES, ORT_DLL_NAME, ORT_DLL_SHA256, ORT_SHARED_DLL_NAME,
+    ORT_SHARED_DLL_SHA256,
 };
 use super::types::AiDownloadProgress;
 use crate::security::sanitize_err;
@@ -216,9 +217,7 @@ fn extract_verified_ort_dlls(
             let _ = fs::remove_file(&tmp_dll);
             return Err(format!("Extracted {} failed SHA-256 verification", out_name));
         }
-        let _ = fs::remove_file(&final_dll);
-        fs::rename(&tmp_dll, &final_dll)
-            .map_err(|e| sanitize_err(user_dir, &format!("Failed installing {}: {}", out_name, e)))?;
+        replace_file_safely(user_dir, &tmp_dll, &final_dll, out_name)?;
     }
 
     Ok(())
@@ -297,13 +296,11 @@ pub fn download_default_ai_bundle(
             &tmp_onnx,
             cancel_flag,
         )?;
+        replace_file_safely(user_dir, &tmp_onnx, &model_path, "AI model")?;
         let custom_path = models_dir.join(CUSTOM_MODEL_FILE);
         if custom_path.exists() {
             let _ = fs::remove_file(&custom_path);
         }
-        let _ = fs::remove_file(&model_path);
-        fs::rename(&tmp_onnx, &model_path)
-            .map_err(|e| sanitize_err(user_dir, &format!("Failed installing AI model: {}", e)))?;
     }
 
     Ok(())

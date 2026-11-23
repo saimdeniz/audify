@@ -142,11 +142,29 @@ export function matchesShortcut(
     if (Boolean(e.altKey) !== parsed.hasAlt) return false;
     if (Boolean(e.shiftKey) !== parsed.hasShift) return false;
   } else {
-    if (e.ctrlKey || e.metaKey || e.altKey) return false;
+    // Allow Windows/European AltGr (ctrlKey && altKey && !metaKey) for punctuation symbols like `[` and `]`
+    const isAltGrSymbol =
+      e.ctrlKey &&
+      e.altKey &&
+      !e.metaKey &&
+      parsed.keyLower.length === 1 &&
+      !/^[a-z0-9]$/i.test(parsed.keyLower);
+    if (!isAltGrSymbol && (e.ctrlKey || e.metaKey || e.altKey)) return false;
+    // Reject unexpected Shift on alphanumeric/named keys while allowing shifted symbols like `?` or `+`
+    const isPunctuationKey =
+      parsed.keyLower.length === 1 && !/^[a-z0-9]$/i.test(parsed.keyLower);
+    if (e.shiftKey && !isPunctuationKey) return false;
   }
 
   if (parsed.keyLower === "space") {
     return e.key === " " || e.code === "Space";
+  }
+  // Support Turkish-Q physical KeyI (`ı` / `I`) and `İ` when matching `"i"`
+  if (
+    parsed.keyLower === "i" &&
+    (e.key === "ı" || e.key === "İ" || e.code === "KeyI")
+  ) {
+    return true;
   }
   return e.key.toLowerCase() === parsed.keyLower;
 }
