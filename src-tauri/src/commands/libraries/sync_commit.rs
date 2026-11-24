@@ -2,108 +2,65 @@ use super::sync::ExistingSampleEntry;
 use crate::commands::{resolve_or_create_auto_tag, Library};
 use crate::db::{deterministic_color_for_name, AutoTagRule};
 use crate::scanner::{path_lookup_key, ScannedSample};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, Transaction};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn commit_synced_samples_with_status(
+fn ensure_library_still_exists(tx: &Transaction<'_>, lib_id: i64) -> Result<(), String> {
+    let exists: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM libraries WHERE id = ?1)",
+            params![lib_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|v| v != 0)
+        .unwrap_or(false);
+    if !exists {
+        return Err("Library was removed during sync".to_string());
+    }
+    Ok(())
+}
+
+/// Phase 1 (before incremental batch upserts): updates case-only path renames in-place on
+/// existing `samples.id` rows so subsequent upserts hit `ON CONFLICT(file_path)` cleanly
+/// without cascade-deleting favorites, manual tags, or collection links.
+pub(super) fn apply_pre_batch_reconcile(
     conn: &mut Connection,
     lib_id: i64,
-    active_profile_id: i64,
-    target_folder_is_none: bool,
-    force: bool,
     existing_entries: &HashMap<String, ExistingSampleEntry>,
-    scanned_samples: &[ScannedSample],
     seen_paths: &HashSet<String>,
-    mtime_backfills: &[(String, i64)],
-    rules: &[AutoTagRule],
-) -> Result<(Library, bool), String> {
+) -> Result<usize, String> {
+    if existing_entries.is_empty() || seen_paths.is_empty() {
+        return Ok(0);
+    }
     let mut seen_by_key: HashMap<String, &String> = HashMap::with_capacity(seen_paths.len());
     for p in seen_paths {
         seen_by_key.insert(path_lookup_key(p), p);
     }
 
-    let has_deleted_or_renamed = existing_entries.iter().any(|(key, old_entry)| {
-        match seen_by_key.get(key) {
-            None => true,
-            Some(&actual_disk_path) => actual_disk_path != &old_entry.db_file_path,
-        }
-    });
-    if !force && !has_deleted_or_renamed && scanned_samples.is_empty() {
-        if !mtime_backfills.is_empty() {
-            let tx = conn
-                .transaction()
-                .map_err(|e| format!("Failed to start mtime backfill transaction: {}", e))?;
-            {
-                let mut mtime_stmt = tx
-                    .prepare("UPDATE samples SET file_modified_at = ?1 WHERE id = ?2 AND file_modified_at IS NULL")
-                    .map_err(|e| format!("Failed to prepare mtime backfill statement: {}", e))?;
-                for (lookup_key, modified_ms) in mtime_backfills {
-                    if let Some(entry) = existing_entries.get(lookup_key) {
-                        let _ = mtime_stmt.execute(params![modified_ms, entry.id]);
-                    }
-                }
+    let case_renames: Vec<(&ExistingSampleEntry, &String)> = existing_entries
+        .iter()
+        .filter_map(|(key, old_entry)| {
+            let actual_disk_path = *seen_by_key.get(key)?;
+            if actual_disk_path != &old_entry.db_file_path {
+                Some((old_entry, actual_disk_path))
+            } else {
+                None
             }
-            tx.commit()
-                .map_err(|e| format!("Failed to commit mtime backfill transaction: {}", e))?;
-        }
-        let library = load_library_record(conn, lib_id, active_profile_id)?;
-        return Ok((library, false));
+        })
+        .collect();
+
+    if case_renames.is_empty() {
+        return Ok(0);
     }
 
     let tx = conn
         .transaction()
-        .map_err(|e| format!("Failed to start database transaction: {}", e))?;
+        .map_err(|e| format!("Failed starting pre-batch reconcile transaction: {}", e))?;
+    ensure_library_still_exists(&tx, lib_id)?;
 
-    if !mtime_backfills.is_empty() {
-        let mut mtime_stmt = tx
-            .prepare("UPDATE samples SET file_modified_at = ?1 WHERE id = ?2 AND file_modified_at IS NULL")
-            .map_err(|e| format!("Failed to prepare mtime backfill statement: {}", e))?;
-        for (lookup_key, modified_ms) in mtime_backfills {
-            if let Some(entry) = existing_entries.get(lookup_key) {
-                let _ = mtime_stmt.execute(params![modified_ms, entry.id]);
-            }
-        }
-    }
-
-    let bulk_fts_batch = scanned_samples.len() >= 100 || (force && target_folder_is_none);
-    if bulk_fts_batch {
-        tx.execute_batch(
-            "DROP TRIGGER IF EXISTS trg_sample_tags_ai;
-             DROP TRIGGER IF EXISTS trg_sample_tags_ad;",
-        )
-        .map_err(|e| format!("Failed suspending tag FTS triggers for bulk sync: {}", e))?;
-    }
-
-    if force && target_folder_is_none {
-        tx.execute(
-            "DELETE FROM sample_tags
-             WHERE is_manual = 0
-               AND COALESCE(source, 'auto') IN ('auto', 'auto_rule')
-               AND sample_id IN (SELECT id FROM samples WHERE library_id = ?1)",
-            params![lib_id],
-        )
-        .map_err(|e| format!("Failed to clear old auto-tags for library: {}", e))?;
-    }
-
-    // 1. Delete genuinely removed files (lookup key absent from seen_by_key) and
-    //    update case-renamed paths in-place on existing `samples.id` so favorites,
-    //    manual tags, and collection items are never cascade-deleted!
-    //    Guard both operations against concurrent move/rename/trash between pre-scan & commit.
-    let mut rows_deleted_or_renamed = 0usize;
+    let mut renamed = 0usize;
     {
-        let mut delete_absent_stmt = tx
-            .prepare(
-                "DELETE FROM samples
-                 WHERE id = ?1
-                   AND library_id = ?2
-                   AND COALESCE(is_trashed, 0) = 0
-                   AND file_path = ?3
-                   AND file_size = ?4
-                   AND file_modified_at IS ?5",
-            )
-            .map_err(|e| format!("Failed to prepare sample delete guard: {}", e))?;
         let mut rename_case_stmt = tx
             .prepare(
                 "UPDATE samples
@@ -115,37 +72,53 @@ pub(super) fn commit_synced_samples_with_status(
             )
             .map_err(|e| format!("Failed to prepare sample case-rename guard: {}", e))?;
 
-        for (key, old_entry) in existing_entries {
-            match seen_by_key.get(key) {
-                None => {
-                    rows_deleted_or_renamed += delete_absent_stmt
-                        .execute(params![
-                            old_entry.id,
-                            lib_id,
-                            old_entry.db_file_path,
-                            old_entry.file_size,
-                            old_entry.file_modified_at,
-                        ])
-                        .unwrap_or(0);
-                }
-                Some(&actual_disk_path) if actual_disk_path != &old_entry.db_file_path => {
-                    let new_file_name = Path::new(actual_disk_path)
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("unknown");
-                    rows_deleted_or_renamed += rename_case_stmt
-                        .execute(params![
-                            actual_disk_path,
-                            new_file_name,
-                            old_entry.id,
-                            lib_id,
-                            old_entry.db_file_path,
-                        ])
-                        .unwrap_or(0);
-                }
-                Some(_) => {}
-            }
+        for (old_entry, actual_disk_path) in case_renames {
+            let new_file_name = Path::new(actual_disk_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+            renamed += rename_case_stmt
+                .execute(params![
+                    actual_disk_path,
+                    new_file_name,
+                    old_entry.id,
+                    lib_id,
+                    old_entry.db_file_path,
+                ])
+                .unwrap_or(0);
         }
+    }
+
+    tx.commit()
+        .map_err(|e| format!("Failed committing pre-batch reconcile: {}", e))?;
+    Ok(renamed)
+}
+
+/// Phase 2 (repeated per decoded chunk): commits one batch of newly decoded samples in a short,
+/// crash-resilient SQLite transaction while suspending & restoring tag FTS triggers atomically.
+pub(super) fn commit_scanned_batch(
+    conn: &mut Connection,
+    lib_id: i64,
+    force: bool,
+    scanned_samples: &[ScannedSample],
+    rules: &[AutoTagRule],
+) -> Result<usize, String> {
+    if scanned_samples.is_empty() {
+        return Ok(0);
+    }
+
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("Failed to start batch scan transaction: {}", e))?;
+    ensure_library_still_exists(&tx, lib_id)?;
+
+    let bulk_fts_batch = scanned_samples.len() >= 100;
+    if bulk_fts_batch {
+        tx.execute_batch(
+            "DROP TRIGGER IF EXISTS trg_sample_tags_ai;
+             DROP TRIGGER IF EXISTS trg_sample_tags_ad;",
+        )
+        .map_err(|e| format!("Failed suspending tag FTS triggers for batch sync: {}", e))?;
     }
 
     let mut tag_map: HashMap<String, i64> = HashMap::new();
@@ -286,7 +259,7 @@ pub(super) fn commit_synced_samples_with_status(
             if let Ok(sample_id) =
                 select_id_stmt.query_row(params![s.file_path], |r| r.get::<_, i64>(0))
             {
-                if force && !target_folder_is_none {
+                if force {
                     let _ = clear_sample_autotags_stmt.execute(params![sample_id]);
                 }
                 for tname in &s.auto_tags {
@@ -302,20 +275,7 @@ pub(super) fn commit_synced_samples_with_status(
         }
 
         if bulk_fts_batch {
-            if force && target_folder_is_none {
-                tx.execute(
-                    "UPDATE samples_fts
-                     SET tags_text = COALESCE((
-                         SELECT GROUP_CONCAT(t.name, ' ') || ' ' || REPLACE(REPLACE(GROUP_CONCAT(t.name, ' '), 'ı', 'i'), 'İ', 'i')
-                         FROM sample_tags st
-                         INNER JOIN tags t ON t.id = st.tag_id
-                         WHERE st.sample_id = samples_fts.rowid
-                     ), '')
-                     WHERE rowid IN (SELECT id FROM samples WHERE library_id = ?1)",
-                    params![lib_id],
-                )
-                .map_err(|e| format!("Failed bulk updating FTS tags for library: {}", e))?;
-            } else if !fts_dirty_ids.is_empty() {
+            if !fts_dirty_ids.is_empty() {
                 fts_dirty_ids.sort_unstable();
                 fts_dirty_ids.dedup();
                 for chunk in fts_dirty_ids.chunks(450) {
@@ -336,22 +296,144 @@ pub(super) fn commit_synced_samples_with_status(
                 }
             }
             tx.execute_batch(crate::db::SAMPLE_TAGS_FTS_TRIGGERS_SQL)
-                .map_err(|e| format!("Failed restoring tag FTS triggers after bulk sync: {}", e))?;
+                .map_err(|e| format!("Failed restoring tag FTS triggers after batch sync: {}", e))?;
         }
+    }
 
+    tx.commit()
+        .map_err(|e| format!("Failed to commit scan batch transaction: {}", e))?;
+    Ok(scanned_samples.len())
+}
+
+/// Phase 3 (after all batches finish): backfills mtimes, removes genuinely absent files with
+/// concurrency guards, prunes orphan non-manual auto-tags, and updates `last_scanned_at`.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn finalize_library_sync(
+    conn: &mut Connection,
+    lib_id: i64,
+    active_profile_id: i64,
+    force: bool,
+    total_upserted: usize,
+    pre_renamed: usize,
+    existing_entries: &HashMap<String, ExistingSampleEntry>,
+    seen_paths: &HashSet<String>,
+    mtime_backfills: &[(String, i64)],
+) -> Result<(Library, bool), String> {
+    let mut seen_by_key: HashSet<String> = HashSet::with_capacity(seen_paths.len());
+    for p in seen_paths {
+        seen_by_key.insert(path_lookup_key(p));
+    }
+
+    let absent_entries: Vec<&ExistingSampleEntry> = existing_entries
+        .iter()
+        .filter_map(|(key, entry)| {
+            if !seen_by_key.contains(key) {
+                Some(entry)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if !force
+        && total_upserted == 0
+        && pre_renamed == 0
+        && absent_entries.is_empty()
+        && mtime_backfills.is_empty()
+    {
+        let library = load_library_record(conn, lib_id, active_profile_id)?;
+        return Ok((library, false));
+    }
+
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("Failed starting sync finalization transaction: {}", e))?;
+    ensure_library_still_exists(&tx, lib_id)?;
+
+    if !mtime_backfills.is_empty() {
+        let mut mtime_stmt = tx
+            .prepare("UPDATE samples SET file_modified_at = ?1 WHERE id = ?2 AND file_modified_at IS NULL")
+            .map_err(|e| format!("Failed to prepare mtime backfill statement: {}", e))?;
+        for (lookup_key, modified_ms) in mtime_backfills {
+            if let Some(entry) = existing_entries.get(lookup_key) {
+                let _ = mtime_stmt.execute(params![modified_ms, entry.id]);
+            }
+        }
+    }
+
+    let mut rows_deleted = 0usize;
+    if !absent_entries.is_empty() {
+        let mut delete_absent_stmt = tx
+            .prepare(
+                "DELETE FROM samples
+                 WHERE id = ?1
+                   AND library_id = ?2
+                   AND COALESCE(is_trashed, 0) = 0
+                   AND file_path = ?3
+                   AND file_size = ?4
+                   AND file_modified_at IS ?5",
+            )
+            .map_err(|e| format!("Failed to prepare sample delete guard: {}", e))?;
+
+        for old_entry in absent_entries {
+            rows_deleted += delete_absent_stmt
+                .execute(params![
+                    old_entry.id,
+                    lib_id,
+                    old_entry.db_file_path,
+                    old_entry.file_size,
+                    old_entry.file_modified_at,
+                ])
+                .unwrap_or(0);
+        }
+    }
+
+    let changed = force || total_upserted > 0 || pre_renamed > 0 || rows_deleted > 0;
+    if changed {
         // Prune ONLY non-manual orphan auto-tags!
         let _ = tx.execute(
             "DELETE FROM tags WHERE is_manual = 0 AND id NOT IN (SELECT DISTINCT tag_id FROM sample_tags)",
             [],
         );
+        let _ = tx.execute(
+            "UPDATE libraries SET last_scanned_at = datetime('now') WHERE id = ?1",
+            params![lib_id],
+        );
     }
 
-    let changed = force || !scanned_samples.is_empty() || rows_deleted_or_renamed > 0;
     tx.commit()
-        .map_err(|e| format!("Failed to commit scan transaction: {}", e))?;
+        .map_err(|e| format!("Failed committing sync finalization: {}", e))?;
 
     let library = load_library_record(conn, lib_id, active_profile_id)?;
     Ok((library, changed))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn commit_synced_samples_with_status(
+    conn: &mut Connection,
+    lib_id: i64,
+    active_profile_id: i64,
+    _target_folder_is_none: bool,
+    force: bool,
+    existing_entries: &HashMap<String, ExistingSampleEntry>,
+    scanned_samples: &[ScannedSample],
+    seen_paths: &HashSet<String>,
+    mtime_backfills: &[(String, i64)],
+    rules: &[AutoTagRule],
+) -> Result<(Library, bool), String> {
+    let pre_renamed = apply_pre_batch_reconcile(conn, lib_id, existing_entries, seen_paths)?;
+    let total_upserted = commit_scanned_batch(conn, lib_id, force, scanned_samples, rules)?;
+    finalize_library_sync(
+        conn,
+        lib_id,
+        active_profile_id,
+        force,
+        total_upserted,
+        pre_renamed,
+        existing_entries,
+        seen_paths,
+        mtime_backfills,
+    )
 }
 
 fn load_library_record(
@@ -492,5 +574,50 @@ mod tests {
             )
             .unwrap();
         assert_eq!(old_rule_count, 0, "stale auto_rule tag must be cleared on force rebuild");
+    }
+
+    #[test]
+    fn incremental_batches_persist_progress_and_abort_if_library_removed() {
+        let mut conn = Connection::open_in_memory().expect("open db");
+        init_schema_on_conn(&conn).expect("init schema");
+        conn.execute(
+            "INSERT INTO libraries (id, path, name, is_global) VALUES (1, 'C:/Lib', 'Lib', 1)",
+            [],
+        )
+        .unwrap();
+
+        let mk = |name: &str| ScannedSample {
+            file_path: format!("C:/Lib/{}", name),
+            file_name: name.to_string(),
+            extension: "wav".to_string(),
+            duration_ms: 400,
+            sample_rate: 48000,
+            channels: 2,
+            bit_depth: 24,
+            file_size: 4096,
+            file_modified_at: Some(1000),
+            is_loop: false,
+            genre: String::new(),
+            artist: String::new(),
+            album: String::new(),
+            year: String::new(),
+            bpm: None,
+            musical_key: String::new(),
+            camelot_key: String::new(),
+            peaks_json: "[]".to_string(),
+            auto_tags: vec!["Kick".to_string()],
+        };
+
+        let n1 = commit_scanned_batch(&mut conn, 1, false, &[mk("a.wav"), mk("b.wav")], &[])
+            .expect("batch 1");
+        assert_eq!(n1, 2);
+        let count_after_b1: i64 = conn
+            .query_row("SELECT COUNT(*) FROM samples WHERE library_id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count_after_b1, 2);
+
+        conn.execute("DELETE FROM libraries WHERE id = 1", []).unwrap();
+        let err = commit_scanned_batch(&mut conn, 1, false, &[mk("c.wav")], &[]).unwrap_err();
+        assert!(err.contains("removed"));
     }
 }

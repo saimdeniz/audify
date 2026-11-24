@@ -32,10 +32,25 @@ function getActiveExportAudioPreset(): string {
   return raw === "wav_24" || raw === "nle_48k_24" ? raw : "original";
 }
 
+function getActiveExportLoudnessMode(): string {
+  const raw = (safeGetItem(AUDIFY_STORAGE_KEYS.exportLoudnessMode) || "").trim();
+  return raw === "peak_m1" || raw === "lufs_m14" || raw === "lufs_m24"
+    ? raw
+    : "off";
+}
+
+function formatLoudnessBadge(mode: string): string {
+  if (mode === "peak_m1") return "-1 dBTP";
+  if (mode === "lufs_m14") return "-14 LUFS";
+  if (mode === "lufs_m24") return "-24 LUFS";
+  return "";
+}
+
 export interface SliceExportOptions {
   pitchSemitones?: number;
   applyMicroFade?: boolean;
   exportPreset?: string;
+  loudnessMode?: string;
   cacheOnly?: boolean;
 }
 
@@ -46,7 +61,8 @@ function makeSliceCacheKey(
   pitchSemitones = 0,
   applyMicroFade = false,
   cacheOnly = false,
-  exportPreset = getActiveExportAudioPreset()
+  exportPreset = getActiveExportAudioPreset(),
+  loudnessMode = getActiveExportLoudnessMode()
 ): string {
   const s = Math.max(0, startSec).toFixed(3);
   const e = Math.max(0.02, endSec).toFixed(3);
@@ -54,7 +70,7 @@ function makeSliceCacheKey(
   const mf = applyMicroFade ? "1" : "0";
   const scopePrefix = cacheOnly ? "__cache__" : getActiveCustomSliceDir();
   const normSource = normalizePathForMatch(sourceFilePath);
-  return `${scopePrefix}::${normSource}::${s}-${e}::p=${p}::mf=${mf}::fmt=${exportPreset}`;
+  return `${scopePrefix}::${normSource}::${s}-${e}::p=${p}::mf=${mf}::fmt=${exportPreset}::norm=${loudnessMode}`;
 }
 
 export function getCachedPreviewSlicePath(
@@ -70,7 +86,8 @@ export function getCachedPreviewSlicePath(
     opts?.pitchSemitones ?? 0,
     Boolean(opts?.applyMicroFade),
     true,
-    opts?.exportPreset ?? getActiveExportAudioPreset()
+    opts?.exportPreset ?? getActiveExportAudioPreset(),
+    opts?.loudnessMode ?? getActiveExportLoudnessMode()
   );
   return slicePathCache.get(key) || null;
 }
@@ -104,6 +121,7 @@ export async function preExportAudioSlice(
   const microFade = Boolean(opts?.applyMicroFade);
   const cacheOnly = Boolean(opts?.cacheOnly);
   const exportPreset = opts?.exportPreset ?? getActiveExportAudioPreset();
+  const loudnessMode = opts?.loudnessMode ?? getActiveExportLoudnessMode();
   const key = makeSliceCacheKey(
     sourceFilePath,
     startSec,
@@ -111,7 +129,8 @@ export async function preExportAudioSlice(
     pitch,
     microFade,
     cacheOnly,
-    exportPreset
+    exportPreset,
+    loudnessMode
   );
   const cached = slicePathCache.get(key);
   if (cached) {
@@ -137,6 +156,7 @@ export async function preExportAudioSlice(
         applyMicroFade: microFade,
         cacheOnly,
         ...(exportPreset !== "original" ? { exportPreset } : {}),
+        ...(loudnessMode !== "off" ? { exportLoudnessMode: loudnessMode } : {}),
       });
       if (slicedWavPath && slicedWavPath.trim().length > 0) {
         const normalized = normalizeOsPath(slicedWavPath);
@@ -178,11 +198,17 @@ export async function startNativeSliceDrag(
     const pitch = opts?.pitchSemitones ?? 0;
     const microFade = Boolean(opts?.applyMicroFade);
     const exportPreset = opts?.exportPreset ?? getActiveExportAudioPreset();
+    const loudnessMode = opts?.loudnessMode ?? getActiveExportLoudnessMode();
     const cachedPreview = getCachedPreviewSlicePath(
       sourceFilePath,
       startSec,
       endSec,
-      { pitchSemitones: pitch, applyMicroFade: microFade, exportPreset }
+      {
+        pitchSemitones: pitch,
+        applyMicroFade: microFade,
+        exportPreset,
+        loudnessMode,
+      }
     );
     const customDir = getActiveCustomSliceDir();
 
@@ -196,6 +222,7 @@ export async function startNativeSliceDrag(
       applyMicroFade: microFade,
       customName: null,
       ...(exportPreset !== "original" ? { exportPreset } : {}),
+      ...(loudnessMode !== "off" ? { exportLoudnessMode: loudnessMode } : {}),
     });
     const normalizedSlicePath = promoted?.slice_path
       ? normalizeOsPath(promoted.slice_path)
@@ -241,14 +268,26 @@ export async function startNativeSliceDrag(
 export async function startNativePitchedSampleDrag(
   sample: { file_path: string; file_name: string; duration_ms: number },
   pitchSemitones: number,
-  applyMicroFade = false
+  applyMicroFade = false,
+  loudnessMode?: string
 ): Promise<boolean> {
   const endSec = Math.max(0.05, sample.duration_ms / 1000);
-  const sign = pitchSemitones > 0 ? "+" : "";
-  const label = `[${sign}${pitchSemitones}st] ${sample.file_name}`;
+  const resolvedLoudness = loudnessMode ?? getActiveExportLoudnessMode();
+  const tags: string[] = [];
+  if (Math.abs(pitchSemitones) >= 0.01) {
+    const sign = pitchSemitones > 0 ? "+" : "";
+    tags.push(`${sign}${pitchSemitones}st`);
+  }
+  const loudBadge = formatLoudnessBadge(resolvedLoudness);
+  if (loudBadge) tags.push(loudBadge);
+  const label =
+    tags.length > 0
+      ? `[${tags.join(" · ")}] ${sample.file_name}`
+      : sample.file_name;
   const res = await startNativeSliceDrag(sample.file_path, 0, endSec, label, {
     pitchSemitones,
     applyMicroFade,
+    loudnessMode: resolvedLoudness,
   });
   return Boolean(res?.droppedExternally);
 }

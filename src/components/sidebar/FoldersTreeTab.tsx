@@ -1,4 +1,12 @@
-import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ChevronsDown,
@@ -110,12 +118,26 @@ export const FoldersTreeTab: React.FC<FoldersTreeTabProps> = ({
     }
   }, [isSearchOpen]);
 
-  const handleCopyFolderPath = (path: string) => {
-    navigator.clipboard
-      ?.writeText(path)
-      .then(() => setStatusMessage(`Copied folder path: ${path}`))
-      .catch(() => {});
-  };
+  const handleCopyFolderPath = useCallback(
+    (path: string) => {
+      navigator.clipboard
+        ?.writeText(path)
+        .then(() => setStatusMessage(`Copied folder path: ${path}`))
+        .catch(() => {});
+    },
+    [setStatusMessage]
+  );
+
+  const handleCloseFolderContextMenu = useCallback(() => {
+    setFolderContextMenu(null);
+  }, []);
+
+  const handleShowFolderInExplorer = useCallback(
+    (path: string) => {
+      void showInFolder(path);
+    },
+    [showInFolder]
+  );
 
   const displayLibraries = useMemo(
     () => filterVisibleLibraries(libraries),
@@ -419,6 +441,31 @@ export const FoldersTreeTab: React.FC<FoldersTreeTabProps> = ({
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const row = flatRows[virtualRow.index];
               if (!row) return null;
+              const rowDropKey =
+                row.kind === "library"
+                  ? `folder:${row.lib.id}:${row.lib.path}`
+                  : row.kind === "folder"
+                    ? `folder:${row.lib.id}:${row.node.fullPath}`
+                    : "";
+              const rowCanDrop =
+                row.kind !== "create-input" &&
+                !isReadOnlyScope &&
+                enableAdvancedFileOps &&
+                !row.lib.is_read_only;
+              const isDropHovered =
+                rowCanDrop && isAnyDragActive && dragHoverTarget === rowDropKey;
+              const isDropFlashed =
+                row.kind !== "create-input" &&
+                !isReadOnlyScope &&
+                dropFlashTarget === rowDropKey;
+              const isRenamingThisFolder = Boolean(
+                row.kind === "folder" &&
+                  !isReadOnlyScope &&
+                  renamingFolderTarget &&
+                  renamingFolderTarget.libraryId === row.lib.id &&
+                  normalizeTreeKey(renamingFolderTarget.folderPath) ===
+                    normalizeTreeKey(row.node.fullPath)
+              );
               return (
                 <FolderTreeRow
                   key={row.key}
@@ -430,17 +477,21 @@ export const FoldersTreeTab: React.FC<FoldersTreeTabProps> = ({
                   isAnyDragActive={isAnyDragActive}
                   isExternalFileDragActive={isExternalFileDragActive}
                   inAppDragCount={inAppDragCount}
-                  dragHoverTarget={dragHoverTarget}
-                  dropFlashTarget={dropFlashTarget}
+                  isDropHovered={isDropHovered}
+                  isDropFlashed={isDropFlashed}
                   isScanning={isScanning}
                   createInputRef={createInputRef}
-                  newSubfolderName={newSubfolderName}
+                  newSubfolderName={
+                    row.kind === "create-input" ? newSubfolderName : ""
+                  }
                   setNewSubfolderName={setNewSubfolderName}
                   setCreatingSubfolderTarget={setCreatingSubfolderTarget}
                   submitCreateSubfolder={submitCreateSubfolder}
-                  renamingFolderTarget={renamingFolderTarget}
+                  isRenamingThisFolder={isRenamingThisFolder}
                   renameInputRef={renameInputRef}
-                  renameFolderDraft={renameFolderDraft}
+                  renameFolderDraft={
+                    isRenamingThisFolder ? renameFolderDraft : ""
+                  }
                   setRenameFolderDraft={setRenameFolderDraft}
                   setRenamingFolderTarget={setRenamingFolderTarget}
                   submitRenameSubfolder={submitRenameSubfolder}
@@ -466,8 +517,8 @@ export const FoldersTreeTab: React.FC<FoldersTreeTabProps> = ({
         <Suspense fallback={null}>
           <LazySidebarFolderContextMenu
             menu={folderContextMenu}
-            onClose={() => setFolderContextMenu(null)}
-            onShowInFolder={(path) => void showInFolder(path)}
+            onClose={handleCloseFolderContextMenu}
+            onShowInFolder={handleShowFolderInExplorer}
             onCopyPath={handleCopyFolderPath}
           />
         </Suspense>

@@ -68,7 +68,15 @@ fn decode_mono_for_dsp(path: &Path, max_seconds: f64) -> Option<(Vec<f32>, u32, 
         if packet.track_id() != track_id {
             continue;
         }
-        if let Ok(decoded) = decoder.decode(&packet) {
+        let decoded = match decoder.decode(&packet) {
+            Ok(d) => d,
+            Err(SymphoniaError::ResetRequired) => {
+                decoder.reset();
+                continue;
+            }
+            Err(_) => continue,
+        };
+        {
             let frames = decoded.frames();
             if frames == 0 {
                 continue;
@@ -218,6 +226,13 @@ mod tests {
         let r4 = extract_fast_bpm_and_key(None, "Pad_Atmosphere_F#m.wav");
         assert_eq!(r4.musical_key, "F#m");
         assert_eq!(r4.camelot_key, "11A");
+
+        // All-caps acronyms (`EBM`, `DBM`, `ABM`, `BBM`) MUST NOT be parsed as flat-minor keys,
+        // while real flat-minor tokens (`Ebm`, `Bbm`) still parse cleanly.
+        assert_eq!(extract_fast_bpm_and_key(None, "EBM_Industrial_Loop.wav").musical_key, "");
+        assert_eq!(extract_fast_bpm_and_key(None, "DBM_Meter_Beep.wav").musical_key, "");
+        assert_eq!(extract_fast_bpm_and_key(None, "Synth_Bass_Ebm.wav").musical_key, "Ebm");
+        assert_eq!(extract_fast_bpm_and_key(None, "Warm_Pad_Bbm.wav").musical_key, "Bbm");
     }
 
     #[test]
@@ -268,5 +283,14 @@ mod tests {
         }
         assert_eq!(estimate_key_from_mono(&noise, sr), None);
         assert_eq!(estimate_bpm_from_mono(&noise, sr), None);
+
+        // 4. NaN / Inf corrupted PCM frames MUST never bypass confidence gates
+        let mut nan_signal = vec![f32::NAN; len];
+        assert_eq!(estimate_key_from_mono(&nan_signal, sr), None);
+        assert_eq!(estimate_bpm_from_mono(&nan_signal, sr), None);
+        nan_signal[0] = f32::INFINITY;
+        nan_signal[100] = f32::NEG_INFINITY;
+        assert_eq!(estimate_key_from_mono(&nan_signal, sr), None);
+        assert_eq!(estimate_bpm_from_mono(&nan_signal, sr), None);
     }
 }

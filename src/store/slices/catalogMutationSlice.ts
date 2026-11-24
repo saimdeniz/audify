@@ -3,6 +3,7 @@ import { SampleBpmKeyPatch, SampleItem } from "../../types";
 import { clearSmartSearchCache } from "../../utils/smartSearch";
 import { invokeCommand } from "../../utils/tauriCommands";
 import { reconcileSelectionAfterFilter } from "../filterEngine";
+import { resetPlayheadClock } from "../playheadClock";
 import { AUDIFY_STORAGE_KEYS, safeSetItem } from "../storageHelpers";
 import { SampleStoreState, StoreSliceContext } from "../types";
 
@@ -119,6 +120,12 @@ export function createCatalogMutationSlice(
               state.selectedSampleIds,
               true
             );
+            const selectionChanged =
+              (reconciled.nextSelected?.id ?? null) !==
+              (state.selectedSample?.id ?? null);
+            if (selectionChanged) {
+              resetPlayheadClock(0);
+            }
             return {
               allProfileSamples: nextAll,
               rawSamples: nextRaw,
@@ -127,6 +134,15 @@ export function createCatalogMutationSlice(
               selectedSample: reconciled.nextSelected,
               selectedSampleIds: reconciled.nextSelectedIds,
               lastSelectedIndex: reconciled.nextSelectedIndex,
+              ...(selectionChanged
+                ? {
+                    sliceRange: null,
+                    currentTimeSec: 0,
+                    durationSec: reconciled.nextSelected
+                      ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
+                      : 0,
+                  }
+                : {}),
               statusMessage: "Removed sample from Favorites",
             };
           }
@@ -176,6 +192,12 @@ export function createCatalogMutationSlice(
               state.selectedSampleIds,
               true
             );
+            const selectionChanged =
+              (reconciled.nextSelected?.id ?? null) !==
+              (state.selectedSample?.id ?? null);
+            if (selectionChanged) {
+              resetPlayheadClock(0);
+            }
             return {
               allProfileSamples: nextAll,
               rawSamples: nextRaw,
@@ -183,6 +205,15 @@ export function createCatalogMutationSlice(
               selectedSample: reconciled.nextSelected,
               selectedSampleIds: reconciled.nextSelectedIds,
               lastSelectedIndex: reconciled.nextSelectedIndex,
+              ...(selectionChanged
+                ? {
+                    sliceRange: null,
+                    currentTimeSec: 0,
+                    durationSec: reconciled.nextSelected
+                      ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
+                      : 0,
+                  }
+                : {}),
               statusMessage: isLoop
                 ? "Classified sample as Loop (↻)"
                 : "Classified sample as One-Shot (→)",
@@ -247,6 +278,12 @@ export function createCatalogMutationSlice(
               state.selectedSampleIds,
               true
             );
+            const selectionChanged =
+              (reconciled.nextSelected?.id ?? null) !==
+              (state.selectedSample?.id ?? null);
+            if (selectionChanged) {
+              resetPlayheadClock(0);
+            }
             return {
               allProfileSamples: nextAll,
               rawSamples: nextRaw,
@@ -255,6 +292,15 @@ export function createCatalogMutationSlice(
               selectedSample: reconciled.nextSelected,
               selectedSampleIds: reconciled.nextSelectedIds,
               lastSelectedIndex: reconciled.nextSelectedIndex,
+              ...(selectionChanged
+                ? {
+                    sliceRange: null,
+                    currentTimeSec: 0,
+                    durationSec: reconciled.nextSelected
+                      ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
+                      : 0,
+                  }
+                : {}),
               statusMessage: `Removed ${sampleIds.length} samples from Favorites`,
             };
           }

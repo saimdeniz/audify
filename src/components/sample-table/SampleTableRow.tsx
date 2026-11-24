@@ -33,7 +33,6 @@ import {
 interface SampleTableRowProps {
   sample: SampleItem;
   rowIndex: number;
-  totalSamples: number;
   startOffsetPx: number;
   totalTableWidth: number;
   isSimilarityMode: boolean;
@@ -54,6 +53,7 @@ interface SampleTableRowProps {
   visibleCols: VisibleColumnsState;
   colWidths: Record<ResizableColKey, number>;
   selectedCollectionId: number | null;
+  isSmartCollectionActive?: boolean;
   selectedGenre: string | null;
   selectedTagSet: ReadonlySet<number>;
   genreColorMap: ReadonlyMap<string, string>;
@@ -95,6 +95,7 @@ export const SampleTableRow: React.FC<SampleTableRowProps> = React.memo(
     visibleCols,
     colWidths,
     selectedCollectionId,
+    isSmartCollectionActive = false,
     selectedGenre,
     selectedTagSet,
     genreColorMap,
@@ -287,7 +288,7 @@ export const SampleTableRow: React.FC<SampleTableRowProps> = React.memo(
                     </span>
                   </div>
 
-                  {selectedCollectionId !== null && (
+                  {selectedCollectionId !== null && !isSmartCollectionActive && (
                     <button
                       type="button"
                       onClick={(e) => {

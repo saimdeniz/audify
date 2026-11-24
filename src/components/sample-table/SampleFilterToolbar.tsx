@@ -8,18 +8,29 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
 import { Hash, Search, SlidersHorizontal, Sparkles, X, Zap } from "lucide-react";
-import { Z_INDEX } from "../../constants/zIndex";
 import { useSampleStore } from "../../store/useSampleStore";
 import { getMatchingSynonymsForQuery } from "../../utils/sfxThesaurus";
 import { QuickCreatePopover } from "../QuickCreatePopover";
-import { SliceToolbarChips } from "./SliceToolbarChips";
-import { TrashToolbarChips } from "./TrashToolbarChips";
+import {
+  SmartSearchAutocomplete,
+  useSearchAutocomplete,
+} from "./SmartSearchAutocomplete";
 
 const SmartSearchHelperPopover = lazy(() =>
   import("./SmartSearchHelperPopover").then((m) => ({
     default: m.SmartSearchHelperPopover,
+  }))
+);
+const SliceToolbarChips = lazy(() =>
+  import("./SliceToolbarChips").then((m) => ({ default: m.SliceToolbarChips }))
+);
+const TrashToolbarChips = lazy(() =>
+  import("./TrashToolbarChips").then((m) => ({ default: m.TrashToolbarChips }))
+);
+const ToolbarTagOverflowPopover = lazy(() =>
+  import("./ToolbarTagOverflowPopover").then((m) => ({
+    default: m.ToolbarTagOverflowPopover,
   }))
 );
 
@@ -29,7 +40,7 @@ interface SampleFilterToolbarProps {
   setShowSearchHelper: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
-export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> = ({
+export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> = React.memo(({
   searchInputRef,
   showSearchHelper,
   setShowSearchHelper,
@@ -43,6 +54,7 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> = ({
     slicesFilterActive || (trashFilterActive && trashViewTab === "slices");
   const samples = useSampleStore((s) => s.samples);
   const tags = useSampleStore((s) => s.tags);
+  const genres = useSampleStore((s) => s.genres);
   const selectedTagIds = useSampleStore((s) => s.selectedTagIds);
   const hasActiveFilter = useSampleStore((s) =>
     Boolean(
@@ -155,14 +167,28 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> = ({
       if (!rect || (rect.width === 0 && rect.height === 0)) return;
       const top = Math.min(window.innerHeight - 160, rect.bottom + 4);
       const right = Math.max(8, window.innerWidth - rect.right);
-      setOverflowPos({ top, right });
+      setOverflowPos((prev) =>
+        prev.top === top && prev.right === right ? prev : { top, right }
+      );
+    };
+    const onScroll = (ev: Event) => {
+      const trigger = overflowTriggerRef.current;
+      if (!trigger) return;
+      const target = ev.target;
+      if (
+        target === window ||
+        target === document ||
+        (target instanceof Node && target.contains(trigger))
+      ) {
+        update();
+      }
     };
     update();
     window.addEventListener("resize", update);
-    window.addEventListener("scroll", update, true);
+    window.addEventListener("scroll", onScroll, true);
     return () => {
       window.removeEventListener("resize", update);
-      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("scroll", onScroll, true);
     };
   }, [showTagOverflow]);
 
@@ -244,6 +270,15 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> = ({
     };
   }, [suggestedTags, cloudWidth]);
 
+  const autocomplete = useSearchAutocomplete({
+    enabled: !showSearchHelper && !slicesFilterActive && !trashFilterActive,
+    searchQuery,
+    tags,
+    genres,
+    searchInputRef,
+    setSearchQuery,
+  });
+
   return (
     <div className="h-[36px] bg-surface-1 audify-frosted-bar border-b border-line px-2.5 flex items-center justify-between gap-2.5 shrink-0">
       <div
@@ -257,8 +292,32 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> = ({
           data-search-input="true"
           type="text"
           value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
+          onFocus={(e) =>
+            autocomplete.onFocus(
+              e.currentTarget.selectionStart ?? e.currentTarget.value.length
+            )
+          }
+          onBlur={autocomplete.onBlur}
+          onClick={(e) =>
+            autocomplete.onCursorChange(
+              e.currentTarget.selectionStart ?? e.currentTarget.value.length
+            )
+          }
+          onKeyUp={(e) => {
+            if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+              autocomplete.onCursorChange(
+                e.currentTarget.selectionStart ?? e.currentTarget.value.length
+              );
+            }
+          }}
+          onChange={(e) => {
+            autocomplete.onValueChange(
+              e.target.selectionStart ?? e.target.value.length
+            );
+            setSearchQuery(e.target.value);
+          }}
           onKeyDown={(e) => {
+            if (autocomplete.handleKeyDown(e)) return;
             if (e.key === "Escape") {
               e.stopPropagation();
               if (showSearchHelper) {
@@ -288,7 +347,8 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> = ({
         {searchQuery && (
           <button
             type="button"
-            onClick={() => setSearchQuery("")}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => { setSearchQuery(""); searchInputRef.current?.focus(); }}
             className="w-[18px] h-[18px] flex items-center justify-center text-fg-2 hover:text-accent-fg shrink-0"
             title="Clear search"
           >
@@ -358,6 +418,16 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> = ({
           </>
         )}
 
+        {autocomplete.context && autocomplete.context.items.length > 0 && (
+          <SmartSearchAutocomplete
+            context={autocomplete.context}
+            activeIndex={autocomplete.activeIndex}
+            anchorRef={searchBoxRef}
+            onHoverIndex={autocomplete.setActiveIndex}
+            onSelect={autocomplete.accept}
+          />
+        )}
+
         {showSearchHelper && (
           <Suspense fallback={null}>
             <SmartSearchHelperPopover
@@ -369,6 +439,7 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> = ({
               setSearchQuery={setSearchQuery}
               setSmartSearchSynonyms={setSmartSearchSynonyms}
               setShowSearchHelper={setShowSearchHelper}
+              onOperatorInserted={autocomplete.onFocus}
             />
           </Suspense>
         )}
@@ -398,9 +469,13 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> = ({
 
       {/* Tag Suggestion Cloud, Trash Sub-View Switcher, or Slice Quick Filters */}
       {slicesFilterActive ? (
-        <SliceToolbarChips />
+        <Suspense fallback={null}>
+          <SliceToolbarChips />
+        </Suspense>
       ) : trashFilterActive ? (
-        <TrashToolbarChips />
+        <Suspense fallback={null}>
+          <TrashToolbarChips />
+        </Suspense>
       ) : (
         <div
           ref={cloudContainerRef}
@@ -423,7 +498,7 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> = ({
                   if (e.ctrlKey || e.metaKey) {
                     toggleTagFilter(tag.id);
                   } else {
-                    selectOrToggleTagFilter(tag.id, true);
+                    selectOrToggleTagFilter(tag.id, false);
                   }
                 }}
                 className={`h-[22px] px-2 rounded-[3px] border text-[11px] inline-flex items-center gap-1.5 shrink-0 transition-colors ${
@@ -461,74 +536,22 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> = ({
               </button>
             )}
 
-            {showTagOverflow &&
-              overflowTags.length > 0 &&
-              createPortal(
-                <div
-                  ref={overflowPopoverRef}
-                  data-context-menu-portal="true"
-                  data-popover-portal="true"
-                  data-mica-overlay="true"
-                  style={{
-                    top: overflowPos.top,
-                    right: overflowPos.right,
-                    zIndex: Z_INDEX.floatingMenu,
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                  className="fixed w-[290px] max-w-[85vw] bg-surface-2 backdrop-blur-md border border-line-strong rounded-md shadow-2xl p-2 space-y-1.5"
-                >
-                  <div className="flex items-center justify-between border-b border-line pb-1">
-                    <span className="font-mono text-[9.5px] font-semibold uppercase tracking-wider text-fg-2">
-                      More Matching Tags ({overflowTags.length})
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setShowTagOverflow(false)}
-                      className="w-[18px] h-[18px] rounded-xs flex items-center justify-center text-fg-3 hover:text-fg hover:bg-surface-3"
-                      title="Close"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-
-                  <div className="flex flex-wrap gap-1.5 max-h-[180px] overflow-y-auto pr-0.5">
-                    {overflowTags.map(({ tag, matchCount, isSelected }) => (
-                      <button
-                        key={tag.id}
-                        type="button"
-                        onClick={(e) => {
-                          if (e.ctrlKey || e.metaKey) {
-                            toggleTagFilter(tag.id);
-                          } else {
-                            selectOrToggleTagFilter(tag.id, true);
-                            setShowTagOverflow(false);
-                          }
-                        }}
-                        className={`h-[23px] px-2 rounded-[3px] border text-[11px] inline-flex items-center gap-1.5 transition-colors ${
-                          isSelected
-                            ? "bg-accent-soft border-accent text-accent-fg font-medium"
-                            : "bg-surface-3 border-line text-fg-2 hover:text-fg hover:border-line-strong"
-                        }`}
-                        title={`${tag.name} (${matchCount.toLocaleString()} in current view) — Click to filter, Ctrl+Click for multi-tag`}
-                      >
-                        <span
-                          className="w-2 h-2 rounded-[2px] shrink-0"
-                          style={{ backgroundColor: tag.color }}
-                        />
-                        <span className="truncate max-w-[130px]">{tag.name}</span>
-                        <span className="font-mono tabular-nums text-[9.5px] text-fg-3">
-                          {matchCount.toLocaleString()}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>,
-                document.body
-              )}
+            {showTagOverflow && overflowTags.length > 0 && (
+              <Suspense fallback={null}>
+                <ToolbarTagOverflowPopover
+                  popoverRef={overflowPopoverRef}
+                  pos={overflowPos}
+                  overflowTags={overflowTags}
+                  onToggleTag={toggleTagFilter}
+                  onSelectOrToggleTag={selectOrToggleTagFilter}
+                  onClose={() => setShowTagOverflow(false)}
+                />
+              </Suspense>
+            )}
           </>
         )}
         </div>
       )}
     </div>
   );
-};
+});

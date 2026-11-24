@@ -9,6 +9,7 @@ import type {
   Collection,
   DuplicateScanMode,
   DuplicateScanResult,
+  ExternalSimilaritySearchResult,
   FolderDropResult,
   ProfileQuickStats,
   PromotedSliceResult,
@@ -154,6 +155,19 @@ export interface AudifyCommandMap {
     };
     result: SimilaritySearchResult;
   };
+  find_similar_samples_by_external_audio: {
+    args: {
+      probeId?: string | null;
+      filePath?: string | null;
+      fileName?: string | null;
+      bytes?: number[] | null;
+      minScore?: number;
+      topK?: number;
+      scopeFolderPath?: string | null;
+      matchSimilarDuration?: boolean;
+    };
+    result: ExternalSimilaritySearchResult;
+  };
   get_ai_tag_suggestions: {
     args: { status?: string; sampleIds?: number[] | null };
     result: AiTagSuggestionItem[];
@@ -185,6 +199,7 @@ export interface AudifyCommandMap {
       applyMicroFade?: boolean | null;
       customName?: string | null;
       exportPreset?: string | null;
+      exportLoudnessMode?: string | null;
     };
     result: PromotedSliceResult;
   };
@@ -216,6 +231,7 @@ export interface AudifyCommandMap {
       applyMicroFade?: boolean | null;
       customName?: string | null;
       exportPreset?: string | null;
+      exportLoudnessMode?: string | null;
     };
     result: SliceHistoryEntry;
   };

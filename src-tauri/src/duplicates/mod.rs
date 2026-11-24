@@ -6,7 +6,9 @@ pub use progress::DuplicateScanProgressPayload;
 use progress::ProgressEmitFn;
 
 use crate::db::get_active_profile_id;
-use crate::security::is_unc_or_network_path;
+use crate::security::{
+    has_ntfs_ads_colon, is_unc_or_network_path, reject_symlink_ancestors,
+};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -115,10 +117,13 @@ pub(crate) fn resolve_library_roots(raw_roots: &[(i64, String)]) -> HashMap<i64,
     let mut map = HashMap::new();
     for (lib_id, raw_path) in raw_roots {
         let trimmed = raw_path.trim();
-        if trimmed.is_empty() || is_unc_or_network_path(trimmed) {
+        if trimmed.is_empty() || is_unc_or_network_path(trimmed) || has_ntfs_ads_colon(trimmed) {
             continue;
         }
         let path = Path::new(trimmed);
+        if reject_symlink_ancestors(path).is_err() {
+            continue;
+        }
         if let Ok(sym) = fs::symlink_metadata(path) {
             if sym.file_type().is_symlink() || !sym.is_dir() {
                 continue;
@@ -307,7 +312,7 @@ pub(crate) fn load_duplicate_candidates_for_model(
                 FROM sample_tags st
                 INNER JOIN samples s2 ON s2.id = st.sample_id
                 INNER JOIN libraries l2 ON l2.id = s2.library_id
-                WHERE s2.is_trashed = 0
+                WHERE COALESCE(s2.is_trashed, 0) = 0
                   AND (l2.is_global = 1
                        OR l2.id IN (SELECT pl.library_id FROM profile_libraries pl WHERE pl.profile_id = ?1))
                 GROUP BY st.sample_id
@@ -320,7 +325,7 @@ pub(crate) fn load_duplicate_candidates_for_model(
                 GROUP BY ci.sample_id
          ) cc ON cc.sample_id = s.id
          {}
-         WHERE s.is_trashed = 0
+         WHERE COALESCE(s.is_trashed, 0) = 0
            AND (l.is_global = 1 OR l.id IN (SELECT pl.library_id FROM profile_libraries pl WHERE pl.profile_id = ?1))
            {}
          ORDER BY s.id ASC",
@@ -406,7 +411,8 @@ pub(crate) fn persist_sample_hash_cache(
         let mut stmt = tx
             .prepare_cached(
                 "INSERT INTO sample_hashes (sample_id, file_size, file_mtime, partial_hash, full_hash, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))
+                 SELECT ?1, ?2, ?3, ?4, ?5, datetime('now')
+                 WHERE EXISTS (SELECT 1 FROM samples WHERE id = ?1)
                  ON CONFLICT(sample_id) DO UPDATE SET
                      partial_hash = CASE
                          WHEN sample_hashes.file_size = excluded.file_size

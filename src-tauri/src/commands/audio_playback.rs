@@ -55,9 +55,15 @@ pub async fn audio_engine_load(
         skip_leading_silence: skip_leading_silence.unwrap_or(false),
     };
 
-    engine
-        .load_track(req)
-        .map_err(|e| sanitize_err(&user_dir_err, &e))
+    let engine_owned = engine.inner().clone();
+    let user_dir_load = user_dir_err.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        engine_owned
+            .load_track(req)
+            .map_err(|e| sanitize_err(&user_dir_load, &e))
+    })
+    .await
+    .map_err(|e| sanitize_err(&user_dir_err, &format!("Audio load task error: {}", e)))?
 }
 
 #[tauri::command]
@@ -121,10 +127,13 @@ pub fn audio_engine_set_params(
 }
 
 #[tauri::command]
-pub fn audio_engine_list_devices(
+pub async fn audio_engine_list_devices(
     engine: State<'_, AudioEngineState>,
-) -> Vec<AudioOutputDeviceInfo> {
-    engine.list_devices()
+) -> Result<Vec<AudioOutputDeviceInfo>, String> {
+    let engine_owned = engine.inner().clone();
+    Ok(tauri::async_runtime::spawn_blocking(move || engine_owned.list_devices())
+        .await
+        .unwrap_or_default())
 }
 
 #[tauri::command]
@@ -139,16 +148,24 @@ pub fn audio_engine_set_device(
 }
 
 #[tauri::command]
-pub fn audio_engine_release_handle(
+pub async fn audio_engine_release_handle(
     engine: State<'_, AudioEngineState>,
     file_path: Option<String>,
-) -> bool {
-    engine.release_file_handle(file_path.as_deref())
+) -> Result<bool, String> {
+    let engine_owned = engine.inner().clone();
+    Ok(tauri::async_runtime::spawn_blocking(move || {
+        engine_owned.release_file_handle(file_path.as_deref())
+    })
+    .await
+    .unwrap_or(false))
 }
 
 #[tauri::command]
-pub fn audio_engine_get_state(
+pub async fn audio_engine_get_state(
     engine: State<'_, AudioEngineState>,
 ) -> Result<AudioSyncPayload, String> {
-    engine.snapshot()
+    let engine_owned = engine.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || engine_owned.snapshot())
+        .await
+        .map_err(|e| format!("Audio snapshot task error: {}", e))?
 }

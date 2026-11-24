@@ -9,6 +9,7 @@ import {
   AutoTagRule,
   CollectionRuleTemplate,
   ExportAudioPreset,
+  ExportLoudnessMode,
   KeyboardShortcuts,
   LicenseGroup,
   MiniDockEdgeSide,
@@ -314,6 +315,15 @@ export function applyProfileSettingsToStore(
       : isBoot
       ? cur.exportAudioPreset
       : "original";
+  const exportLoudnessMode: ExportLoudnessMode =
+    parsed.exportLoudnessMode === "peak_m1" ||
+    parsed.exportLoudnessMode === "lufs_m14" ||
+    parsed.exportLoudnessMode === "lufs_m24" ||
+    parsed.exportLoudnessMode === "off"
+      ? parsed.exportLoudnessMode
+      : isBoot
+      ? cur.exportLoudnessMode
+      : "off";
   const skipLeadingSilence = resolveBool(
     parsed.skipLeadingSilence,
     isBoot,
@@ -374,6 +384,7 @@ export function applyProfileSettingsToStore(
     audioOutputDeviceId,
     sliceMicroFade,
     exportAudioPreset,
+    exportLoudnessMode,
     skipLeadingSilence,
     miniDockEdgePeek,
     miniDockEdgeSide,

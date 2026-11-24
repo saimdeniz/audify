@@ -57,6 +57,8 @@ export function useWaveformDeckInteractions({
   const [dragMode, setDragMode] = useState<CanvasDragMode>("none");
   const regionAnchorSecRef = useRef<number | null>(null);
   const activeWindowCleanupRef = useRef<(() => void) | null>(null);
+  const selectedSampleRef = useRef(selectedSample);
+  selectedSampleRef.current = selectedSample;
 
   useEffect(() => {
     return () => {
@@ -114,8 +116,10 @@ export function useWaveformDeckInteractions({
     if (!container) return;
 
     const handleWheel = (e: WheelEvent) => {
-      if (!selectedSample) return;
-      const rect = refreshContainerRect();
+      if (!selectedSampleRef.current) return;
+      const box = container.getBoundingClientRect();
+      containerRectRef.current = { left: box.left, width: box.width };
+      const rect = containerRectRef.current;
       if (rect.width <= 0) return;
 
       const curVp = viewportRef.current;
@@ -131,7 +135,11 @@ export function useWaveformDeckInteractions({
         );
         viewportRef.current = nextVp;
         setViewport(nextVp);
-        hoverRatioRef.current = clientXToTrackRatio(e.clientX, rect);
+        const screenRatio = Math.max(
+          0,
+          Math.min(1, (e.clientX - rect.left) / rect.width)
+        );
+        hoverRatioRef.current = screenRatioToTrackRatio(screenRatio, nextVp);
         drawWaveformRef.current();
         return;
       }
@@ -165,7 +173,14 @@ export function useWaveformDeckInteractions({
 
     container.addEventListener("wheel", handleWheel, { passive: false });
     return () => container.removeEventListener("wheel", handleWheel);
-  });
+  }, [
+    containerRef,
+    containerRectRef,
+    viewportRef,
+    setViewport,
+    hoverRatioRef,
+    drawWaveformRef,
+  ]);
 
   const beginWindowPanDrag = (startClientX: number) => {
     const startVp = viewportRef.current;

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   FolderPlus,
   Hash,
@@ -17,7 +17,12 @@ interface DropOverlayEventDetail {
   dragHoverTarget?: string | null;
   hoveredRailTab?: string | null;
   isPointerInSidebar?: boolean;
+  isSidebarOverlayOpen?: boolean;
 }
+
+const SIDEBAR_RAIL_WIDTH_PX = 40;
+const SIDEBAR_FLYOUT_WIDTH_PX = 256;
+const MIN_FULL_OVERLAY_STAGE_WIDTH_PX = 320;
 
 interface DragDropFeedbackOverlayProps {
   compact?: boolean;
@@ -41,29 +46,112 @@ export const DragDropFeedbackOverlay: React.FC<
   const [overlayState, setOverlayState] = useState<{
     isExternalFileDragActive: boolean;
     dragHoverTarget: string | null;
+    isSidebarOverlayOpen: boolean;
   }>({
     isExternalFileDragActive: false,
     dragHoverTarget: null,
+    isSidebarOverlayOpen: false,
   });
+  const [viewportWidth, setViewportWidth] = useState<number>(() =>
+    typeof window !== "undefined" ? window.innerWidth : 1280
+  );
+  const clearTargetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
 
   useEffect(() => {
+    const cancelClearTimer = () => {
+      if (clearTargetTimerRef.current !== null) {
+        clearTimeout(clearTargetTimerRef.current);
+        clearTargetTimerRef.current = null;
+      }
+    };
+
     const handleDropOverlayEvent = (e: Event) => {
       const detail = (e as CustomEvent<DropOverlayEventDetail>).detail;
       if (!detail) return;
-      setOverlayState({
-        isExternalFileDragActive: Boolean(detail.isExternalFileDragActive),
-        dragHoverTarget: detail.dragHoverTarget ?? null,
-      });
+      if (typeof window !== "undefined") {
+        setViewportWidth(window.innerWidth);
+      }
+      const nextExternal = Boolean(detail.isExternalFileDragActive);
+      const nextTarget = detail.dragHoverTarget ?? null;
+      const nextOverlayOpen = detail.isSidebarOverlayOpen;
+      const pointerStillInSidebar = Boolean(detail.isPointerInSidebar);
+      const draggingInAppNow = useSampleStore.getState().inAppDragSample !== null;
+
+      if (nextTarget !== null || !draggingInAppNow || !pointerStillInSidebar) {
+        cancelClearTimer();
+        setOverlayState((prev) => ({
+          isExternalFileDragActive: nextExternal,
+          dragHoverTarget: nextTarget,
+          isSidebarOverlayOpen:
+            nextOverlayOpen !== undefined
+              ? Boolean(nextOverlayOpen)
+              : prev.isSidebarOverlayOpen,
+        }));
+        return;
+      }
+
+      // Brief 80ms exit hysteresis while cursor is still inside the sidebar
+      // prevents 1-frame flicker when gliding across row borders/dividers.
+      if (clearTargetTimerRef.current === null) {
+        clearTargetTimerRef.current = setTimeout(() => {
+          clearTargetTimerRef.current = null;
+          setOverlayState((prev) => ({
+            ...prev,
+            isExternalFileDragActive: nextExternal,
+            dragHoverTarget: null,
+            isSidebarOverlayOpen:
+              nextOverlayOpen !== undefined
+                ? Boolean(nextOverlayOpen)
+                : prev.isSidebarOverlayOpen,
+          }));
+        }, 80);
+      }
     };
+    const clearExternalDragOverlay = () => {
+      cancelClearTimer();
+      setOverlayState((prev) =>
+        prev.isExternalFileDragActive
+          ? {
+              ...prev,
+              isExternalFileDragActive: false,
+              dragHoverTarget:
+                useSampleStore.getState().inAppDragSample !== null
+                  ? prev.dragHoverTarget
+                  : null,
+            }
+          : prev
+      );
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        clearExternalDragOverlay();
+      }
+    };
+
     window.addEventListener(
       "audify:folder-drop-overlay",
       handleDropOverlayEvent
     );
-    return () =>
+    window.addEventListener(
+      "audify:clear-external-drag",
+      clearExternalDragOverlay
+    );
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      cancelClearTimer();
       window.removeEventListener(
         "audify:folder-drop-overlay",
         handleDropOverlayEvent
       );
+      window.removeEventListener(
+        "audify:clear-external-drag",
+        clearExternalDragOverlay
+      );
+      window.removeEventListener("keydown", handleKeyDown);
+    };
   }, []);
 
   const draggedCount = useMemo(() => {
@@ -247,11 +335,52 @@ export const DragDropFeedbackOverlay: React.FC<
   if (!descriptor) return null;
 
   const { Icon } = descriptor;
+  const flyoutOpen = overlayState.isSidebarOverlayOpen;
+  const remainingStageWidth =
+    viewportWidth - SIDEBAR_RAIL_WIDTH_PX - SIDEBAR_FLYOUT_WIDTH_PX;
+  const useCompactBottomBar =
+    flyoutOpen &&
+    (compact || remainingStageWidth < MIN_FULL_OVERLAY_STAGE_WIDTH_PX);
+
+  if (useCompactBottomBar) {
+    return (
+      <div
+        data-drag-overlay-mode="compact-bar"
+        data-mica-overlay="true"
+        className="pointer-events-none absolute left-1.5 right-1.5 bottom-1.5 flex items-center gap-2 px-2.5 py-1.5 rounded-xs bg-surface-2 border border-accent shadow-2xl select-none"
+        style={{ zIndex: Z_INDEX.dragFeedbackCompactBar }}
+      >
+        <div
+          className={`w-[24px] h-[24px] rounded-[3px] bg-accent-soft border ${descriptor.accentClass} flex items-center justify-center shrink-0`}
+        >
+          <Icon className="w-3.5 h-3.5 stroke-[2] shrink-0" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-[11.5px] font-semibold text-fg truncate leading-tight">
+            {descriptor.titlePrefix}
+            <span className="text-accent-fg">{descriptor.titleHighlight}</span>
+          </div>
+          {descriptor.badgeText && (
+            <div className="font-mono text-[9.5px] text-fg-2 truncate leading-tight mt-0.5">
+              {descriptor.badgeText}
+            </div>
+          )}
+        </div>
+        <kbd className="px-1.5 py-0.5 rounded-[3px] bg-surface-3 border border-line font-mono text-[9.5px] text-fg-2 shrink-0">
+          Esc
+        </kbd>
+      </div>
+    );
+  }
 
   return (
     <div
-      className="audify-drop-overlay-backdrop pointer-events-none absolute inset-0 flex items-center justify-center border-2 border-dashed border-accent/55 rounded-xs m-1 transition-opacity duration-150 select-none"
-      style={{ zIndex: Z_INDEX.dragFeedback }}
+      data-drag-overlay-mode="full"
+      className="audify-drop-overlay-backdrop pointer-events-none absolute inset-0 flex items-center justify-center border-2 border-dashed border-accent/55 rounded-xs m-1 transition-[left,opacity] duration-150 select-none"
+      style={{
+        zIndex: Z_INDEX.dragFeedback,
+        left: flyoutOpen ? SIDEBAR_FLYOUT_WIDTH_PX : 0,
+      }}
     >
       <div
         className={`flex flex-col items-center text-center ${

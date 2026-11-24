@@ -325,95 +325,106 @@ pub async fn list_slice_history(
 }
 
 #[tauri::command]
-pub fn clear_missing_slices(state: State<'_, AppState>) -> Result<usize, String> {
-    let conn = state.lock_db();
-    let profile_id = get_active_profile_id(&conn);
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, slice_path FROM sample_slices
-             WHERE profile_id = ?1 AND COALESCE(is_trashed, 0) = 0",
-        )
-        .map_err(|_| "Failed preparing missing slice cleanup".to_string())?;
-    let rows: Vec<(i64, String)> = stmt
-        .query_map([profile_id], |r| Ok((r.get(0)?, r.get(1)?)))
-        .map_err(|_| "Failed querying slice records".to_string())?
-        .flatten()
-        .collect();
-    drop(stmt);
+pub async fn clear_missing_slices(state: State<'_, AppState>) -> Result<usize, String> {
+    let state_owned = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = state_owned.lock_db();
+        let profile_id = get_active_profile_id(&conn);
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, slice_path FROM sample_slices
+                 WHERE profile_id = ?1 AND COALESCE(is_trashed, 0) = 0",
+            )
+            .map_err(|_| "Failed preparing missing slice cleanup".to_string())?;
+        let rows: Vec<(i64, String)> = stmt
+            .query_map([profile_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|_| "Failed querying slice records".to_string())?
+            .flatten()
+            .collect();
+        drop(stmt);
 
-    let missing_ids: Vec<i64> = rows
-        .into_iter()
-        .filter(|(_, p)| {
-            let trimmed = p.trim();
-            trimmed.is_empty()
-                || crate::security::is_unc_or_network_path(trimmed)
-                || crate::security::has_ntfs_ads_colon(trimmed)
-                || fs::symlink_metadata(trimmed)
-                    .map(|m| m.file_type().is_symlink() || !m.file_type().is_file())
-                    .unwrap_or(true)
-        })
-        .map(|(id, _)| id)
-        .collect();
+        let missing_ids: Vec<i64> = rows
+            .into_iter()
+            .filter(|(_, p)| {
+                let trimmed = p.trim();
+                trimmed.is_empty()
+                    || crate::security::is_unc_or_network_path(trimmed)
+                    || crate::security::has_ntfs_ads_colon(trimmed)
+                    || fs::symlink_metadata(trimmed)
+                        .map(|m| m.file_type().is_symlink() || !m.file_type().is_file())
+                        .unwrap_or(true)
+            })
+            .map(|(id, _)| id)
+            .collect();
 
-    if missing_ids.is_empty() {
-        return Ok(0);
-    }
-
-    for chunk in missing_ids.chunks(500) {
-        let placeholders: Vec<String> = (2..=chunk.len() + 1).map(|i| format!("?{i}")).collect();
-        let sql = format!(
-            "DELETE FROM sample_slices WHERE profile_id = ?1 AND id IN ({})",
-            placeholders.join(", ")
-        );
-        let mut params_vec: Vec<rusqlite::types::Value> = Vec::with_capacity(chunk.len() + 1);
-        params_vec.push(rusqlite::types::Value::Integer(profile_id));
-        for id in chunk {
-            params_vec.push(rusqlite::types::Value::Integer(*id));
+        if missing_ids.is_empty() {
+            return Ok(0);
         }
-        conn.execute(&sql, rusqlite::params_from_iter(params_vec.iter()))
-            .map_err(|_| "Failed removing missing slice entries".to_string())?;
-    }
 
-    Ok(missing_ids.len())
+        for chunk in missing_ids.chunks(500) {
+            let placeholders: Vec<String> = (2..=chunk.len() + 1).map(|i| format!("?{i}")).collect();
+            let sql = format!(
+                "DELETE FROM sample_slices WHERE profile_id = ?1 AND id IN ({})",
+                placeholders.join(", ")
+            );
+            let mut params_vec: Vec<rusqlite::types::Value> = Vec::with_capacity(chunk.len() + 1);
+            params_vec.push(rusqlite::types::Value::Integer(profile_id));
+            for id in chunk {
+                params_vec.push(rusqlite::types::Value::Integer(*id));
+            }
+            conn.execute(&sql, rusqlite::params_from_iter(params_vec.iter()))
+                .map_err(|_| "Failed removing missing slice entries".to_string())?;
+        }
+
+        Ok(missing_ids.len())
+    })
+    .await
+    .map_err(|e| format!("Clear missing slices task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn cleanup_unrecorded_slice_file(
+pub async fn cleanup_unrecorded_slice_file(
     state: State<'_, AppState>,
     slice_path: String,
 ) -> Result<(), String> {
-    let conn = state.lock_db();
-    let resolved = ensure_existing_slice_in_scope(&conn, &state.user_dir, &slice_path)
-        .map_err(|e| sanitize_err(&state.user_dir, &e))?;
-    super::ensure_slice_not_in_readonly_library(&conn, &resolved)?;
-    let disp = format_os_display_path(&resolved);
-    let norm_disp = normalize_clean_path(&disp);
-    let exists_in_db: bool = conn
-        .query_row(
-            "SELECT EXISTS(
-                SELECT 1 FROM sample_slices
-                WHERE (LOWER(slice_path) = LOWER(?1) OR LOWER(slice_path) = LOWER(?2))
-                  AND COALESCE(is_trashed, 0) = 0
-             )",
-            params![disp, norm_disp],
-            |r| r.get(0),
-        )
-        .unwrap_or(true);
-    let is_indexed_sample: bool = conn
-        .query_row(
-            "SELECT EXISTS(
-                SELECT 1 FROM samples
-                WHERE LOWER(REPLACE(file_path, '\\', '/')) = LOWER(?1)
-                   OR LOWER(REPLACE(COALESCE(original_file_path, ''), '\\', '/')) = LOWER(?1)
-             )",
-            params![norm_disp],
-            |r| r.get(0),
-        )
-        .unwrap_or(true);
-    if !exists_in_db && !is_indexed_sample {
-        let _ = fs::remove_file(&resolved);
-    }
-    Ok(())
+    let state_owned = state.inner().clone();
+    let user_dir_err = state.user_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = state_owned.lock_db();
+        let resolved = ensure_existing_slice_in_scope(&conn, &state_owned.user_dir, &slice_path)
+            .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
+        super::ensure_slice_not_in_readonly_library(&conn, &resolved)?;
+        let disp = format_os_display_path(&resolved);
+        let norm_disp = normalize_clean_path(&disp);
+        let exists_in_db: bool = conn
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM sample_slices
+                    WHERE (LOWER(slice_path) = LOWER(?1) OR LOWER(slice_path) = LOWER(?2))
+                      AND COALESCE(is_trashed, 0) = 0
+                 )",
+                params![disp, norm_disp],
+                |r| r.get(0),
+            )
+            .unwrap_or(true);
+        let is_indexed_sample: bool = conn
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM samples
+                    WHERE LOWER(REPLACE(file_path, '\\', '/')) = LOWER(?1)
+                       OR LOWER(REPLACE(COALESCE(original_file_path, ''), '\\', '/')) = LOWER(?1)
+                 )",
+                params![norm_disp],
+                |r| r.get(0),
+            )
+            .unwrap_or(true);
+        if !exists_in_db && !is_indexed_sample {
+            let _ = fs::remove_file(&resolved);
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| sanitize_err(&user_dir_err, &format!("Cleanup slice task failed: {}", e)))?
 }
 
 pub(crate) fn relink_sample_slices_source_by_sample_id(
@@ -450,9 +461,7 @@ pub(crate) fn relink_sample_slices_source_prefix(
     for (id, src_path) in rows {
         let norm = normalize_clean_path(&src_path);
         let rel_opt = if cfg!(windows) {
-            norm.get(..old_prefix_slash.len())
-                .filter(|head| head.to_lowercase() == old_prefix_lower)
-                .and_then(|_| norm.get(old_prefix_slash.len()..))
+            crate::commands::strip_unicode_prefix_ci(&norm, old_prefix_lower)
         } else {
             norm.strip_prefix(old_prefix_slash)
         };
@@ -495,9 +504,7 @@ pub(crate) fn relink_sample_slices_path_prefix(
     for (id, sl_path) in rows {
         let norm = normalize_clean_path(&sl_path);
         let rel_opt = if cfg!(windows) {
-            norm.get(..old_prefix_slash.len())
-                .filter(|head| head.to_lowercase() == old_prefix_lower)
-                .and_then(|_| norm.get(old_prefix_slash.len()..))
+            crate::commands::strip_unicode_prefix_ci(&norm, old_prefix_lower)
         } else {
             norm.strip_prefix(old_prefix_slash)
         };

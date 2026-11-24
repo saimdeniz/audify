@@ -45,32 +45,72 @@ pub(crate) fn push_interleaved_stereo(samples: &[f32], ch_count: usize, out: &mu
                 out.push(clean_sample(frame[1]));
             }
         }
+        3 => {
+            let frames = samples.len() / 3;
+            out.reserve(frames * 2);
+            let norm = 1.0 / (1.0 + 0.707_106_77);
+            for frame in samples.as_chunks::<3>().0 {
+                let c = clean_sample(frame[2]) * 0.707_106_77;
+                let l = clean_sample(frame[0]) + c;
+                let r = clean_sample(frame[1]) + c;
+                out.push((l * norm).clamp(-4.0, 4.0));
+                out.push((r * norm).clamp(-4.0, 4.0));
+            }
+        }
+        4 => {
+            // Quadraphonic (FL, FR, BL, BR): preserve both rear channels without dropping BR
+            let frames = samples.len() / 4;
+            out.reserve(frames * 2);
+            let norm = 1.0 / (1.0 + 0.707_106_77);
+            for frame in samples.as_chunks::<4>().0 {
+                let l = clean_sample(frame[0]) + clean_sample(frame[2]) * 0.707_106_77;
+                let r = clean_sample(frame[1]) + clean_sample(frame[3]) * 0.707_106_77;
+                out.push((l * norm).clamp(-4.0, 4.0));
+                out.push((r * norm).clamp(-4.0, 4.0));
+            }
+        }
+        5 => {
+            // 5.0 Surround (FL, FR, C, BL, BR)
+            let frames = samples.len() / 5;
+            out.reserve(frames * 2);
+            let norm = 1.0 / (1.0 + 0.707_106_77 + 0.5);
+            for frame in samples.as_chunks::<5>().0 {
+                let c = clean_sample(frame[2]) * 0.707_106_77;
+                let l = clean_sample(frame[0]) + c + clean_sample(frame[3]) * 0.5;
+                let r = clean_sample(frame[1]) + c + clean_sample(frame[4]) * 0.5;
+                out.push((l * norm).clamp(-4.0, 4.0));
+                out.push((r * norm).clamp(-4.0, 4.0));
+            }
+        }
         ch => {
             let frames = samples.len() / ch;
             out.reserve(frames * 2);
             // ITU-R BS.775-style gain normalization prevents multi-channel sum clipping
             let norm = if ch >= 8 {
                 1.0 / (1.0 + 0.707_106_77 + 0.5 + 0.5)
-            } else if ch >= 6 {
-                1.0 / (1.0 + 0.707_106_77 + 0.5)
+            } else if ch == 7 {
+                1.0 / (1.0 + 0.707_106_77 + 0.35 + 0.5)
             } else {
-                1.0 / (1.0 + 0.707_106_77)
+                1.0 / (1.0 + 0.707_106_77 + 0.5)
             };
             for frame in samples.chunks_exact(ch) {
-                let mut l = clean_sample(frame[0]);
-                let mut r = clean_sample(frame[1]);
-                if ch >= 3 {
-                    let c = clean_sample(frame[2]) * 0.707_106_77;
-                    l += c;
-                    r += c;
-                }
-                if ch >= 6 {
-                    l += clean_sample(frame[4]) * 0.5;
-                    r += clean_sample(frame[5]) * 0.5;
-                }
-                if ch >= 8 {
-                    l += clean_sample(frame[6]) * 0.5;
-                    r += clean_sample(frame[7]) * 0.5;
+                let c = clean_sample(frame[2]) * 0.707_106_77;
+                let mut l = clean_sample(frame[0]) + c;
+                let mut r = clean_sample(frame[1]) + c;
+                if ch == 7 {
+                    // 6.1 Surround (FL, FR, C, LFE, BC, SL, SR)
+                    let bc = clean_sample(frame[4]) * 0.35;
+                    l += bc + clean_sample(frame[5]) * 0.5;
+                    r += bc + clean_sample(frame[6]) * 0.5;
+                } else {
+                    if ch >= 6 {
+                        l += clean_sample(frame[4]) * 0.5;
+                        r += clean_sample(frame[5]) * 0.5;
+                    }
+                    if ch >= 8 {
+                        l += clean_sample(frame[6]) * 0.5;
+                        r += clean_sample(frame[7]) * 0.5;
+                    }
                 }
                 out.push((l * norm).clamp(-4.0, 4.0));
                 out.push((r * norm).clamp(-4.0, 4.0));
@@ -370,6 +410,11 @@ impl TrackDecodeCache {
             }
         }
     }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.total_bytes = 0;
+    }
 }
 
 /// Opens a validated audio file via Symphonia using our hybrid memory model:
@@ -402,7 +447,7 @@ pub fn open_audio_source(
     }
 
     let mut sr = opened.sample_rate;
-    let mut norm_acc = NormGainAccumulator::new(sr.max(44100));
+    let mut norm_acc = NormGainAccumulator::new(if sr > 0 { sr } else { 44100 });
     let mut samples: Vec<f32> = Vec::with_capacity(
         opened
             .n_frames
@@ -438,7 +483,7 @@ pub fn open_audio_source(
                 norm_acc.feed_stereo(&samples[start_len..]);
 
                 if (samples.len() / 2) > MAX_INMEM_FRAMES {
-                    opened.sample_rate = sr.max(44100);
+                    opened.sample_rate = if sr > 0 { sr } else { 44100 };
                     let stream = StreamingTrack::spawn(
                         canon_path.to_path_buf(),
                         path_norm,
@@ -537,5 +582,20 @@ mod tests {
         fs::rename(&wav_path, &renamed).unwrap();
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn quad_four_channel_downmix_preserves_back_right_channel() {
+        // 4ch Quad frame: FL=0.0, FR=0.0, BL=0.0, BR=0.8 -> right output must contain BR energy
+        let frame = [0.0_f32, 0.0, 0.0, 0.8];
+        let mut out = Vec::new();
+        push_interleaved_stereo(&frame, 4, &mut out);
+        assert_eq!(out.len(), 2);
+        assert!(out[0].abs() < 1e-6);
+        assert!(
+            (out[1] - 0.33137).abs() < 1e-3,
+            "Expected BR energy (~0.331) in right channel, got {}",
+            out[1]
+        );
     }
 }

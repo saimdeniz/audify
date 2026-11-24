@@ -28,10 +28,34 @@ pub fn resample_mono_to_16k(mono: &[f32], in_sr: u32, max_samples: usize) -> Vec
     let last_idx = (mono.len() - 1) as isize;
     let use_aa_sinc = ratio > 1.05;
     let aa_cutoff = (0.92 / ratio).min(1.0);
+    // Allow up to 32 taps so 192 kHz (ratio = 12, 2*ratio = 24) retains full 2-lobe anti-aliasing
     let aa_radius = if use_aa_sinc {
-        ((2.0 * ratio).ceil() as isize).clamp(3, 12)
+        ((2.0 * ratio).ceil() as isize).clamp(3, 32)
     } else {
         0
+    };
+
+    // Precompute symmetric Hann-windowed sinc LUT (64 subdivisions/tap) to eliminate ~18M sin/cos
+    // transcendental calls per 192 kHz clip during AI indexing.
+    const SINC_LUT_SUBDIV: usize = 64;
+    let sinc_lut: Vec<f64> = if use_aa_sinc {
+        let r_f64 = aa_radius as f64;
+        let entries = (aa_radius as usize) * SINC_LUT_SUBDIV + 2;
+        let mut table = Vec::with_capacity(entries);
+        for i in 0..entries {
+            let d = (i as f64) / (SINC_LUT_SUBDIV as f64);
+            if d >= r_f64 {
+                table.push(0.0);
+            } else {
+                let x = std::f64::consts::PI * d * aa_cutoff;
+                let sinc = if x.abs() < 1e-9 { 1.0 } else { x.sin() / x };
+                let win = 0.5 * (1.0 + (std::f64::consts::PI * d / r_f64).cos());
+                table.push(sinc * win);
+            }
+        }
+        table
+    } else {
+        Vec::new()
     };
 
     for i in 0..out_len {
@@ -44,14 +68,14 @@ pub fn resample_mono_to_16k(mono: &[f32], in_sr: u32, max_samples: usize) -> Vec
             let mut w_sum = 0.0_f64;
             for k in -aa_radius..=aa_radius {
                 let s_idx = (idx + k).clamp(0, last_idx) as usize;
-                let dx = (idx + k) as f64 - src_pos;
-                if dx.abs() >= r_f64 {
+                let d_abs = ((idx + k) as f64 - src_pos).abs();
+                if d_abs >= r_f64 {
                     continue;
                 }
-                let x = std::f64::consts::PI * dx * aa_cutoff;
-                let sinc = if x.abs() < 1e-9 { 1.0 } else { x.sin() / x };
-                let win = 0.5 * (1.0 + (std::f64::consts::PI * dx / r_f64).cos());
-                let w = sinc * win;
+                let lut_pos = d_abs * (SINC_LUT_SUBDIV as f64);
+                let lut_i = lut_pos as usize;
+                let lut_t = lut_pos - (lut_i as f64);
+                let w = sinc_lut[lut_i] + (sinc_lut[lut_i + 1] - sinc_lut[lut_i]) * lut_t;
                 w_sum += w;
                 acc += (mono[s_idx] as f64) * w;
             }
@@ -146,14 +170,22 @@ pub fn decode_waveform_for_ai(path: &Path) -> Result<Vec<f32>, String> {
     loop {
         let packet = match format.next_packet() {
             Ok(p) => p,
-            Err(SymphoniaError::IoError(_)) | Err(SymphoniaError::ResetRequired) => break,
-            Err(_) => break,
+            Err(SymphoniaError::ResetRequired) => {
+                decoder.reset();
+                continue;
+            }
+            Err(SymphoniaError::IoError(_)) | Err(_) => break,
         };
         if packet.track_id() != track_id {
             continue;
         }
-        let Ok(decoded) = decoder.decode(&packet) else {
-            continue;
+        let decoded = match decoder.decode(&packet) {
+            Ok(d) => d,
+            Err(SymphoniaError::ResetRequired) => {
+                decoder.reset();
+                continue;
+            }
+            Err(_) => continue,
         };
         let frames = decoded.frames();
         if frames == 0 {

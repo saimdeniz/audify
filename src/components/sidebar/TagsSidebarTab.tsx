@@ -241,7 +241,7 @@ export const TagsSidebarTab: React.FC<TagsSidebarTabProps> = ({
             </div>
           )
         ) : (
-          <div className="flex flex-col space-y-0.5 text-[12px]">
+          <div className="flex flex-col text-[12px]">
             {filteredTags.map((tag) => {
               const isSelected = selectedTagSet.has(tag.id);
               const targetKey = `tag-${tag.id}`;
@@ -260,9 +260,6 @@ export const TagsSidebarTab: React.FC<TagsSidebarTabProps> = ({
                   }}
                   onMouseEnter={() => {
                     if (isDraggingInApp) setDragHoverTarget(targetKey);
-                  }}
-                  onMouseLeave={() => {
-                    if (dragHoverTarget === targetKey) setDragHoverTarget(null);
                   }}
                   title={`${tag.name} (${tag.sample_count.toLocaleString()})`}
                   className={`group/row h-[26px] px-2.5 flex items-center justify-between cursor-pointer border-l-2 min-w-0 transition-all ${

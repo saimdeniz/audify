@@ -134,6 +134,38 @@ export function clearCatalogWorkerSearchCache(): void {
   workerInstance.postMessage(msg);
 }
 
+/**
+ * Patches `file_modified_at` in-place inside the worker via zero-copy transferable typed arrays
+ * so startup mtime backfill never triggers full 50k+ `set_pool` structured clones.
+ */
+export function patchCatalogWorkerMtimes(
+  nextPool: SampleItem[],
+  patchMap: ReadonlyMap<number, number>
+): number {
+  if (!lastPoolRef || lastPoolRef.length !== nextPool.length || !workerInstance) {
+    return syncCatalogWorkerPool(nextPool);
+  }
+  lastPoolRef = nextPool;
+  currentPoolEpoch += 1;
+  const size = patchMap.size;
+  const ids = new Int32Array(size);
+  const mtimes = new Float64Array(size);
+  let idx = 0;
+  for (const [id, mtime] of patchMap) {
+    ids[idx] = id;
+    mtimes[idx] = mtime;
+    idx += 1;
+  }
+  const msg: CatalogWorkerRequest = {
+    type: "patch_mtimes",
+    poolEpoch: currentPoolEpoch,
+    ids,
+    mtimes,
+  };
+  workerInstance.postMessage(msg, [ids.buffer, mtimes.buffer]);
+  return currentPoolEpoch;
+}
+
 function stripPeaksIfPresent(sample: SampleItem): SampleItem {
   return sample.peaks_json ? { ...sample, peaks_json: "" } : sample;
 }
@@ -184,6 +216,39 @@ export function syncCatalogWorkerPool(pool: SampleItem[]): number {
         };
         w.postMessage(msg);
       }
+      return currentPoolEpoch;
+    }
+  }
+
+  // Incremental deletion diff when a small number of rows were trashed/removed
+  // while keeping remaining references intact (avoids structured-cloning 50k–150k rows!).
+  if (
+    prevPool &&
+    pool.length < prevPool.length &&
+    prevPool.length - pool.length <= MAX_INCREMENTAL_PATCH_UPDATES &&
+    pool.length >= CATALOG_WORKER_THRESHOLD
+  ) {
+    const removedIds: number[] = [];
+    let j = 0;
+    let cleanSubsequence = true;
+    for (let i = 0; i < prevPool.length; i++) {
+      if (j < pool.length && prevPool[i] === pool[j]) {
+        j += 1;
+      } else {
+        removedIds.push(prevPool[i].id);
+        if (removedIds.length > MAX_INCREMENTAL_PATCH_UPDATES) {
+          cleanSubsequence = false;
+          break;
+        }
+      }
+    }
+    if (cleanSubsequence && j === pool.length) {
+      const msg: CatalogWorkerRequest = {
+        type: "remove_ids",
+        poolEpoch: currentPoolEpoch,
+        ids: removedIds,
+      };
+      w.postMessage(msg);
       return currentPoolEpoch;
     }
   }

@@ -118,82 +118,86 @@ pub async fn get_genres(state: State<'_, AppState>) -> Result<Vec<Genre>, String
 }
 
 #[tauri::command]
-pub fn create_genre(
+pub async fn create_genre(
     state: State<'_, AppState>,
     name: String,
     color: String,
 ) -> Result<Genre, String> {
-    let trimmed = name.trim();
+    let trimmed = name.trim().to_string();
     if trimmed.is_empty() {
         return Err("Genre name cannot be empty".to_string());
     }
     let resolved_color = if color.trim().is_empty() {
-        deterministic_color_for_name(trimmed).to_string()
+        deterministic_color_for_name(&trimmed).to_string()
     } else {
         validate_hex_color(&color)?
     };
-    let conn = state.lock_db();
-    let active_id = get_active_profile_id(&conn);
-    let genre_id = ensure_manual_genre(&conn, trimmed, &resolved_color)?;
-    query_genre_by_id_for_profile(&conn, genre_id, active_id)
+    crate::db::run_write_op(&state, move |conn| {
+        let active_id = get_active_profile_id(conn);
+        let genre_id = ensure_manual_genre(conn, &trimmed, &resolved_color)?;
+        query_genre_by_id_for_profile(conn, genre_id, active_id)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn rename_genre(
+pub async fn rename_genre(
     state: State<'_, AppState>,
     genre_id: i64,
     new_name: String,
 ) -> Result<Genre, String> {
-    let trimmed = new_name.trim();
+    let trimmed = new_name.trim().to_string();
     if trimmed.is_empty() {
         return Err("Genre name cannot be empty".to_string());
     }
-    let mut conn = state.lock_db();
-    let active_id = get_active_profile_id(&conn);
+    crate::db::run_write_op(&state, move |conn| {
+        let active_id = get_active_profile_id(conn);
 
-    let tx = conn
-        .transaction()
-        .map_err(|e| format!("Failed to start transaction: {}", e))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Failed to start transaction: {}", e))?;
 
-    let old_name: String = tx
-        .query_row(
-            "SELECT name FROM genres WHERE id = ?1",
-            params![genre_id],
-            |r| r.get(0),
+        let old_name: String = tx
+            .query_row(
+                "SELECT name FROM genres WHERE id = ?1",
+                params![genre_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("Genre not found: {}", e))?;
+
+        let conflict: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM genres WHERE id != ?1 AND name = ?2 COLLATE NOCASE)",
+                params![genre_id, trimmed],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        if conflict {
+            return Err("A genre with that name already exists".to_string());
+        }
+
+        tx.execute(
+            "UPDATE genres SET name = ?1 WHERE id = ?2",
+            params![trimmed, genre_id],
         )
-        .map_err(|e| format!("Genre not found: {}", e))?;
+        .map_err(|e| format!("Failed to rename genre: {}", e))?;
 
-    let conflict: bool = tx
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM genres WHERE id != ?1 AND name = ?2 COLLATE NOCASE)",
-            params![genre_id, trimmed],
-            |r| r.get(0),
+        tx.execute(
+            "UPDATE samples SET genre = ?1 WHERE genre = ?2 COLLATE NOCASE",
+            params![trimmed, old_name],
         )
-        .unwrap_or(false);
-    if conflict {
-        return Err("A genre with that name already exists".to_string());
-    }
+        .map_err(|e| format!("Failed to update sample genres: {}", e))?;
 
-    tx.execute(
-        "UPDATE genres SET name = ?1 WHERE id = ?2",
-        params![trimmed, genre_id],
-    )
-    .map_err(|e| format!("Failed to rename genre: {}", e))?;
+        tx.commit()
+            .map_err(|e| format!("Failed to commit genre rename: {}", e))?;
 
-    tx.execute(
-        "UPDATE samples SET genre = ?1 WHERE genre = ?2 COLLATE NOCASE",
-        params![trimmed, old_name],
-    )
-    .map_err(|e| format!("Failed to update sample genres: {}", e))?;
-
-    tx.commit()
-        .map_err(|e| format!("Failed to commit genre rename: {}", e))?;
-
-    query_genre_by_id_for_profile(&conn, genre_id, active_id)
+        query_genre_by_id_for_profile(conn, genre_id, active_id)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn update_genre_color(
+pub async fn update_genre_color(
     state: State<'_, AppState>,
     genre_id: i64,
     new_color: String,
@@ -202,67 +206,73 @@ pub fn update_genre_color(
         return Err("Genre color cannot be empty".to_string());
     }
     let clean_color = validate_hex_color(&new_color)?;
-    let conn = state.lock_db();
-    let active_id = get_active_profile_id(&conn);
-    conn.execute(
-        "UPDATE genres SET color = ?1 WHERE id = ?2",
-        params![clean_color, genre_id],
-    )
-    .map_err(|e| format!("Failed to update genre color: {}", e))?;
-
-    query_genre_by_id_for_profile(&conn, genre_id, active_id)
-}
-
-#[tauri::command]
-pub fn delete_genre(state: State<'_, AppState>, genre_id: i64) -> Result<(), String> {
-    let mut conn = state.lock_db();
-    let tx = conn
-        .transaction()
-        .map_err(|e| format!("Failed to start transaction: {}", e))?;
-    if let Ok(name) = tx.query_row::<String, _, _>(
-        "SELECT name FROM genres WHERE id = ?1",
-        params![genre_id],
-        |r| r.get(0),
-    ) {
-        tx.execute(
-            "UPDATE samples SET genre = '', genre_is_manual = 0 WHERE genre = ?1 COLLATE NOCASE",
-            params![name],
+    crate::db::run_write_op(&state, move |conn| {
+        let active_id = get_active_profile_id(conn);
+        conn.execute(
+            "UPDATE genres SET color = ?1 WHERE id = ?2",
+            params![clean_color, genre_id],
         )
-        .map_err(|e| format!("Failed to clear sample genres: {}", e))?;
-    }
-    tx.execute("DELETE FROM genres WHERE id = ?1", params![genre_id])
-        .map_err(|e| format!("Failed to delete genre: {}", e))?;
-    tx.commit()
-        .map_err(|e| format!("Failed to commit genre deletion: {}", e))
+        .map_err(|e| format!("Failed to update genre color: {}", e))?;
+
+        query_genre_by_id_for_profile(conn, genre_id, active_id)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn assign_sample_genre(
+pub async fn delete_genre(state: State<'_, AppState>, genre_id: i64) -> Result<(), String> {
+    crate::db::run_write_op(&state, move |conn| {
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Failed to start transaction: {}", e))?;
+        if let Ok(name) = tx.query_row::<String, _, _>(
+            "SELECT name FROM genres WHERE id = ?1",
+            params![genre_id],
+            |r| r.get(0),
+        ) {
+            tx.execute(
+                "UPDATE samples SET genre = '', genre_is_manual = 0 WHERE genre = ?1 COLLATE NOCASE",
+                params![name],
+            )
+            .map_err(|e| format!("Failed to clear sample genres: {}", e))?;
+        }
+        tx.execute("DELETE FROM genres WHERE id = ?1", params![genre_id])
+            .map_err(|e| format!("Failed to delete genre: {}", e))?;
+        tx.commit()
+            .map_err(|e| format!("Failed to commit genre deletion: {}", e))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn assign_sample_genre(
     state: State<'_, AppState>,
     sample_id: i64,
     genre_name: String,
 ) -> Result<String, String> {
     let trimmed = genre_name.trim().to_string();
-    let conn = state.lock_db();
-    let active_id = get_active_profile_id(&conn);
-    if !is_sample_visible_in_profile(&conn, active_id, sample_id) {
-        return Err("Sample not found in active profile".to_string());
-    }
-    if !trimmed.is_empty() {
-        let color = deterministic_color_for_name(&trimmed);
-        let _ = ensure_manual_genre(&conn, &trimmed, color);
-    }
-    let is_manual = !trimmed.is_empty();
-    conn.execute(
-        "UPDATE samples SET genre = ?1, genre_is_manual = ?2 WHERE id = ?3",
-        params![trimmed, is_manual, sample_id],
-    )
-    .map_err(|e| format!("Failed to assign genre: {}", e))?;
-    Ok(trimmed)
+    crate::db::run_write_op(&state, move |conn| {
+        let active_id = get_active_profile_id(conn);
+        if !is_sample_visible_in_profile(conn, active_id, sample_id) {
+            return Err("Sample not found in active profile".to_string());
+        }
+        if !trimmed.is_empty() {
+            let color = deterministic_color_for_name(&trimmed);
+            let _ = ensure_manual_genre(conn, &trimmed, color);
+        }
+        let is_manual = !trimmed.is_empty();
+        conn.execute(
+            "UPDATE samples SET genre = ?1, genre_is_manual = ?2 WHERE id = ?3",
+            params![trimmed, is_manual, sample_id],
+        )
+        .map_err(|e| format!("Failed to assign genre: {}", e))?;
+        Ok(trimmed)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn assign_sample_genre_batch(
+pub async fn assign_sample_genre_batch(
     state: State<'_, AppState>,
     sample_ids: Option<Vec<i64>>,
     genre_name: String,
@@ -272,45 +282,47 @@ pub fn assign_sample_genre_batch(
     if sample_ids.is_empty() {
         return Ok(trimmed);
     }
-    let mut conn = state.lock_db();
-    let active_id = get_active_profile_id(&conn);
-    let visible_set = visible_sample_ids_in_profile(&conn, active_id, &sample_ids)?;
-    let visible_ids: Vec<i64> = sample_ids
-        .into_iter()
-        .filter(|sid| visible_set.contains(sid))
-        .collect();
-    if visible_ids.is_empty() {
-        return Ok(trimmed);
-    }
-    let tx = conn
-        .transaction()
-        .map_err(|e| format!("Failed to start database transaction: {}", e))?;
-
-    if !trimmed.is_empty() {
-        let color = deterministic_color_for_name(&trimmed);
-        let _ = ensure_manual_genre(&tx, &trimmed, color);
-    }
-    let is_manual = i64::from(!trimmed.is_empty());
-    for chunk in visible_ids.chunks(450) {
-        let placeholders = (3..=chunk.len() + 2)
-            .map(|idx| format!("?{}", idx))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!(
-            "UPDATE samples SET genre = ?1, genre_is_manual = ?2 WHERE id IN ({})",
-            placeholders
-        );
-        let mut params_vec: Vec<rusqlite::types::Value> = Vec::with_capacity(chunk.len() + 2);
-        params_vec.push(rusqlite::types::Value::Text(trimmed.clone()));
-        params_vec.push(rusqlite::types::Value::Integer(is_manual));
-        for sid in chunk {
-            params_vec.push(rusqlite::types::Value::Integer(*sid));
+    crate::db::run_write_op(&state, move |conn| {
+        let active_id = get_active_profile_id(conn);
+        let visible_set = visible_sample_ids_in_profile(conn, active_id, &sample_ids)?;
+        let visible_ids: Vec<i64> = sample_ids
+            .into_iter()
+            .filter(|sid| visible_set.contains(sid))
+            .collect();
+        if visible_ids.is_empty() {
+            return Ok(trimmed);
         }
-        tx.execute(&sql, rusqlite::params_from_iter(params_vec))
-            .map_err(|e| format!("Failed to assign genre in batch: {}", e))?;
-    }
-    tx.commit().map_err(|e| e.to_string())?;
-    Ok(trimmed)
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Failed to start database transaction: {}", e))?;
+
+        if !trimmed.is_empty() {
+            let color = deterministic_color_for_name(&trimmed);
+            let _ = ensure_manual_genre(&tx, &trimmed, color);
+        }
+        let is_manual = i64::from(!trimmed.is_empty());
+        for chunk in visible_ids.chunks(450) {
+            let placeholders = (3..=chunk.len() + 2)
+                .map(|idx| format!("?{}", idx))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "UPDATE samples SET genre = ?1, genre_is_manual = ?2 WHERE id IN ({})",
+                placeholders
+            );
+            let mut params_vec: Vec<rusqlite::types::Value> = Vec::with_capacity(chunk.len() + 2);
+            params_vec.push(rusqlite::types::Value::Text(trimmed.clone()));
+            params_vec.push(rusqlite::types::Value::Integer(is_manual));
+            for sid in chunk {
+                params_vec.push(rusqlite::types::Value::Integer(*sid));
+            }
+            tx.execute(&sql, rusqlite::params_from_iter(params_vec))
+                .map_err(|e| format!("Failed to assign genre in batch: {}", e))?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(trimmed)
+    })
+    .await
 }
 
 #[tauri::command]

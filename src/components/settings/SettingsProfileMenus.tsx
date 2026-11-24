@@ -115,7 +115,7 @@ export const SettingsProfileMenus: React.FC<SettingsProfileMenusProps> = ({
                   right: menuPos.right,
                   zIndex: Z_INDEX.floatingMenu,
                 }}
-                className="fixed w-60 bg-surface-2 backdrop-blur-md border border-line rounded-md shadow-2xl p-1 text-left"
+                className="fixed w-60 bg-surface-2 audify-overlay-surface border border-line rounded-md shadow-2xl p-1 text-left"
               >
                 <div className="px-2 pt-1 pb-0.5 text-[9px] font-mono font-semibold uppercase tracking-wider text-fg-3">
                   Workspace Profile
@@ -216,7 +216,7 @@ export const SettingsProfileMenus: React.FC<SettingsProfileMenusProps> = ({
                   right: menuPos.right,
                   zIndex: Z_INDEX.floatingMenu,
                 }}
-                className="fixed w-64 bg-surface-2 backdrop-blur-md border border-line rounded-md shadow-2xl p-1 text-left"
+                className="fixed w-64 bg-surface-2 audify-overlay-surface border border-line rounded-md shadow-2xl p-1 text-left"
               >
                 <div className="px-2 pt-1 pb-0.5 text-[9px] font-mono font-semibold uppercase tracking-wider text-fg-3">
                   Workspace Profile (Portable)

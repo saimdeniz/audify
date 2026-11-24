@@ -162,15 +162,26 @@ fn decode_audio_blocks(path: &Path) -> Option<DecodedBlocks> {
     loop {
         let packet = match format.next_packet() {
             Ok(p) => p,
-            Err(SymphoniaError::IoError(_)) | Err(SymphoniaError::ResetRequired) => break,
-            Err(_) => break,
+            Err(SymphoniaError::ResetRequired) => {
+                decoder.reset();
+                continue;
+            }
+            Err(SymphoniaError::IoError(_)) | Err(_) => break,
         };
 
         if packet.track_id() != track_id {
             continue;
         }
 
-        if let Ok(decoded) = decoder.decode(&packet) {
+        let decoded = match decoder.decode(&packet) {
+            Ok(d) => d,
+            Err(SymphoniaError::ResetRequired) => {
+                decoder.reset();
+                continue;
+            }
+            Err(_) => continue,
+        };
+        {
             let Some((spec, frames, samples)) = copy_packet_samples(&mut sample_buf_slot, decoded)
             else {
                 continue;
@@ -407,13 +418,24 @@ pub fn compute_preview_norm_gain(path: &Path) -> Option<f32> {
     loop {
         let packet = match format.next_packet() {
             Ok(p) => p,
-            Err(SymphoniaError::IoError(_)) | Err(SymphoniaError::ResetRequired) => break,
-            Err(_) => break,
+            Err(SymphoniaError::ResetRequired) => {
+                decoder.reset();
+                continue;
+            }
+            Err(SymphoniaError::IoError(_)) | Err(_) => break,
         };
         if packet.track_id() != track_id {
             continue;
         }
-        if let Ok(decoded) = decoder.decode(&packet) {
+        let decoded = match decoder.decode(&packet) {
+            Ok(d) => d,
+            Err(SymphoniaError::ResetRequired) => {
+                decoder.reset();
+                continue;
+            }
+            Err(_) => continue,
+        };
+        {
             let Some((spec, frames, samples)) = copy_packet_samples(&mut sample_buf_slot, decoded)
             else {
                 continue;

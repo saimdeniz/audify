@@ -5,6 +5,25 @@ import { clearSmartSearchCache } from "../../utils/smartSearch";
 import { loadSavedSort, persistNavigationFilters } from "../storageHelpers";
 import type { StoreSliceContext } from "../types";
 
+const MAX_DUPLICATE_SCAN_CACHE_ENTRIES = 2;
+
+function putDuplicateScanCache(
+  prev: Record<string, DuplicateScanResult>,
+  scopeKey: string,
+  result: DuplicateScanResult
+): Record<string, DuplicateScanResult> {
+  const keys = Object.keys(prev).filter((k) => k !== scopeKey);
+  while (keys.length >= MAX_DUPLICATE_SCAN_CACHE_ENTRIES) {
+    keys.shift();
+  }
+  const next: Record<string, DuplicateScanResult> = {};
+  for (const k of keys) {
+    next[k] = prev[k];
+  }
+  next[scopeKey] = result;
+  return next;
+}
+
 export function makeDuplicateScopeKey(
   mode: DuplicateScanMode,
   libraryId: number | null,
@@ -235,10 +254,11 @@ export function createDuplicateSlice(ctx: StoreSliceContext) {
         const scopeKey = makeDuplicateScopeKey(mode, libraryId, minPct);
         set((prev) => ({
           duplicateScanResult: res,
-          duplicateScanCache: {
-            ...prev.duplicateScanCache,
-            [scopeKey]: res,
-          },
+          duplicateScanCache: putDuplicateScanCache(
+            prev.duplicateScanCache,
+            scopeKey,
+            res
+          ),
           isScanningDuplicates: false,
           duplicateScanProgress: null,
           duplicateScanError: null,

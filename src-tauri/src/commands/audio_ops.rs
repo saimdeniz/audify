@@ -1,7 +1,7 @@
 use super::with_read_conn;
 use crate::audio::{
-    compute_hires_peaks, compute_preview_norm_gain, export_wav_slice_with_preset,
-    resolve_metadata_titles_validated, transcode_audio_to_pcm_wav,
+    compute_hires_peaks, compute_preview_norm_gain, export_wav_slice_with_params,
+    resolve_metadata_titles_validated, transcode_audio_to_pcm_wav, SliceExportParams,
 };
 use crate::db::AppState;
 use crate::security::{
@@ -94,6 +94,33 @@ pub(crate) fn resolve_active_export_preset(
     None
 }
 
+pub(crate) fn resolve_active_export_loudness_mode(
+    conn: &Connection,
+    explicit: Option<&str>,
+) -> Option<String> {
+    if let Some(raw) = explicit {
+        let trimmed = raw.trim();
+        if matches!(trimmed, "off" | "peak_m1" | "lufs_m14" | "lufs_m24") {
+            return Some(trimmed.to_string());
+        }
+    }
+    if let Ok(settings_json) = conn.query_row(
+        "SELECT settings_json FROM profiles WHERE is_active = 1 ORDER BY id ASC LIMIT 1",
+        [],
+        |row| row.get::<_, String>(0),
+    ) {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&settings_json) {
+            if let Some(mode) = parsed.get("exportLoudnessMode").and_then(|v| v.as_str()) {
+                let trimmed = mode.trim();
+                if matches!(trimmed, "off" | "peak_m1" | "lufs_m14" | "lufs_m24") {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn export_audio_slice(
@@ -107,23 +134,27 @@ pub async fn export_audio_slice(
     apply_micro_fade: Option<bool>,
     cache_only: Option<bool>,
     export_preset: Option<String>,
+    export_loudness_mode: Option<String>,
 ) -> Result<String, String> {
     let state_owned = state.inner().clone();
     let app_clone = app.clone();
     let user_dir_err = state.user_dir.clone();
     let use_temp_cache = cache_only.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
-        let (source_path, slices_dir, resolved_preset) = with_read_conn(&state_owned, |conn| {
-            let src = validate_audio_path_in_scope(conn, &state_owned.user_dir, &file_path)
-                .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
-            let dir = if use_temp_cache {
-                resolve_slice_cache_dir(&state_owned.user_dir)
-            } else {
-                resolve_slice_export_dir(conn, &state_owned.user_dir, custom_dir.as_deref())?
-            };
-            let preset = resolve_active_export_preset(conn, export_preset.as_deref());
-            Ok((src, dir, preset))
-        })?;
+        let (source_path, slices_dir, resolved_preset, resolved_loudness) =
+            with_read_conn(&state_owned, |conn| {
+                let src = validate_audio_path_in_scope(conn, &state_owned.user_dir, &file_path)
+                    .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
+                let dir = if use_temp_cache {
+                    resolve_slice_cache_dir(&state_owned.user_dir)
+                } else {
+                    resolve_slice_export_dir(conn, &state_owned.user_dir, custom_dir.as_deref())?
+                };
+                let preset = resolve_active_export_preset(conn, export_preset.as_deref());
+                let loudness =
+                    resolve_active_export_loudness_mode(conn, export_loudness_mode.as_deref());
+                Ok((src, dir, preset, loudness))
+            })?;
 
         if has_ntfs_ads_colon(&slices_dir.to_string_lossy()) {
             return Err("Invalid slice export directory path".to_string());
@@ -140,14 +171,17 @@ pub async fn export_audio_slice(
             &slices_dir,
         );
 
-        export_wav_slice_with_preset(
+        export_wav_slice_with_params(
             &source_path,
             &slices_dir,
-            start_sec,
-            end_sec,
-            pitch_semitones,
-            apply_micro_fade,
-            resolved_preset.as_deref(),
+            &SliceExportParams {
+                start_sec,
+                end_sec,
+                pitch_semitones,
+                apply_micro_fade,
+                export_preset: resolved_preset.as_deref(),
+                loudness_mode: resolved_loudness.as_deref(),
+            },
         )
     })
     .await
@@ -173,20 +207,26 @@ pub async fn get_audio_preview_gain(
 }
 
 #[tauri::command]
-pub fn open_slices_folder(
+pub async fn open_slices_folder(
     state: State<'_, AppState>,
     custom_dir: Option<String>,
 ) -> Result<(), String> {
-    let slices_dir = with_read_conn(&state, |conn| {
-        resolve_slice_export_dir(conn, &state.user_dir, custom_dir.as_deref())
-    })?;
-    fs::create_dir_all(&slices_dir).map_err(|e| {
-        format!(
-            "Failed to create slices folder: {}",
-            sanitize_err(&state.user_dir, &e.to_string())
-        )
-    })?;
-    open_directory_in_shell(&slices_dir)
+    let state_owned = state.inner().clone();
+    let user_dir_err = state.user_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let slices_dir = with_read_conn(&state_owned, |conn| {
+            resolve_slice_export_dir(conn, &state_owned.user_dir, custom_dir.as_deref())
+        })?;
+        fs::create_dir_all(&slices_dir).map_err(|e| {
+            format!(
+                "Failed to create slices folder: {}",
+                sanitize_err(&state_owned.user_dir, &e.to_string())
+            )
+        })?;
+        open_directory_in_shell(&slices_dir)
+    })
+    .await
+    .map_err(|e| sanitize_err(&user_dir_err, &format!("Open slices folder failed: {}", e)))?
 }
 
 #[tauri::command]

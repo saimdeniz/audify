@@ -1,6 +1,7 @@
 import { DEFAULT_SHORTCUTS } from "../../constants/shortcuts";
 import {
   ExportAudioPreset,
+  ExportLoudnessMode,
   KeyboardShortcuts,
   MiniDockEdgeSide,
   WaveformSensitivity,
@@ -15,6 +16,7 @@ import { createLicenseActions } from "./licenseActions";
 
 export interface SettingsSliceTimers {
   flushPendingTint: () => void;
+  cancelPendingTint: () => void;
   clearToastTimers: () => void;
 }
 
@@ -56,6 +58,7 @@ export function createSettingsAndBinSlice(
   | "setAudioOutputDeviceId"
   | "setSliceMicroFade"
   | "setExportAudioPreset"
+  | "setExportLoudnessMode"
   | "setSkipLeadingSilence"
   | "setNormalizePreview"
   | "setAutoAnalyzeBpmKey"
@@ -83,7 +86,6 @@ export function createSettingsAndBinSlice(
   | "resetShortcuts"
   | "setStatusMessage"
   | "showStatusNotice"
-  | "clearStatusNotice"
 > {
   const { set, get, emitNotice } = ctx;
 
@@ -91,8 +93,9 @@ export function createSettingsAndBinSlice(
     timersOut.clearToastTimers = clearFn;
   });
   const binAndMiniDockActions = createBinAndMiniDockActions(ctx);
-  const appearanceActions = createAppearanceAndModalActions(ctx, (flushFn) => {
-    timersOut.flushPendingTint = flushFn;
+  const appearanceActions = createAppearanceAndModalActions(ctx, (t) => {
+    timersOut.flushPendingTint = t.flushPendingTint;
+    timersOut.cancelPendingTint = t.cancelPendingTint;
   });
 
   return {
@@ -151,6 +154,23 @@ export function createSettingsAndBinSlice(
       set({
         exportAudioPreset,
         statusMessage: `Slice & pitch export format: ${label}`,
+      });
+      void get().persistActiveProfileSettings();
+    },
+
+    setExportLoudnessMode: (exportLoudnessMode: ExportLoudnessMode) => {
+      safeSetItem(AUDIFY_STORAGE_KEYS.exportLoudnessMode, exportLoudnessMode);
+      const label =
+        exportLoudnessMode === "peak_m1"
+          ? "Peak -1 dBTP"
+          : exportLoudnessMode === "lufs_m14"
+          ? "-14 LUFS (Streaming)"
+          : exportLoudnessMode === "lufs_m24"
+          ? "-24 LUFS (Broadcast)"
+          : "Off (original level)";
+      set({
+        exportLoudnessMode,
+        statusMessage: `Export loudness normalization: ${label}`,
       });
       void get().persistActiveProfileSettings();
     },
@@ -297,9 +317,8 @@ export function createSettingsAndBinSlice(
 
     showStatusNotice: (
       message: string,
-      kind: "info" | "success" | "error" = "info"
-    ) => emitNotice(message, kind),
-
-    clearStatusNotice: () => set({ statusNotice: null }),
+      kind: "info" | "success" | "error" = "info",
+      action?: import("../storePayloads").StatusNoticeAction
+    ) => emitNotice(message, kind, action),
   };
 }

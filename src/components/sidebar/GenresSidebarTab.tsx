@@ -243,7 +243,7 @@ export const GenresSidebarTab: React.FC<GenresSidebarTabProps> = ({
             </div>
           )
         ) : (
-          <div className="flex flex-col space-y-0.5 text-[12px]">
+          <div className="flex flex-col text-[12px]">
             {filteredGenres.map((genre) => {
               const isSelected =
                 selectedGenre !== null &&
@@ -264,9 +264,6 @@ export const GenresSidebarTab: React.FC<GenresSidebarTabProps> = ({
                   }}
                   onMouseEnter={() => {
                     if (isDraggingInApp) setDragHoverTarget(targetKey);
-                  }}
-                  onMouseLeave={() => {
-                    if (dragHoverTarget === targetKey) setDragHoverTarget(null);
                   }}
                   title={`${genre.name} (${genre.sample_count.toLocaleString()})`}
                   className={`group/row h-[26px] px-2.5 flex items-center justify-between cursor-pointer border-l-2 min-w-0 transition-all ${

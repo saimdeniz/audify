@@ -1,12 +1,13 @@
 use super::{
-    collect_authorized_slice_dirs, ensure_existing_slice_in_scope, format_os_display_path,
-    query_slice_record_by_id, resolve_slice_trash_dir, SliceHistoryRecord,
+    collect_authorized_slice_dirs, ensure_existing_slice_in_scope_detailed, format_os_display_path,
+    query_slice_record_by_id, resolve_slice_trash_dir, SliceHistoryRecord, SliceScopeError,
 };
 use crate::commands::file_ops::{move_file_resilient, rollback_disk_moves};
 use crate::db::{get_active_profile_id, AppState};
 use crate::security::{
     display_leaf, has_ntfs_ads_colon, has_parent_dir_traversal, is_dos_device_name,
-    is_unc_or_network_path, normalize_clean_path, sanitize_err, strip_verbatim_prefix,
+    is_unc_or_network_path, normalize_clean_path, reject_symlink_ancestors, sanitize_err,
+    strip_verbatim_prefix,
 };
 use rusqlite::{params, Connection};
 use std::collections::{HashMap, HashSet};
@@ -77,18 +78,24 @@ pub(crate) fn trash_slice_files_with_conn(
             return Err("Refusing to trash an indexed library source track".to_string());
         }
 
-        if let Ok(resolved) = ensure_existing_slice_in_scope(conn, user_dir, &slice_path) {
-            super::ensure_slice_not_in_readonly_library(conn, &resolved)?;
-            let leaf = display_leaf(&resolved);
-            let nonce = SLICE_TRASH_NONCE.fetch_add(1, Ordering::Relaxed);
-            let trash_pb = trash_dir.join(format!("{}_{}_{}", slice_id, nonce, leaf));
-            planned.push(PlannedTrash {
-                slice_id,
-                src_pb: resolved,
-                trash_pb,
-            });
-        } else {
-            missing_row_ids.push(slice_id);
+        match ensure_existing_slice_in_scope_detailed(conn, user_dir, &slice_path) {
+            Ok(resolved) => {
+                super::ensure_slice_not_in_readonly_library(conn, &resolved)?;
+                let leaf = display_leaf(&resolved);
+                let nonce = SLICE_TRASH_NONCE.fetch_add(1, Ordering::Relaxed);
+                let trash_pb = trash_dir.join(format!("{}_{}_{}", slice_id, nonce, leaf));
+                planned.push(PlannedTrash {
+                    slice_id,
+                    src_pb: resolved,
+                    trash_pb,
+                });
+            }
+            Err(SliceScopeError::NotFound(_)) => {
+                missing_row_ids.push(slice_id);
+            }
+            Err(SliceScopeError::Denied(msg)) => {
+                return Err(msg);
+            }
         }
     }
 
@@ -152,24 +159,28 @@ fn is_restore_parent_authorized(target_parent: &Path, auth_dirs: &[PathBuf]) -> 
     {
         return false;
     }
+    if reject_symlink_ancestors(target_parent).is_err() {
+        return false;
+    }
 
     let mut pending_segments: Vec<String> = Vec::new();
     let mut cursor: Option<&Path> = Some(target_parent);
     let mut canon_existing: Option<PathBuf> = None;
 
     while let Some(dir) = cursor {
-        if dir.exists() {
-            let Ok(sym) = fs::symlink_metadata(dir) else {
-                return false;
-            };
-            if sym.file_type().is_symlink() || !sym.file_type().is_dir() {
-                return false;
+        match fs::symlink_metadata(dir) {
+            Ok(sym) => {
+                if sym.file_type().is_symlink() || !sym.file_type().is_dir() {
+                    return false;
+                }
+                let Ok(canon) = dir.canonicalize() else {
+                    return false;
+                };
+                canon_existing = Some(canon);
+                break;
             }
-            let Ok(canon) = dir.canonicalize() else {
-                return false;
-            };
-            canon_existing = Some(canon);
-            break;
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return false,
         }
         if let Some(name) = dir.file_name().and_then(|n| n.to_str()) {
             if name.starts_with('.') || name.starts_with('$') || is_dos_device_name(name) {
@@ -251,10 +262,17 @@ pub(crate) fn restore_trashed_slice_files_with_conn(
         ) else {
             continue;
         };
-        if trash_path_str.trim().is_empty() {
+        let trimmed_trash = trash_path_str.trim();
+        if trimmed_trash.is_empty()
+            || is_unc_or_network_path(trimmed_trash)
+            || has_ntfs_ads_colon(trimmed_trash)
+        {
             continue;
         }
-        let trash_pb = PathBuf::from(trash_path_str.trim());
+        let trash_pb = PathBuf::from(trimmed_trash);
+        if reject_symlink_ancestors(&trash_pb).is_err() {
+            return Err("Symbolic links and junctions are not allowed in slice quarantine".to_string());
+        }
         let Ok(sym) = fs::symlink_metadata(&trash_pb) else {
             continue;
         };
@@ -387,25 +405,43 @@ pub(crate) fn restore_trashed_slice_files_with_conn(
 }
 
 #[tauri::command]
-pub fn trash_slice_files(
+pub async fn trash_slice_files(
     app: AppHandle,
     state: State<'_, AppState>,
     slice_ids: Vec<i64>,
 ) -> Result<Vec<i64>, String> {
     crate::library_watcher::suppress_watcher_if_managed(&app, 2500);
-    let mut conn = state.lock_db();
-    trash_slice_files_with_conn(&mut conn, &state.user_dir, &slice_ids)
-        .map_err(|e| sanitize_err(&state.user_dir, &e))
+    let state_owned = state.inner().clone();
+    let user_dir_err = state.user_dir.clone();
+    let app_after = app.clone();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = state_owned.lock_db();
+        trash_slice_files_with_conn(&mut conn, &state_owned.user_dir, &slice_ids)
+            .map_err(|e| sanitize_err(&state_owned.user_dir, &e))
+    })
+    .await
+    .map_err(|e| sanitize_err(&user_dir_err, &format!("Trash slice files task failed: {}", e)))?;
+    crate::library_watcher::suppress_watcher_if_managed(&app_after, 1500);
+    res
 }
 
 #[tauri::command]
-pub fn restore_trashed_slice_files(
+pub async fn restore_trashed_slice_files(
     app: AppHandle,
     state: State<'_, AppState>,
     slice_ids: Vec<i64>,
 ) -> Result<Vec<SliceHistoryRecord>, String> {
     crate::library_watcher::suppress_watcher_if_managed(&app, 2500);
-    let mut conn = state.lock_db();
-    restore_trashed_slice_files_with_conn(&mut conn, &state.user_dir, &slice_ids)
-        .map_err(|e| sanitize_err(&state.user_dir, &e))
+    let state_owned = state.inner().clone();
+    let user_dir_err = state.user_dir.clone();
+    let app_after = app.clone();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = state_owned.lock_db();
+        restore_trashed_slice_files_with_conn(&mut conn, &state_owned.user_dir, &slice_ids)
+            .map_err(|e| sanitize_err(&state_owned.user_dir, &e))
+    })
+    .await
+    .map_err(|e| sanitize_err(&user_dir_err, &format!("Restore slice files task failed: {}", e)))?;
+    crate::library_watcher::suppress_watcher_if_managed(&app_after, 1500);
+    res
 }

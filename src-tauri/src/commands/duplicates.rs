@@ -1,12 +1,23 @@
 use crate::ai_tagger::model_manager::active_model_id_and_path;
-use crate::db::{open_read_conn, AppState};
+use crate::db::AppState;
 use crate::duplicates::{
     compute_duplicates_with_progress, load_duplicate_candidates_for_model,
     persist_sample_hash_cache, DuplicateScanMode, DuplicateScanProgressPayload,
     DuplicateScanResult,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{Emitter, State};
+
+static DUPLICATE_SCAN_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+struct ResetDuplicateScanGuard;
+
+impl Drop for ResetDuplicateScanGuard {
+    fn drop(&mut self) {
+        DUPLICATE_SCAN_ACTIVE.store(false, Ordering::Release);
+    }
+}
 
 #[tauri::command]
 pub async fn scan_duplicate_samples(
@@ -16,6 +27,13 @@ pub async fn scan_duplicate_samples(
     library_id: Option<i64>,
     min_similarity_pct: Option<u8>,
 ) -> Result<DuplicateScanResult, String> {
+    if DUPLICATE_SCAN_ACTIVE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("A duplicate scan is already running".to_string());
+    }
+    let _scan_guard = ResetDuplicateScanGuard;
     let scan_mode = match mode.as_deref().unwrap_or("exact") {
         "similar" => DuplicateScanMode::Similar,
         _ => DuplicateScanMode::Exact,
@@ -47,7 +65,7 @@ pub async fn scan_duplicate_samples(
         } else {
             None
         };
-        let bundle = match open_read_conn(&state_owned.user_dir) {
+        let bundle = match state_owned.acquire_read_conn() {
             Ok(read_conn) => load_duplicate_candidates_for_model(
                 &read_conn,
                 scan_mode,

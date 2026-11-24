@@ -17,7 +17,7 @@ pub use trash_restore::*;
 use crate::db::get_active_profile_id;
 use crate::security::{
     display_leaf, has_ntfs_ads_colon, is_unc_or_network_path, normalize_clean_path,
-    strip_verbatim_prefix,
+    reject_symlink_ancestors, strip_verbatim_prefix,
 };
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -467,6 +467,7 @@ pub(super) fn validate_writable_library_folder(
     }
 
     let raw_pb = PathBuf::from(trimmed);
+    reject_symlink_ancestors(&raw_pb)?;
     let sym_meta = fs::symlink_metadata(&raw_pb)
         .map_err(|_| format!("Folder does not exist on disk: {}", display_leaf(&raw_pb)))?;
     if sym_meta.file_type().is_symlink() || !sym_meta.file_type().is_dir() {

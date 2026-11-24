@@ -224,20 +224,27 @@ pub fn is_forbidden_os_or_root_path(raw: &str) -> bool {
     is_forbidden_os_or_root_normalized(&normalize_clean_path(raw))
 }
 
-/// Rejects symlinks/junctions on `path` AND on every existing non-root ancestor
-/// BEFORE `fs::canonicalize` runs, blocking SMB Net-NTLMv2 leaks via intermediate junctions.
+/// Rejects symlinks/junctions on every existing non-root ancestor AND leaf **top-down**
+/// (drive/root -> leaf) BEFORE touching deeper child components or calling `fs::canonicalize`,
+/// blocking Windows SMB Net-NTLMv2 leaks via intermediate directory junctions.
 pub(crate) fn reject_symlink_ancestors(path: &Path) -> Result<(), String> {
-    let mut cur = Some(path);
-    while let Some(p) = cur {
-        if p.as_os_str().is_empty() || p.parent().is_none() {
-            break;
+    let mut current = PathBuf::new();
+    for comp in path.components() {
+        current.push(comp.as_os_str());
+        match comp {
+            Component::Prefix(_) | Component::RootDir | Component::CurDir => continue,
+            Component::Normal(_) | Component::ParentDir => match fs::symlink_metadata(&current) {
+                Ok(sym) => {
+                    if sym.file_type().is_symlink() {
+                        return Err("Symbolic links and junctions are not allowed".to_string());
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+                Err(_) => {
+                    return Err("Path component could not be verified safely".to_string());
+                }
+            },
         }
-        if let Ok(sym) = fs::symlink_metadata(p) {
-            if sym.file_type().is_symlink() {
-                return Err("Symbolic links and junctions are not allowed".to_string());
-            }
-        }
-        cur = p.parent();
     }
     Ok(())
 }
@@ -273,6 +280,9 @@ pub fn is_safe_library_dir(p: &str) -> Result<PathBuf, String> {
         ));
     }
 
+    // Check ancestors top-down BEFORE inspecting `raw_path` itself so an intermediate
+    // junction pointing to a UNC/SMB share is never traversed by `symlink_metadata(raw_path)`.
+    reject_symlink_ancestors(raw_path)?;
     let sym = fs::symlink_metadata(raw_path).map_err(|_| {
         format!(
             "Directory does not exist or cannot be accessed: {}",
@@ -282,7 +292,6 @@ pub fn is_safe_library_dir(p: &str) -> Result<PathBuf, String> {
     if sym.file_type().is_symlink() {
         return Err("Symbolic links and junctions are not allowed as a library directory".to_string());
     }
-    reject_symlink_ancestors(raw_path)?;
 
     let canon = fs::canonicalize(raw_path).map_err(|_| {
         format!(
@@ -339,7 +348,9 @@ pub fn ensure_safe_export_dir(p: &str) -> Result<PathBuf, String> {
     if is_forbidden_os_or_root_normalized(&pre_norm) {
         return Err("System or drive root directory cannot be used for slice export".to_string());
     }
-    // Check existing target/ancestors for symlinks or protected roots before `create_dir_all`.
+    // Check ALL existing ancestors top-down for symlinks/junctions first so no intermediate
+    // junction is skipped or traversed before `create_dir_all`.
+    reject_symlink_ancestors(path_obj)?;
     for anc in path_obj.ancestors() {
         if anc.as_os_str().is_empty() || anc.parent().is_none() {
             break;

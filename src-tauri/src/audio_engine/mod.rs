@@ -95,11 +95,12 @@ pub(super) enum EngineCmd {
     GetSnapshot {
         reply: mpsc::Sender<AudioSyncPayload>,
     },
+    TrimCaches,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct AudioEngineState {
-    tx: Mutex<Option<mpsc::Sender<EngineCmd>>>,
+    tx: Arc<Mutex<Option<mpsc::Sender<EngineCmd>>>>,
     latest_load_seq: Arc<AtomicU64>,
     event_seq: Arc<AtomicU64>,
 }
@@ -213,5 +214,9 @@ impl AudioEngineState {
 
     pub fn list_devices(&self) -> Vec<AudioOutputDeviceInfo> {
         output::list_output_devices()
+    }
+
+    pub fn trim_caches(&self) {
+        let _ = self.send(EngineCmd::TrimCaches);
     }
 }

@@ -2,8 +2,9 @@ use crate::db::AppState;
 use crate::security::{
     detect_image_magic, detect_wallpaper_media_magic, ensure_inside, has_ntfs_ads_colon,
     is_dos_device_name, is_unc_or_network_path, open_bounded_file, open_directory_in_shell,
-    reveal_file_in_explorer, sanitize_err, validate_path_in_libraries_or_cache,
-    ALLOWED_BG_MEDIA_EXTS, ALLOWED_BG_VIDEO_EXTS, MAX_CUSTOM_BG_BYTES, MAX_CUSTOM_BG_VIDEO_BYTES,
+    reject_symlink_ancestors, reveal_file_in_explorer, sanitize_err,
+    validate_path_in_libraries_or_cache, ALLOWED_BG_MEDIA_EXTS, ALLOWED_BG_VIDEO_EXTS,
+    MAX_CUSTOM_BG_BYTES, MAX_CUSTOM_BG_VIDEO_BYTES,
 };
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -11,34 +12,56 @@ use std::path::Path;
 use tauri::State;
 
 #[tauri::command]
-pub fn show_in_folder(state: State<'_, AppState>, file_path: String) -> Result<(), String> {
-    let resolved = {
-        let conn = state.lock_db();
-        validate_path_in_libraries_or_cache(&conn, &state.user_dir, &file_path)?
-    };
+pub async fn show_in_folder(state: State<'_, AppState>, file_path: String) -> Result<(), String> {
+    let state_owned = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let resolved = super::with_read_conn(&state_owned, |conn| {
+            validate_path_in_libraries_or_cache(conn, &state_owned.user_dir, &file_path)
+        })?;
 
-    if resolved.is_file() {
-        if reveal_file_in_explorer(&resolved).is_err() {
-            if let Some(parent) = resolved.parent() {
-                open_directory_in_shell(parent)?;
-            } else {
-                return Err("Failed to reveal file in Explorer".to_string());
+        if resolved.is_file() {
+            if reveal_file_in_explorer(&resolved).is_err() {
+                if let Some(parent) = resolved.parent() {
+                    open_directory_in_shell(parent)?;
+                } else {
+                    return Err("Failed to reveal file in Explorer".to_string());
+                }
             }
+            Ok(())
+        } else {
+            open_directory_in_shell(&resolved)
         }
-        Ok(())
-    } else {
-        open_directory_in_shell(&resolved)
-    }
+    })
+    .await
+    .map_err(|e| format!("Reveal in folder task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn open_data_folder(state: State<'_, AppState>) -> Result<(), String> {
-    let _ = fs::create_dir_all(&state.user_dir);
-    open_directory_in_shell(&state.user_dir)
+pub async fn open_data_folder(state: State<'_, AppState>) -> Result<(), String> {
+    let user_dir = state.user_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = fs::create_dir_all(&user_dir);
+        open_directory_in_shell(&user_dir)
+    })
+    .await
+    .map_err(|e| format!("Open data folder task failed: {}", e))?
 }
 
 const MAX_BG_SCAN_DEPTH: usize = 4;
 const MAX_BG_SCAN_ITEMS: usize = 1000;
+
+fn read_chunk_full(file: &mut File, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut filled = 0usize;
+    while filled < buf.len() {
+        match file.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(filled)
+}
 
 fn files_identical_streaming(src: &mut File, existing_path: &Path) -> bool {
     let Ok(mut existing) = File::open(existing_path) else {
@@ -50,10 +73,10 @@ fn files_identical_streaming(src: &mut File, existing_path: &Path) -> bool {
     let mut buf_a = [0u8; 64 * 1024];
     let mut buf_b = [0u8; 64 * 1024];
     loop {
-        let Ok(na) = src.read(&mut buf_a) else {
+        let Ok(na) = read_chunk_full(src, &mut buf_a) else {
             return false;
         };
-        let Ok(nb) = existing.read(&mut buf_b) else {
+        let Ok(nb) = read_chunk_full(&mut existing, &mut buf_b) else {
             return false;
         };
         if na != nb || buf_a[..na] != buf_b[..nb] {
@@ -315,49 +338,79 @@ pub(crate) fn import_custom_background_to_dir(
 }
 
 #[tauri::command]
-pub fn import_custom_background(
+pub async fn import_custom_background(
     state: State<'_, AppState>,
     source_path: String,
 ) -> Result<String, String> {
-    import_custom_background_to_dir(&state.user_dir, &source_path)
+    let user_dir = state.user_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        import_custom_background_to_dir(&user_dir, &source_path)
+    })
+    .await
+    .map_err(|e| format!("Background import task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn get_custom_backgrounds(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    get_custom_backgrounds_from_dir(&state.user_dir)
+pub async fn get_custom_backgrounds(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let user_dir = state.user_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || get_custom_backgrounds_from_dir(&user_dir))
+        .await
+        .map_err(|e| format!("Background list task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn delete_custom_background(
+pub async fn delete_custom_background(
     state: State<'_, AppState>,
     file_path: String,
 ) -> Result<(), String> {
-    let trimmed = file_path.trim();
-    if trimmed.is_empty() {
-        return Ok(());
-    }
-    if is_unc_or_network_path(trimmed) || has_ntfs_ads_colon(trimmed) {
-        return Err("Invalid background image path".to_string());
-    }
-    let p = Path::new(trimmed);
-    let Ok(meta) = fs::symlink_metadata(p) else {
-        return Ok(());
-    };
-    if meta.file_type().is_symlink() {
-        return Err("Symlinked background files cannot be deleted here".to_string());
-    }
-    let images_dir = state.user_dir.join("images");
-    let _ = fs::create_dir_all(&images_dir);
-    let safe = ensure_inside(&images_dir, p)?;
-    fs::remove_file(safe).map_err(|_| "Failed to delete background image".to_string())
+    let user_dir = state.user_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let trimmed = file_path.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+        if is_unc_or_network_path(trimmed) || has_ntfs_ads_colon(trimmed) {
+            return Err("Invalid background image path".to_string());
+        }
+        let p = Path::new(trimmed);
+        reject_symlink_ancestors(p)?;
+        match fs::symlink_metadata(p) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err("Symlinked background files cannot be deleted here".to_string());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(());
+            }
+            Err(_) => {
+                return Err("Failed to inspect background image".to_string());
+            }
+            Ok(_) => {}
+        }
+        let images_dir = user_dir.join("images");
+        let _ = fs::create_dir_all(&images_dir);
+        let safe = ensure_inside(&images_dir, p)?;
+        fs::remove_file(safe).map_err(|_| "Failed to delete background image".to_string())
+    })
+    .await
+    .map_err(|e| format!("Background delete task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn open_custom_backgrounds_folder(state: State<'_, AppState>) -> Result<(), String> {
-    let images_dir = state.user_dir.join("images");
-    fs::create_dir_all(&images_dir)
-        .map_err(|e| sanitize_err(&state.user_dir, &e.to_string()))?;
-    open_directory_in_shell(&images_dir)
+pub async fn open_custom_backgrounds_folder(state: State<'_, AppState>) -> Result<(), String> {
+    let user_dir = state.user_dir.clone();
+    let user_dir_err = user_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let images_dir = user_dir.join("images");
+        fs::create_dir_all(&images_dir).map_err(|e| sanitize_err(&user_dir, &e.to_string()))?;
+        open_directory_in_shell(&images_dir)
+    })
+    .await
+    .map_err(|e| {
+        sanitize_err(
+            &user_dir_err,
+            &format!("Open custom backgrounds folder failed: {}", e),
+        )
+    })?
 }
 
 #[cfg(test)]

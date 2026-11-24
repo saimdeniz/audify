@@ -1,12 +1,15 @@
 pub use super::knn_helpers::merge_yamnet_and_knn_tags;
 
-use super::knn_helpers::collect_knn_target_vectors;
+use super::knn_helpers::{
+    collect_knn_target_page, collect_knn_target_vectors_for_ids, count_knn_profile_targets,
+    TargetVectorItem,
+};
 use super::model_manager::active_model_id_and_path;
 use super::similarity::{blob_to_vec, dot_similarity};
 use super::taxonomy::{persist_ai_tags_for_sample, MappedAiTag};
 use super::types::{AiAnalysisSummary, AiIndexProgress, AiTaggingMode, AI_EMBEDDING_DIM};
 use super::AiTaggerState;
-use crate::db::{get_active_profile_id, open_read_conn, AppState};
+use crate::db::{get_active_profile_id, AppState};
 use crate::security::sanitize_err;
 use rayon::prelude::*;
 use rusqlite::{params, Connection};
@@ -256,7 +259,7 @@ pub fn run_knn_tag_suggestions(
     let _running_guard = RunningGuard(&ai_state.analysis_running);
 
     let (model_id, _, _, _) = active_model_id_and_path(&state.user_dir);
-    let read_conn = open_read_conn(&state.user_dir)?;
+    let read_conn = state.acquire_read_conn()?;
     let profile_id = get_active_profile_id(&read_conn);
 
     let knn_index = KnnLabeledIndex::load_from_db(&read_conn, profile_id, &model_id)?;
@@ -267,10 +270,13 @@ pub fn run_knn_tag_suggestions(
         );
     }
 
-    let targets = collect_knn_target_vectors(&read_conn, profile_id, &model_id, sample_ids)?;
+    let total = if let Some(ids) = sample_ids {
+        ids.len()
+    } else {
+        count_knn_profile_targets(&read_conn, profile_id, &model_id)?
+    };
     drop(read_conn);
 
-    let total = targets.len();
     if total == 0 {
         return Err(
             "Target sample(s) are not AI indexed yet. Run 'AI Index / Analyze' first."
@@ -284,83 +290,142 @@ pub fn run_knn_tag_suggestions(
     let mut suggestions_added = 0usize;
     let mut tags_auto_applied = 0usize;
     let mut canceled = false;
+    let mut last_sample_id: i64 = 0;
+    let mut id_cursor: usize = 0;
+    const KNN_PAGE_SIZE: usize = KNN_CHUNK_SIZE * 4;
 
-    for chunk in targets.chunks(KNN_CHUNK_SIZE) {
+    loop {
         if ai_state.analysis_cancel.load(Ordering::SeqCst) {
             canceled = true;
             break;
         }
+        let page: Vec<TargetVectorItem> = if let Some(ids) = sample_ids {
+            if id_cursor >= ids.len() {
+                break;
+            }
+            let end = (id_cursor + KNN_PAGE_SIZE).min(ids.len());
+            let slice = &ids[id_cursor..end];
+            id_cursor = end;
+            let page_conn = state.acquire_read_conn()?;
+            collect_knn_target_vectors_for_ids(&page_conn, profile_id, &model_id, slice)?
+        } else {
+            let page_conn = state.acquire_read_conn()?;
+            let batch = collect_knn_target_page(
+                &page_conn,
+                profile_id,
+                &model_id,
+                last_sample_id,
+                KNN_PAGE_SIZE,
+            )?;
+            if let Some(last) = batch.last() {
+                last_sample_id = last.sample_id;
+            }
+            batch
+        };
+        if page.is_empty() {
+            if sample_ids.is_some() {
+                continue;
+            }
+            break;
+        }
 
-        let chunk_predictions: Vec<(i64, Vec<MappedAiTag>)> =
-            if chunk.len() > 16 && knn_index.labeled_count() > 500 {
-                chunk
-                    .par_iter()
-                    .filter_map(|item| {
+        for chunk in page.chunks(KNN_CHUNK_SIZE) {
+            if ai_state.analysis_cancel.load(Ordering::SeqCst) {
+                canceled = true;
+                break;
+            }
+
+            let chunk_predictions: Vec<(i64, Vec<MappedAiTag>)> =
+                if chunk.len() > 16 && knn_index.labeled_count() > 500 {
+                    chunk
+                        .par_iter()
+                        .filter_map(|item| {
+                            let predicted = knn_index.suggest_for_vector(
+                                item.sample_id,
+                                &item.vector,
+                                confidence_threshold,
+                                max_tags_per_sample,
+                            );
+                            if predicted.is_empty() {
+                                None
+                            } else {
+                                Some((item.sample_id, predicted))
+                            }
+                        })
+                        .collect()
+                } else {
+                    let mut preds = Vec::new();
+                    for item in chunk {
                         let predicted = knn_index.suggest_for_vector(
                             item.sample_id,
                             &item.vector,
                             confidence_threshold,
                             max_tags_per_sample,
                         );
-                        if predicted.is_empty() {
-                            None
-                        } else {
-                            Some((item.sample_id, predicted))
+                        if !predicted.is_empty() {
+                            preds.push((item.sample_id, predicted));
                         }
-                    })
-                    .collect()
-            } else {
-                let mut preds = Vec::new();
-                for item in chunk {
-                    let predicted = knn_index.suggest_for_vector(
-                        item.sample_id,
-                        &item.vector,
-                        confidence_threshold,
-                        max_tags_per_sample,
-                    );
-                    if !predicted.is_empty() {
-                        preds.push((item.sample_id, predicted));
                     }
+                    preds
+                };
+            processed += chunk.len();
+            let last_name = chunk.last().map(|i| i.filename.clone()).unwrap_or_default();
+            // Keep idle reaper aware that k-NN batch is active
+            ai_state.touch_activity(Some(&state.db));
+
+            if !chunk_predictions.is_empty() {
+                let conn = state.lock_db();
+                let tx = conn
+                    .unchecked_transaction()
+                    .map_err(|e| sanitize_err(&state.user_dir, &e.to_string()))?;
+                for (sample_id, predicted) in &chunk_predictions {
+                    let still_exists: bool = tx
+                        .prepare_cached(
+                            "SELECT EXISTS(SELECT 1 FROM samples WHERE id = ?1 AND COALESCE(is_trashed, 0) = 0)",
+                        )
+                        .and_then(|mut s| s.query_row([*sample_id], |r| r.get::<_, i64>(0)))
+                        .map(|v| v != 0)
+                        .unwrap_or(false);
+                    if !still_exists {
+                        continue;
+                    }
+                    let (added, applied) =
+                        persist_ai_tags_for_sample(&tx, *sample_id, &model_id, predicted, auto_apply)?;
+                    suggestions_added += added;
+                    tags_auto_applied += applied;
                 }
-                preds
-            };
-        processed += chunk.len();
-        let last_name = chunk.last().map(|i| i.filename.clone()).unwrap_or_default();
-        // Keep idle reaper aware that k-NN batch is active
-        ai_state.touch_activity(Some(&state.db));
-
-        if !chunk_predictions.is_empty() {
-            let conn = state.lock_db();
-            let tx = conn
-                .unchecked_transaction()
-                .map_err(|e| sanitize_err(&state.user_dir, &e.to_string()))?;
-            for (sample_id, predicted) in &chunk_predictions {
-                let (added, applied) =
-                    persist_ai_tags_for_sample(&tx, *sample_id, &model_id, predicted, auto_apply)?;
-                suggestions_added += added;
-                tags_auto_applied += applied;
+                tx.commit()
+                    .map_err(|e| sanitize_err(&state.user_dir, &e.to_string()))?;
             }
-            tx.commit()
-                .map_err(|e| sanitize_err(&state.user_dir, &e.to_string()))?;
-        }
 
-        let avg_ms = if processed > 0 {
-            (started.elapsed().as_secs_f64() * 1000.0) / (processed as f64)
-        } else {
-            0.0
-        };
-        let percentage = ((processed as f64 / total as f64) * 100.0).min(100.0);
-        let _ = app.emit(
-            "ai-index-progress",
-            AiIndexProgress {
-                processed,
-                total,
-                percentage,
-                current_file: last_name,
-                indexed_count: total,
-                tags_suggested: suggestions_added + tags_auto_applied,
-                avg_ms_per_clip: avg_ms,
-            },
+            let avg_ms = if processed > 0 {
+                (started.elapsed().as_secs_f64() * 1000.0) / (processed as f64)
+            } else {
+                0.0
+            };
+            let percentage = ((processed as f64 / total.max(processed).max(1) as f64) * 100.0).min(100.0);
+            let _ = app.emit(
+                "ai-index-progress",
+                AiIndexProgress {
+                    processed,
+                    total: total.max(processed),
+                    percentage,
+                    current_file: last_name,
+                    indexed_count: total.max(processed),
+                    tags_suggested: suggestions_added + tags_auto_applied,
+                    avg_ms_per_clip: avg_ms,
+                },
+            );
+        }
+        if canceled {
+            break;
+        }
+    }
+
+    if processed == 0 && !canceled {
+        return Err(
+            "Target sample(s) are not AI indexed yet. Run 'AI Index / Analyze' first."
+                .to_string(),
         );
     }
 

@@ -12,21 +12,133 @@ use rusqlite::{params, params_from_iter, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
+
+const MAX_POOLED_READ_CONNS: usize = 3;
+
+struct ReadConnPool {
+    idle: Mutex<Vec<Connection>>,
+    generation: AtomicU64,
+}
+
+impl ReadConnPool {
+    fn new() -> Self {
+        Self {
+            idle: Mutex::new(Vec::with_capacity(MAX_POOLED_READ_CONNS)),
+            generation: AtomicU64::new(1),
+        }
+    }
+
+    fn drain(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        let mut guard = self.idle.lock().unwrap_or_else(|e| e.into_inner());
+        guard.clear();
+    }
+
+    fn shrink_memory(&self) {
+        let mut guard = self.idle.lock().unwrap_or_else(|e| e.into_inner());
+        for conn in guard.iter_mut() {
+            let _ = conn.execute_batch("PRAGMA shrink_memory;");
+        }
+    }
+}
+
+/// Checked-out read-only SQLite connection that returns automatically to `AppState`'s bounded
+/// read pool on drop (or closes cleanly if the pool generation was invalidated by a restore).
+pub struct PooledReadConn {
+    conn: Option<Connection>,
+    pool: Arc<ReadConnPool>,
+    generation: u64,
+}
+
+impl Deref for PooledReadConn {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        self.conn
+            .as_ref()
+            .expect("PooledReadConn dereferenced after drop")
+    }
+}
+
+impl Drop for PooledReadConn {
+    fn drop(&mut self) {
+        let Some(conn) = self.conn.take() else {
+            return;
+        };
+        if self.pool.generation.load(Ordering::SeqCst) != self.generation {
+            return;
+        }
+        // Never return a connection with an uncommitted read transaction back to the pool
+        // (prevents dangling WAL read snapshots from pinning WAL growth indefinitely).
+        if !conn.is_autocommit() {
+            let _ = conn.execute_batch("ROLLBACK;");
+            if !conn.is_autocommit() {
+                return;
+            }
+        }
+        let mut guard = self.pool.idle.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.len() < MAX_POOLED_READ_CONNS {
+            guard.push(conn);
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
     pub user_dir: PathBuf,
+    read_pool: Arc<ReadConnPool>,
 }
 
 impl AppState {
     pub fn new(conn: Connection, user_dir: PathBuf) -> Self {
+        let read_pool = Arc::new(ReadConnPool::new());
         Self {
             db: Arc::new(Mutex::new(conn)),
             user_dir,
+            read_pool,
+        }
+    }
+
+    /// Acquires a warm read-only WAL connection from the bounded pool (opening one on demand).
+    pub fn acquire_read_conn(&self) -> Result<PooledReadConn, String> {
+        let gen = self.read_pool.generation.load(Ordering::SeqCst);
+        let popped = {
+            let mut guard = self
+                .read_pool
+                .idle
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            guard.pop()
+        };
+        let conn = match popped {
+            Some(c) => c,
+            None => open_read_conn(&self.user_dir)?,
+        };
+        Ok(PooledReadConn {
+            conn: Some(conn),
+            pool: Arc::clone(&self.read_pool),
+            generation: gen,
+        })
+    }
+
+    /// Closes all idle pooled read connections and invalidates in-flight readers so full
+    /// snapshot restores never contend with stale WAL snapshots.
+    pub fn drain_read_pool(&self) {
+        self.read_pool.drain();
+    }
+
+    /// Releases unused SQLite page-cache memory across all pooled readers and (non-blocking)
+    /// the main write connection when the window minimizes or Edge-Peek collapses.
+    pub fn shrink_all_db_memory(&self) {
+        self.read_pool.shrink_memory();
+        if let Ok(conn) = self.db.try_lock() {
+            let _ = conn.execute_batch("PRAGMA shrink_memory;");
         }
     }
 
@@ -147,7 +259,7 @@ pub fn open_read_conn(user_dir: &Path) -> Result<Connection, String> {
         "PRAGMA query_only = ON;
          PRAGMA trusted_schema = OFF;
          PRAGMA temp_store = MEMORY;
-         PRAGMA mmap_size = 67108864;
+         PRAGMA mmap_size = 16777216;
          PRAGMA cache_size = -6000;",
     )
     .map_err(|e| {
@@ -159,8 +271,8 @@ pub fn open_read_conn(user_dir: &Path) -> Result<Connection, String> {
     Ok(conn)
 }
 
-/// Executes a read-only database query on Tauri's blocking thread pool using a concurrent WAL
-/// read connection (`open_read_conn`), falling back to `state.lock_db()` only if opening a
+/// Executes a read-only database query on Tauri's blocking thread pool using a warm pooled WAL
+/// read connection (`acquire_read_conn`), falling back to `state.lock_db()` only if opening a
 /// read-only handle fails.
 pub async fn run_read_query<T, F>(state: &AppState, f: F) -> Result<T, String>
 where
@@ -168,7 +280,7 @@ where
     F: FnOnce(&Connection) -> Result<T, String> + Send + 'static,
 {
     let state_owned = state.clone();
-    tauri::async_runtime::spawn_blocking(move || match open_read_conn(&state_owned.user_dir) {
+    tauri::async_runtime::spawn_blocking(move || match state_owned.acquire_read_conn() {
         Ok(read_conn) => f(&read_conn),
         Err(_) => {
             let conn = state_owned.lock_db();
@@ -177,6 +289,21 @@ where
     })
     .await
     .map_err(|e| format!("Database read task join error: {}", e))?
+}
+
+/// Executes a write database operation off the Win32 STA UI thread via `spawn_blocking`.
+pub async fn run_write_op<T, F>(state: &AppState, f: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&mut Connection) -> Result<T, String> + Send + 'static,
+{
+    let state_owned = state.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = state_owned.lock_db();
+        f(&mut conn)
+    })
+    .await
+    .map_err(|e| format!("Database write task join error: {}", e))?
 }
 
 pub fn init_db(user_dir: &Path) -> Result<Connection, String> {

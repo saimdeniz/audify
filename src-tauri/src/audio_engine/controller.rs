@@ -43,6 +43,9 @@ impl ControllerCtx {
         let seq = self.event_seq.fetch_add(1, Ordering::AcqRel) + 1;
         let (is_playing, position_sec, duration_sec, playback_rate) =
             if let Ok(guard) = self.dsp.lock() {
+                self.signals
+                    .rendering
+                    .store(guard.is_rendering_audio(), Ordering::Release);
                 (
                     guard.is_playing(),
                     guard.position_sec(),
@@ -114,12 +117,8 @@ pub(super) fn run_audio_control_loop(
     };
 
     loop {
-        let is_idle_parked = ctx.stream.is_none()
-            && !ctx
-                .dsp
-                .lock()
-                .map(|g| g.is_rendering_audio())
-                .unwrap_or(false);
+        let is_idle_parked =
+            ctx.stream.is_none() && !ctx.signals.rendering.load(Ordering::Acquire);
 
         let cmd_opt = if is_idle_parked {
             // Zero-CPU sleep when audio stream is parked (eliminates 50 Hz idle wakeups)
@@ -142,19 +141,23 @@ pub(super) fn run_audio_control_loop(
             }
         }
 
-        // Recover gracefully if WASAPI invalidated the output stream (headphone unplug / rate change)
-        if ctx.signals.stream_errored.swap(false, Ordering::AcqRel) {
+        // Recover gracefully if WASAPI invalidated the output stream (headphone unplug / rate change).
+        // Tear down the dead stream BEFORE clearing the flag so an in-flight callback from the
+        // old stream cannot re-raise `stream_errored` and cause a redundant reopen cycle.
+        if ctx.signals.stream_errored.load(Ordering::Acquire) {
             ctx.stream = None;
-            let was_playing = ctx
-                .dsp
-                .lock()
-                .map(|g| g.is_rendering_audio())
-                .unwrap_or(false);
+            ctx.signals.stream_errored.store(false, Ordering::Release);
+            let was_playing = ctx.signals.rendering.load(Ordering::Acquire);
             if was_playing {
-                if let Err(err) = ctx.ensure_stream() {
+                let reopen = ctx.ensure_stream().or_else(|_| {
+                    std::thread::sleep(Duration::from_millis(120));
+                    ctx.ensure_stream()
+                });
+                if let Err(err) = reopen {
                     if let Ok(mut g) = ctx.dsp.lock() {
-                        g.pause();
+                        g.force_pause_immediate();
                     }
+                    ctx.signals.rendering.store(false, Ordering::Release);
                     ctx.emit_sync("error", Some(err));
                 } else {
                     ctx.emit_sync("device", None);
@@ -172,11 +175,7 @@ pub(super) fn run_audio_control_loop(
             ctx.emit_sync("paused", None);
         }
 
-        let rendering = ctx
-            .dsp
-            .lock()
-            .map(|g| g.is_rendering_audio())
-            .unwrap_or(false);
+        let rendering = ctx.signals.rendering.load(Ordering::Acquire);
 
         if rendering {
             ctx.last_active_audio = Instant::now();
@@ -233,7 +232,7 @@ fn handle_cmd(ctx: &mut ControllerCtx, cmd: EngineCmd, latest_load_seq: &AtomicU
                     }
 
                     let will_play = req.autoplay && stream_err.is_none();
-                    let prev_src = if let Ok(mut g) = ctx.dsp.lock() {
+                    let (prev_src, pending_seek) = if let Ok(mut g) = ctx.dsp.lock() {
                         g.set_params(
                             Some(req.volume),
                             Some(req.pitch_semitones),
@@ -254,11 +253,15 @@ fn handle_cmd(ctx: &mut ControllerCtx, cmd: EngineCmd, latest_load_seq: &AtomicU
                         } else {
                             req.start_sec
                         };
-                        g.load_source(source, will_play, effective_start_sec, s_start, s_end);
-                        old
+                        let seek =
+                            g.load_source(source, will_play, effective_start_sec, s_start, s_end);
+                        (old, seek)
                     } else {
-                        None
+                        (None, None)
                     };
+                    if let Some((src, frame)) = pending_seek {
+                        src.request_seek(frame);
+                    }
                     if let Some(old) = prev_src {
                         old.release_file_handle();
                     }
@@ -292,8 +295,9 @@ fn handle_cmd(ctx: &mut ControllerCtx, cmd: EngineCmd, latest_load_seq: &AtomicU
                 ctx.emit_sync("error", Some(err));
                 return;
             }
-            if let Ok(mut g) = ctx.dsp.lock() {
-                g.play();
+            let pending_seek = ctx.dsp.lock().ok().and_then(|mut g| g.play());
+            if let Some((src, frame)) = pending_seek {
+                src.request_seek(frame);
             }
             ctx.last_active_audio = Instant::now();
             ctx.last_heartbeat = Instant::now();
@@ -308,8 +312,9 @@ fn handle_cmd(ctx: &mut ControllerCtx, cmd: EngineCmd, latest_load_seq: &AtomicU
         }
 
         EngineCmd::Stop => {
-            if let Ok(mut g) = ctx.dsp.lock() {
-                g.stop();
+            let pending_seek = ctx.dsp.lock().ok().and_then(|mut g| g.stop());
+            if let Some((src, frame)) = pending_seek {
+                src.request_seek(frame);
             }
             ctx.emit_sync("stopped", None);
         }
@@ -319,13 +324,15 @@ fn handle_cmd(ctx: &mut ControllerCtx, cmd: EngineCmd, latest_load_seq: &AtomicU
             if let Some(src) = old {
                 src.release_file_handle();
             }
+            ctx.decode_cache.clear();
             ctx.active_display_path.clear();
             ctx.emit_sync("stopped", None);
         }
 
         EngineCmd::Seek { sec } => {
-            if let Ok(mut g) = ctx.dsp.lock() {
-                g.seek_sec(sec);
+            let pending_seek = ctx.dsp.lock().ok().and_then(|mut g| g.seek_sec(sec));
+            if let Some((src, frame)) = pending_seek {
+                src.request_seek(frame);
             }
             ctx.last_heartbeat = Instant::now();
             ctx.emit_sync("seeked", None);
@@ -367,6 +374,9 @@ fn handle_cmd(ctx: &mut ControllerCtx, cmd: EngineCmd, latest_load_seq: &AtomicU
             ctx.stream = None;
             if was_open {
                 if let Err(err) = ctx.ensure_stream() {
+                    if let Ok(mut g) = ctx.dsp.lock() {
+                        g.force_pause_immediate();
+                    }
                     ctx.emit_sync("error", Some(err));
                     return;
                 }
@@ -406,6 +416,10 @@ fn handle_cmd(ctx: &mut ControllerCtx, cmd: EngineCmd, latest_load_seq: &AtomicU
 
         EngineCmd::GetSnapshot { reply } => {
             let _ = reply.send(ctx.build_snapshot("snapshot", None));
+        }
+
+        EngineCmd::TrimCaches => {
+            ctx.decode_cache.clear();
         }
     }
 }

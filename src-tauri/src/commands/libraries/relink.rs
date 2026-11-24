@@ -6,28 +6,7 @@ use tauri::{AppHandle, State};
 
 fn strip_prefix_safe<'a>(value: &'a str, prefix_with_slash: &str, prefix_lower: &str, ci: bool) -> Option<&'a str> {
     if ci {
-        // Char-by-char Unicode case-insensitive prefix matching (safe for Turkish İ/ı where UTF-8 byte lengths differ)
-        let mut val_chars = value.char_indices();
-        let mut target_chars = prefix_lower.chars().peekable();
-        while let Some(expected_ch) = target_chars.peek().copied() {
-            let (_byte_idx, actual_ch) = val_chars.next()?;
-            let mut lower_iter = actual_ch.to_lowercase();
-            let first_lower = lower_iter.next()?;
-            if first_lower != expected_ch {
-                return None;
-            }
-            target_chars.next();
-            for extra_lower in lower_iter {
-                if target_chars.next() != Some(extra_lower) {
-                    return None;
-                }
-            }
-        }
-        let rest_start = val_chars
-            .next()
-            .map(|(idx, _)| idx)
-            .unwrap_or(value.len());
-        value.get(rest_start..)
+        crate::commands::strip_unicode_prefix_ci(value, prefix_lower)
     } else {
         value.strip_prefix(prefix_with_slash)
     }
@@ -272,20 +251,31 @@ pub(crate) fn relink_library_with_conn(
 }
 
 #[tauri::command]
-pub fn relink_library_folder(
+pub async fn relink_library_folder(
     app: AppHandle,
     state: State<'_, AppState>,
     ai_state: State<'_, crate::ai_tagger::AiTaggerState>,
     library_id: i64,
     new_path: String,
 ) -> Result<Library, String> {
-    crate::security::ensure_not_inside_user_dir(&state.user_dir, std::path::Path::new(&new_path))?;
-    let safe_root = is_safe_library_dir(&new_path).map_err(|e| sanitize_err(&state.user_dir, &e))?;
-    crate::security::ensure_not_inside_user_dir(&state.user_dir, &safe_root)?;
-    let mut conn = state.lock_db();
-    let (old_path, updated_lib) = relink_library_with_conn(&mut conn, library_id, &new_path)
-        .map_err(|e| sanitize_err(&state.user_dir, &e))?;
-    crate::reconcile_library_asset_scopes(&app, &conn, Some(&old_path));
+    let state_owned = state.inner().clone();
+    let app_clone = app.clone();
+    let updated_lib = tauri::async_runtime::spawn_blocking(move || {
+        crate::security::ensure_not_inside_user_dir(
+            &state_owned.user_dir,
+            std::path::Path::new(&new_path),
+        )?;
+        let safe_root = is_safe_library_dir(&new_path)
+            .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
+        crate::security::ensure_not_inside_user_dir(&state_owned.user_dir, &safe_root)?;
+        let mut conn = state_owned.lock_db();
+        let (old_path, updated_lib) = relink_library_with_conn(&mut conn, library_id, &new_path)
+            .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
+        crate::reconcile_library_asset_scopes(&app_clone, &conn, Some(&old_path));
+        Ok::<Library, String>(updated_lib)
+    })
+    .await
+    .map_err(|e| format!("Relink task failed: {}", e))??;
     ai_state.invalidate_vector_cache();
     Ok(updated_lib)
 }

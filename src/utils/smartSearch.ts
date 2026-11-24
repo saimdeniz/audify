@@ -9,6 +9,7 @@ import {
 import {
   clearSmartSearchCache,
   getIndexedSample,
+  getNormalizedPhraseStem,
   type IndexedSampleEntry,
   tokenizeSearchWords,
 } from "./search/sampleIndex";
@@ -34,11 +35,55 @@ const FILE_NAME_COLLATOR = new Intl.Collator(undefined, {
   numeric: true,
 });
 
+const STRUCTURAL_ONLY_INDEX: IndexedSampleEntry = {
+  foldedGenre: "",
+  foldedArtist: "",
+  foldedAlbum: "",
+  foldedYear: "",
+  foldedStem: "",
+  foldedExt: "",
+  foldedParent: "",
+  foldedFolder: "",
+  nameWords: [],
+  parentWords: [],
+  tagNamesFolded: [],
+  detectedBpm: null,
+  effectiveCamelotKey: "",
+};
+
+function queryRequiresTextIndex(parsed: ParsedSearchQuery): boolean {
+  return (
+    parsed.positiveOrGroups.length > 0 ||
+    parsed.negativeTerms.length > 0 ||
+    parsed.negativePhrases.length > 0 ||
+    parsed.minBpm !== null ||
+    parsed.maxBpm !== null ||
+    parsed.excludeBpmRanges.length > 0 ||
+    parsed.keyAllowedGroups.length > 0 ||
+    parsed.excludeCamelotKeys.length > 0 ||
+    parsed.extTerms.length > 0 ||
+    parsed.excludeExtTerms.length > 0 ||
+    parsed.tagTerms.length > 0 ||
+    parsed.excludeTagTerms.length > 0 ||
+    parsed.genreTerms.length > 0 ||
+    parsed.excludeGenreTerms.length > 0 ||
+    parsed.folderTerms.length > 0 ||
+    parsed.excludeFolderTerms.length > 0 ||
+    parsed.artistTerms.length > 0 ||
+    parsed.excludeArtistTerms.length > 0 ||
+    parsed.albumTerms.length > 0 ||
+    parsed.excludeAlbumTerms.length > 0 ||
+    parsed.yearTerms.length > 0 ||
+    parsed.excludeYearTerms.length > 0
+  );
+}
+
 function matchesPhraseInSample(
   idx: IndexedSampleEntry,
   phrase: string
 ): boolean {
-  if (idx.normalizedPhraseStem.includes(phrase)) return true;
+  const phraseStem = getNormalizedPhraseStem(idx);
+  if (phraseStem.includes(phrase)) return true;
   if (idx.foldedArtist && idx.foldedArtist.includes(phrase)) return true;
   if (idx.foldedAlbum && idx.foldedAlbum.includes(phrase)) return true;
   if (idx.foldedGenre && idx.foldedGenre.includes(phrase)) return true;
@@ -65,15 +110,16 @@ function scorePhraseCandidate(
   idx: IndexedSampleEntry,
   phrase: string
 ): number {
-  if (idx.normalizedPhraseStem === phrase) return 340;
-  if (idx.normalizedPhraseStem.startsWith(phrase + " ")) return 220;
+  const phraseStem = getNormalizedPhraseStem(idx);
+  if (phraseStem === phrase) return 340;
+  if (phraseStem.startsWith(phrase + " ")) return 220;
   if (
-    idx.normalizedPhraseStem.includes(" " + phrase + " ") ||
-    idx.normalizedPhraseStem.endsWith(" " + phrase)
+    phraseStem.includes(" " + phrase + " ") ||
+    phraseStem.endsWith(" " + phrase)
   ) {
     return 185;
   }
-  if (idx.normalizedPhraseStem.includes(phrase)) return 140;
+  if (phraseStem.includes(phrase)) return 140;
   if (idx.tagNamesFolded.some((t) => t === phrase || t.includes(phrase))) {
     return 95;
   }
@@ -190,7 +236,8 @@ function scoreSingleTerm(
 
 function evaluateSmartSearchStructural(
   sample: SampleItem,
-  parsed: ParsedSearchQuery
+  parsed: ParsedSearchQuery,
+  needsTextIndex: boolean
 ): IndexedSampleEntry | null {
   // Fast structural operator checks first
   if (parsed.requireLoop !== null && sample.is_loop !== parsed.requireLoop) {
@@ -216,6 +263,10 @@ function evaluateSmartSearchStructural(
   }
   if (!matchesTechnicalCriteria(sample, parsed)) {
     return null;
+  }
+
+  if (!needsTextIndex) {
+    return STRUCTURAL_ONLY_INDEX;
   }
 
   const idx = getIndexedSample(sample);
@@ -367,10 +418,11 @@ export function countSmartSearchMatches(
   const parsed = parseSmartSearchQuery(trimmed);
   const orGroups = parsed.positiveOrGroups;
   const hasPositiveGroups = orGroups.length > 0;
+  const needsTextIndex = queryRequiresTextIndex(parsed);
 
   let count = 0;
   for (let i = 0; i < samples.length; i++) {
-    const idx = evaluateSmartSearchStructural(samples[i], parsed);
+    const idx = evaluateSmartSearchStructural(samples[i], parsed, needsTextIndex);
     if (!idx) continue;
 
     if (!hasPositiveGroups) {
@@ -425,12 +477,13 @@ export function executeSmartSearch(
   const parsed = parseSmartSearchQuery(trimmed);
   const orGroups = parsed.positiveOrGroups;
   const hasPositiveGroups = orGroups.length > 0;
+  const needsTextIndex = queryRequiresTextIndex(parsed);
 
   const scored: Array<{ sample: SampleItem; score: number }> = [];
 
   for (let i = 0; i < samples.length; i++) {
     const sample = samples[i];
-    const idx = evaluateSmartSearchStructural(sample, parsed);
+    const idx = evaluateSmartSearchStructural(sample, parsed, needsTextIndex);
     if (!idx) continue;
 
     if (!hasPositiveGroups) {

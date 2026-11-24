@@ -20,6 +20,7 @@ pub use json_io::{
 pub use os_shell::{
     move_files_to_os_recycle_bin, open_directory_in_shell, reveal_file_in_explorer,
 };
+pub(crate) use path_guards::reject_symlink_ancestors;
 pub use path_guards::{
     collect_profile_slice_dirs, display_leaf, ensure_inside, ensure_not_inside_user_dir,
     ensure_safe_export_dir, has_ntfs_ads_colon, is_forbidden_os_or_root_path, is_safe_library_dir,

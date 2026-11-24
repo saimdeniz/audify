@@ -1,8 +1,8 @@
-import React, { Suspense, lazy, useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
-  ChevronDown,
   Hash,
+  HelpCircle,
   PanelLeft,
   PanelLeftClose,
   PictureInPicture2,
@@ -11,13 +11,8 @@ import {
 import { useSampleStore } from "../store/useSampleStore";
 import { beginWindowTitlebarDrag } from "../utils/drag";
 import { CollectionIcon } from "./CollectionIcon";
+import { StatusBarAudioDeviceButton } from "./StatusBarAudioDeviceButton";
 import { WindowCaptionControls } from "./WindowCaptionControls";
-
-const ProfileSwitcherPopover = lazy(() =>
-  import("./ProfileSwitcherPopover").then((m) => ({
-    default: m.ProfileSwitcherPopover,
-  }))
-);
 
 export const AudifyLogoIcon: React.FC<{ className?: string }> = ({
   className = "w-4 h-4",
@@ -70,62 +65,15 @@ export const TopHeaderBar: React.FC = React.memo(() => {
         !s.similaritySession
     )
   );
-  const profiles = useSampleStore((s) => s.profiles);
-  const activeProfile = useSampleStore((s) => s.activeProfile);
-  const accentColor = useSampleStore((s) => s.accentColor);
   const filteredCount = useSampleStore((s) => s.samples.length);
   const libraries = useSampleStore((s) => s.libraries);
   const miniDockShortcut = useSampleStore((s) => s.shortcuts.toggleMiniDock);
   const sidebarCollapsed = useSampleStore((s) => s.sidebarCollapsed);
   const sidebarCompactHover = useSampleStore((s) => s.sidebarCompactHover);
-  const setSettingsOpen = useSampleStore((s) => s.setSettingsOpen);
   const toggleMiniDock = useSampleStore((s) => s.toggleMiniDock);
   const toggleSidebarCollapsed = useSampleStore(
     (s) => s.toggleSidebarCollapsed
   );
-  const switchProfile = useSampleStore((s) => s.switchProfile);
-  const createProfile = useSampleStore((s) => s.createProfile);
-
-  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
-  const profileButtonRef = useRef<HTMLButtonElement | null>(null);
-  const [profileMenuPos, setProfileMenuPos] = useState<{
-    top: number;
-    left: number;
-  }>({ top: 34, left: 80 });
-
-  useLayoutEffect(() => {
-    if (!isProfileMenuOpen) return;
-    const update = () => {
-      const rect = profileButtonRef.current?.getBoundingClientRect();
-      if (!rect || (rect.width === 0 && rect.height === 0)) return;
-      const top = Math.min(window.innerHeight - 240, rect.bottom + 4);
-      const left = Math.max(8, Math.min(rect.left, window.innerWidth - 240));
-      setProfileMenuPos({ top, left });
-    };
-    update();
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
-  }, [isProfileMenuOpen]);
-
-  useEffect(() => {
-    if (!isProfileMenuOpen) return;
-    const onWindowClick = () => {
-      setIsProfileMenuOpen(false);
-    };
-    const onKeyDownCapture = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        setIsProfileMenuOpen(false);
-      }
-    };
-    window.addEventListener("click", onWindowClick);
-    window.addEventListener("keydown", onKeyDownCapture, true);
-    return () => {
-      window.removeEventListener("click", onWindowClick);
-      window.removeEventListener("keydown", onKeyDownCapture, true);
-    };
-  }, [isProfileMenuOpen]);
 
   const activeLibraries = libraries.filter(
     (l) => l.is_global !== false || l.assigned_to_profile !== false
@@ -191,7 +139,7 @@ export const TopHeaderBar: React.FC = React.memo(() => {
       onDoubleClick={handleTitlebarDoubleClick}
       className="h-[32px] bg-surface-1 border-b border-line flex items-center justify-between pl-2.5 pr-0 shrink-0 select-none cursor-default relative z-30"
     >
-      {/* Left: Brand Logo + Compact Sidebar Toggle + Fast Workspace Profile Switcher */}
+      {/* Left: Brand Logo + Compact Sidebar Toggle */}
       <div className="flex items-center space-x-2.5">
         <div
           data-tauri-drag-region
@@ -230,50 +178,6 @@ export const TopHeaderBar: React.FC = React.memo(() => {
             <PanelLeftClose className="w-3.5 h-3.5 shrink-0" />
           )}
         </button>
-
-        {/* Profile Switcher Dropdown */}
-        <div
-          data-no-drag="true"
-          className="relative"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
-            ref={profileButtonRef}
-            type="button"
-            onClick={() => setIsProfileMenuOpen((v) => !v)}
-            className="h-[22px] px-2 bg-surface-3 hover:border-accent border border-line rounded-sm flex items-center space-x-1.5 text-[11px] font-mono text-fg whitespace-nowrap"
-            title="Switch Workspace Profile"
-          >
-            <span
-              className="w-2 h-2 rounded-[2px] inline-block shrink-0 shadow-xs"
-              style={{
-                backgroundColor:
-                  activeProfile?.color || accentColor || "#F59E0B",
-              }}
-            />
-            <span className="max-w-[140px] truncate">
-              {activeProfile?.name || (hasInitialized ? "Default Studio" : "Loading...")}
-            </span>
-            <ChevronDown className="w-3 h-3 text-fg-2 shrink-0" />
-          </button>
-
-          {isProfileMenuOpen && (
-            <Suspense fallback={null}>
-              <ProfileSwitcherPopover
-                profileMenuPos={profileMenuPos}
-                profiles={profiles}
-                activeProfile={activeProfile}
-                onClose={() => setIsProfileMenuOpen(false)}
-                onSwitchProfile={switchProfile}
-                onCreateProfile={createProfile}
-                onOpenManageProfiles={() => {
-                  setIsProfileMenuOpen(false);
-                  setSettingsOpen(true, "profiles");
-                }}
-              />
-            </Suspense>
-          )}
-        </div>
       </div>
 
       {/* Right: Sample Counter + Window Controls */}
@@ -445,6 +349,20 @@ export const BottomStatusBar: React.FC = React.memo(() => {
             {(selectedSampleSize / 1024).toFixed(0)} KB
           </span>
         )}
+        <StatusBarAudioDeviceButton />
+        <button
+          type="button"
+          onClick={() => {
+            window.dispatchEvent(
+              new CustomEvent("audify:toggle-shortcuts-cheatsheet")
+            );
+          }}
+          className="h-[18px] w-[18px] rounded-xs border border-transparent hover:border-line hover:bg-surface-2 text-fg-3 hover:text-accent-fg inline-flex items-center justify-center transition-colors shrink-0"
+          title="Keyboard Shortcuts (? / F1)"
+          aria-label="Keyboard Shortcuts (? / F1)"
+        >
+          <HelpCircle className="w-3 h-3" />
+        </button>
       </div>
     </footer>
   );

@@ -206,7 +206,7 @@ export const AsciiMagicCategoryDropdown: React.FC<AsciiMagicCategoryDropdownProp
                 maxHeight: coords.maxHeight,
                 zIndex: Z_INDEX.popoverFloating,
               }}
-              className="bg-surface-2 backdrop-blur-md border border-line-strong rounded-sm shadow-lg flex flex-col overflow-hidden select-none"
+              className="bg-surface-2 audify-overlay-surface border border-line-strong rounded-sm shadow-lg flex flex-col overflow-hidden select-none"
             >
               {items.length > 6 && (
                 <div className="p-1.5 border-b border-line bg-surface-1 shrink-0">

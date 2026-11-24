@@ -9,7 +9,7 @@ use self::slices_bundle::{
 };
 use crate::ai_tagger::AiTaggerState;
 use crate::commands::{BackupFileInfo, FullSnapshotManifest, FullSnapshotRestoreResult};
-use crate::db::{open_read_conn, AppState};
+use crate::db::AppState;
 use crate::security::{
     display_leaf, ensure_inside, is_zip_magic, sanitize_err, validate_archive_export_path,
     validate_archive_import_path, ALLOWED_BG_MEDIA_EXTS, ALLOWED_BG_VIDEO_EXTS,
@@ -227,6 +227,7 @@ pub(super) fn open_validated_snapshot_archive(
     if crate::security::has_ntfs_ads_colon(&raw_str) {
         return Err("Alternate data streams are not allowed".to_string());
     }
+    crate::security::reject_symlink_ancestors(path)?;
     let sym = fs::symlink_metadata(path)
         .map_err(|_| format!("Failed to inspect snapshot archive {}", display_leaf(path)))?;
     if sym.file_type().is_symlink() {
@@ -426,14 +427,14 @@ pub async fn export_full_snapshot_to_file(
     state: State<'_, AppState>,
     file_path: String,
 ) -> Result<FullSnapshotManifest, String> {
-    let target_path = validate_archive_export_path(
-        &file_path,
-        SNAPSHOT_ARCHIVE_SUFFIXES,
-        "Full snapshot export must end with .audify-backup.zip or .zip",
-    )?;
     let state_owned = state.inner().clone();
     let user_dir_err = state.user_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let target_path = validate_archive_export_path(
+            &file_path,
+            SNAPSHOT_ARCHIVE_SUFFIXES,
+            "Full snapshot export must end with .audify-backup.zip or .zip",
+        )?;
         let (staging_guard, mut manifest) = {
             let conn = state_owned.lock_db();
             stage_snapshot_db_only(&conn, &state_owned.user_dir)?
@@ -509,13 +510,24 @@ pub async fn create_full_snapshot_backup(
 }
 
 #[tauri::command]
-pub fn inspect_full_snapshot_file(file_path: String) -> Result<FullSnapshotManifest, String> {
-    let validated = validate_archive_import_path(
-        &file_path,
-        SNAPSHOT_ARCHIVE_SUFFIXES,
-        "Full snapshot file must end with .audify-backup.zip or .zip",
-    )?;
-    read_snapshot_manifest_summary(&validated)
+pub async fn inspect_full_snapshot_file(file_path: String) -> Result<FullSnapshotManifest, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let validated = validate_archive_import_path(
+            &file_path,
+            SNAPSHOT_ARCHIVE_SUFFIXES,
+            "Full snapshot file must end with .audify-backup.zip or .zip",
+        )?;
+        read_snapshot_manifest_summary(&validated)
+    })
+    .await
+    .map_err(|e| format!("Snapshot inspection task failed: {}", e))?
+}
+
+struct SnapshotAnalysisLockGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
+impl Drop for SnapshotAnalysisLockGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 #[tauri::command]
@@ -525,24 +537,45 @@ pub async fn restore_full_snapshot_from_file(
     ai_state: State<'_, AiTaggerState>,
     file_path: String,
 ) -> Result<FullSnapshotRestoreResult, String> {
-    if ai_state.analysis_running.load(Ordering::SeqCst) {
+    if ai_state.download_running.load(Ordering::SeqCst) {
+        return Err(
+            "Cannot restore a full database snapshot while an AI model update is running."
+                .to_string(),
+        );
+    }
+    if ai_state
+        .analysis_running
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
         return Err(
             "Cannot restore a full database snapshot while AI analysis is running.".to_string(),
         );
     }
-    let validated = validate_archive_import_path(
-        &file_path,
-        SNAPSHOT_ARCHIVE_SUFFIXES,
-        "Full snapshot file must end with .audify-backup.zip or .zip",
-    )?;
+    let analysis_guard = SnapshotAnalysisLockGuard(std::sync::Arc::clone(&ai_state.analysis_running));
     let state_owned = state.inner().clone();
     let app_clone = app.clone();
+    let vector_cache_arc = std::sync::Arc::clone(&ai_state.vector_cache);
+    let external_probes_arc = std::sync::Arc::clone(&ai_state.external_probes);
     let user_dir_err = state.user_dir.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let res = restore_full_snapshot_with_state(&state_owned, &validated)
-            .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
+        let _guard = analysis_guard;
+        let validated = validate_archive_import_path(
+            &file_path,
+            SNAPSHOT_ARCHIVE_SUFFIXES,
+            "Full snapshot file must end with .audify-backup.zip or .zip",
+        )?;
+        let res = restore_full_snapshot_with_state(&state_owned, &validated, || {
+            if let Ok(mut cache) = vector_cache_arc.lock() {
+                cache.clear();
+            }
+            if let Ok(mut probes) = external_probes_arc.lock() {
+                probes.clear();
+            }
+        })
+        .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
 
-        if let Ok(read_conn) = open_read_conn(&state_owned.user_dir) {
+        if let Ok(read_conn) = state_owned.acquire_read_conn() {
             crate::reconcile_library_asset_scopes(&app_clone, &read_conn, None);
         } else {
             let conn = state_owned.lock_db();
@@ -553,6 +586,5 @@ pub async fn restore_full_snapshot_from_file(
     .await
     .map_err(|e| sanitize_err(&user_dir_err, &format!("Snapshot restore task failed: {}", e)))??;
 
-    ai_state.invalidate_vector_cache();
     Ok(result)
 }

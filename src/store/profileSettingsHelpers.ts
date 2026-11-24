@@ -81,6 +81,7 @@ export function buildProfileStoragePairs(
     | "customSliceExportPath"
     | "sliceMicroFade"
     | "exportAudioPreset"
+    | "exportLoudnessMode"
     | "skipLeadingSilence"
     | "miniDockEdgePeek"
     | "miniDockEdgeSide"
@@ -154,6 +155,7 @@ export function buildProfileStoragePairs(
     [AUDIFY_STORAGE_KEYS.customSliceExportPath, resolvedFields.customSliceExportPath],
     [AUDIFY_STORAGE_KEYS.sliceMicroFade, String(resolvedFields.sliceMicroFade)],
     [AUDIFY_STORAGE_KEYS.exportAudioPreset, resolvedFields.exportAudioPreset],
+    [AUDIFY_STORAGE_KEYS.exportLoudnessMode, resolvedFields.exportLoudnessMode],
     [
       AUDIFY_STORAGE_KEYS.skipLeadingSilence,
       String(resolvedFields.skipLeadingSilence),
@@ -250,6 +252,7 @@ export function buildProfileSettingsJsonFromStore(get: StoreGet): string {
     audioOutputDeviceId: s.audioOutputDeviceId,
     sliceMicroFade: s.sliceMicroFade,
     exportAudioPreset: s.exportAudioPreset,
+    exportLoudnessMode: s.exportLoudnessMode,
     skipLeadingSilence: s.skipLeadingSilence,
     miniDockEdgePeek: s.miniDockEdgePeek,
     miniDockEdgeSide: s.miniDockEdgeSide,

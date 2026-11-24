@@ -17,19 +17,21 @@ export type VisibleColumnsState = {
   dateAdded: boolean;
 };
 
+// Balanced studio default for fresh installs (~1,134px — fits 1080p with zero horizontal scroll).
+// Existing users' saved column visibility in localStorage is preserved untouched.
 export const DEFAULT_VISIBLE_COLS: VisibleColumnsState = {
   class: true,
-  artist: true,
-  album: true,
-  year: true,
+  artist: false,
+  album: false,
+  year: false,
   genre: true,
   bpm: true,
   key: true,
   tags: true,
   time: true,
   format: true,
-  dateModified: true,
-  dateAdded: true,
+  dateModified: false,
+  dateAdded: false,
 };
 
 export const COLUMN_LAYOUT_PRESETS: readonly {

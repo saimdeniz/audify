@@ -1,7 +1,24 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Genre, SampleItem, SampleTagBadge, Tag } from "../../types";
+import { clearSmartSearchCache } from "../../utils/smartSearch";
 import { invokeCommand } from "../../utils/tauriCommands";
 import type { SampleStoreState, StoreSliceContext } from "../types";
+
+function hasActiveDynamicTaxonomyFilter(
+  state: SampleStoreState,
+  kind: "tag" | "genre"
+): boolean {
+  if (kind === "tag" && state.selectedTagIds.length > 0) return true;
+  if (kind === "genre" && Boolean(state.selectedGenre)) return true;
+  if (state.searchQuery.trim().length > 0) return true;
+  if (state.selectedCollectionId !== null) {
+    const activeCol = state.collections.find(
+      (c) => c.id === state.selectedCollectionId
+    );
+    if (activeCol?.smart_query?.trim()) return true;
+  }
+  return false;
+}
 
 function mapSampleTagOrGenre(
   state: SampleStoreState,
@@ -55,12 +72,18 @@ export function createCatalogTaxonomyActions(ctx: StoreSliceContext) {
           sampleId,
           tagId,
         });
+        clearSmartSearchCache();
         set((state) =>
           mapSampleTagOrGenre(state, (s) =>
             s.id === sampleId ? { ...s, tags: updatedBadges } : s
           )
         );
         await get().refreshSidebarData();
+        if (hasActiveDynamicTaxonomyFilter(get(), "tag")) {
+          if (!applyInstantMemoryFilter({ preserveMultiSelect: true })) {
+            await get().fetchSamples({ preserveMultiSelect: true });
+          }
+        }
       } catch (err) {
         console.error("Failed to assign tag:", err);
         emitNotice(`Assign tag error: ${String(err)}`, "error");
@@ -73,6 +96,7 @@ export function createCatalogTaxonomyActions(ctx: StoreSliceContext) {
           sampleId,
           tagId,
         });
+        clearSmartSearchCache();
         set((state) => ({
           ...mapSampleTagOrGenre(state, (s) =>
             s.id === sampleId ? { ...s, tags: updatedBadges } : s
@@ -80,7 +104,7 @@ export function createCatalogTaxonomyActions(ctx: StoreSliceContext) {
           statusMessage: "Tag removed from sample",
         }));
         await get().refreshSidebarData();
-        if (get().selectedTagIds.length > 0) {
+        if (hasActiveDynamicTaxonomyFilter(get(), "tag")) {
           if (!applyInstantMemoryFilter({ preserveMultiSelect: true })) {
             await get().fetchSamples({ preserveMultiSelect: true });
           }
@@ -95,6 +119,7 @@ export function createCatalogTaxonomyActions(ctx: StoreSliceContext) {
       if (sampleIds.length === 0) return;
       try {
         await invokeCommand("assign_tag_batch", { sampleIds, tagId });
+        clearSmartSearchCache();
         const tag = get().tags.find((t) => t.id === tagId);
         if (tag) {
           const idSet = new Set(sampleIds);
@@ -113,7 +138,7 @@ export function createCatalogTaxonomyActions(ctx: StoreSliceContext) {
             statusMessage: `Assigned tag "${tag.name}" to ${sampleIds.length} samples`,
           }));
           await get().refreshSidebarData();
-          if (get().selectedTagIds.length > 0) {
+          if (hasActiveDynamicTaxonomyFilter(get(), "tag")) {
             if (!applyInstantMemoryFilter({ preserveMultiSelect: true })) {
               await get().fetchSamples({ preserveMultiSelect: true });
             }
@@ -135,6 +160,7 @@ export function createCatalogTaxonomyActions(ctx: StoreSliceContext) {
       if (sampleIds.length === 0) return;
       try {
         await invokeCommand("clear_sample_tags_batch", { sampleIds });
+        clearSmartSearchCache();
         const idSet = new Set(sampleIds);
         set((state) => ({
           ...mapSampleTagOrGenre(state, (s) =>
@@ -146,7 +172,7 @@ export function createCatalogTaxonomyActions(ctx: StoreSliceContext) {
               : "Cleared tags from sample",
         }));
         await get().refreshSidebarData();
-        if (get().selectedTagIds.length > 0) {
+        if (hasActiveDynamicTaxonomyFilter(get(), "tag")) {
           if (!applyInstantMemoryFilter({ preserveMultiSelect: true })) {
             await get().fetchSamples({ preserveMultiSelect: true });
           }
@@ -357,6 +383,7 @@ export function createCatalogTaxonomyActions(ctx: StoreSliceContext) {
           sampleId,
           genreName,
         });
+        clearSmartSearchCache();
         set((state) => ({
           ...mapSampleTagOrGenre(state, (s) =>
             s.id === sampleId ? { ...s, genre: updatedGenre } : s
@@ -366,7 +393,7 @@ export function createCatalogTaxonomyActions(ctx: StoreSliceContext) {
             : "Cleared sample genre",
         }));
         await get().refreshSidebarData();
-        if (get().selectedGenre) {
+        if (hasActiveDynamicTaxonomyFilter(get(), "genre")) {
           if (!applyInstantMemoryFilter({ preserveMultiSelect: true })) {
             await get().fetchSamples({ preserveMultiSelect: true });
           }
@@ -384,6 +411,7 @@ export function createCatalogTaxonomyActions(ctx: StoreSliceContext) {
           sampleIds,
           genreName,
         });
+        clearSmartSearchCache();
         const idSet = new Set(sampleIds);
         set((state) => ({
           ...mapSampleTagOrGenre(state, (s) =>
@@ -394,7 +422,7 @@ export function createCatalogTaxonomyActions(ctx: StoreSliceContext) {
             : `Cleared genre on ${sampleIds.length} samples`,
         }));
         await get().refreshSidebarData();
-        if (get().selectedGenre) {
+        if (hasActiveDynamicTaxonomyFilter(get(), "genre")) {
           if (!applyInstantMemoryFilter({ preserveMultiSelect: true })) {
             await get().fetchSamples({ preserveMultiSelect: true });
           }

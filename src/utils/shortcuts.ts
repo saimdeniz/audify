@@ -193,6 +193,15 @@ export function isTextEntryTarget(target: HTMLElement | null): boolean {
 }
 
 /**
+ * Returns true when focus is on a native range slider (`<input type="range">`,
+ * e.g. Volume or AI Similarity threshold) so arrow/Home/End keys adjust the slider natively.
+ */
+export function isRangeSliderTarget(target: HTMLElement | null): boolean {
+  if (!target || target.tagName !== "INPUT") return false;
+  return ((target as HTMLInputElement).type || "").toLowerCase() === "range";
+}
+
+/**
  * Formats a persisted shortcut string (e.g. " ", "Shift+Enter", "Delete", "Ctrl++") for UI display.
  * Use `{ compact: true }` in dense context menus ("Del", "Esc", "Space").
  */

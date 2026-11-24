@@ -260,10 +260,13 @@ describe("appearance backdrop & settings tab persistence", () => {
 
       if (postSpy) {
         const posted = postSpy.mock.calls.map((c) => c[0] as { kind?: string; patch?: unknown });
-        expect(posted).toContainEqual({
-          kind: "live-visual",
-          patch: { themeMode: "light" },
-        });
+        expect(posted).toContainEqual(
+          expect.objectContaining({
+            kind: "live-visual",
+            patch: { themeMode: "light" },
+            msgId: expect.any(String),
+          })
+        );
         expect(posted.some((m) => m.kind === "settings")).toBe(false);
       }
 

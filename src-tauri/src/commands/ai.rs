@@ -17,7 +17,7 @@ use crate::ai_tagger::types::{
 use crate::ai_tagger::{
     infer_single_sample_path, run_batch_ai_analysis, AiBatchAnalysisOptions, AiTaggerState,
 };
-use crate::db::{get_active_profile_id, open_read_conn, run_read_query, AppState};
+use crate::db::{get_active_profile_id, run_read_query, AppState};
 use crate::security::sanitize_err;
 use rusqlite::{params, Connection};
 use std::path::Path;
@@ -62,7 +62,9 @@ fn read_ai_status(
     ai_state: &AiTaggerState,
     verify_hashes: bool,
 ) -> Result<AiModelStatus, String> {
-    let conn = open_read_conn(&state.user_dir).map_err(|e| sanitize_err(&state.user_dir, &e))?;
+    let conn = state
+        .acquire_read_conn()
+        .map_err(|e| sanitize_err(&state.user_dir, &e))?;
     let profile_id = get_active_profile_id(&conn);
     Ok(build_ai_model_status(
         &conn,
@@ -180,46 +182,54 @@ pub async fn import_ai_model_file(
 }
 
 #[tauri::command]
-pub fn remove_ai_model(
-    state: State<'_, AppState>,
-    ai_state: State<'_, AiTaggerState>,
+pub async fn remove_ai_model(
+    app: AppHandle,
     include_runtime: Option<bool>,
     clear_ai_data: Option<bool>,
 ) -> Result<AiModelStatus, String> {
-    let _guards = claim_exclusive_ai_guards(
-        &ai_state,
-        "Stop running AI tasks before removing model files",
-    )?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let ai_state = app.state::<AiTaggerState>();
+        let _guards = claim_exclusive_ai_guards(
+            &ai_state,
+            "Stop running AI tasks before removing model files",
+        )?;
 
-    ai_state.clear_cached_runtime_state();
-    let remove_res = remove_ai_assets(&state.user_dir, include_runtime.unwrap_or(false));
+        ai_state.clear_cached_runtime_state();
+        let remove_res = remove_ai_assets(&state.user_dir, include_runtime.unwrap_or(false));
 
-    if clear_ai_data.unwrap_or(false) {
-        let conn = state.lock_db();
-        let profile_id = get_active_profile_id(&conn);
-        let scope_sql = "SELECT s.id FROM samples s
-            WHERE s.library_id IN (
-                SELECT l.id FROM libraries l
-                WHERE l.is_global = 1
-                   OR l.id IN (SELECT pl.library_id FROM profile_libraries pl WHERE pl.profile_id = ?1)
-            )";
-        conn.execute(
-            &format!("DELETE FROM sample_embeddings WHERE sample_id IN ({})", scope_sql),
-            params![profile_id],
-        )
-        .map_err(|e| sanitize_err(&state.user_dir, &e.to_string()))?;
-        conn.execute(
-            &format!(
-                "DELETE FROM ai_tag_suggestions WHERE status = 'pending' AND sample_id IN ({})",
-                scope_sql
-            ),
-            params![profile_id],
-        )
-        .map_err(|e| sanitize_err(&state.user_dir, &e.to_string()))?;
-    }
+        if clear_ai_data.unwrap_or(false) {
+            let conn = state.lock_db();
+            let profile_id = get_active_profile_id(&conn);
+            let scope_sql = "SELECT s.id FROM samples s
+                WHERE s.library_id IN (
+                    SELECT l.id FROM libraries l
+                    WHERE l.is_global = 1
+                       OR l.id IN (SELECT pl.library_id FROM profile_libraries pl WHERE pl.profile_id = ?1)
+                )";
+            conn.execute(
+                &format!(
+                    "DELETE FROM sample_embeddings WHERE sample_id IN ({})",
+                    scope_sql
+                ),
+                params![profile_id],
+            )
+            .map_err(|e| sanitize_err(&state.user_dir, &e.to_string()))?;
+            conn.execute(
+                &format!(
+                    "DELETE FROM ai_tag_suggestions WHERE status = 'pending' AND sample_id IN ({})",
+                    scope_sql
+                ),
+                params![profile_id],
+            )
+            .map_err(|e| sanitize_err(&state.user_dir, &e.to_string()))?;
+        }
 
-    remove_res.map_err(|e| sanitize_err(&state.user_dir, &e))?;
-    read_ai_status(&state, &ai_state, false)
+        remove_res.map_err(|e| sanitize_err(&state.user_dir, &e))?;
+        read_ai_status(&state, &ai_state, false)
+    })
+    .await
+    .map_err(|e| format!("Remove AI model task failed: {}", e))?
 }
 
 #[tauri::command]
@@ -234,8 +244,9 @@ pub async fn suggest_knn_ai_tags(
         let ai_state = app.state::<AiTaggerState>();
 
         let (pref_conf, pref_mode, _) = {
-            let conn =
-                open_read_conn(&state.user_dir).map_err(|e| sanitize_err(&state.user_dir, &e))?;
+            let conn = state
+                .acquire_read_conn()
+                .map_err(|e| sanitize_err(&state.user_dir, &e))?;
             let profile_id = get_active_profile_id(&conn);
             read_profile_ai_preferences(&conn, profile_id)
         };
@@ -283,8 +294,9 @@ pub async fn analyze_samples_ai(
         let ai_state = app.state::<AiTaggerState>();
 
         let (pref_conf, pref_mode, pref_knn) = {
-            let conn =
-                open_read_conn(&state.user_dir).map_err(|e| sanitize_err(&state.user_dir, &e))?;
+            let conn = state
+                .acquire_read_conn()
+                .map_err(|e| sanitize_err(&state.user_dir, &e))?;
             let profile_id = get_active_profile_id(&conn);
             read_profile_ai_preferences(&conn, profile_id)
         };
@@ -341,9 +353,10 @@ pub async fn find_similar_samples(
         let ai_state = app.state::<AiTaggerState>();
         let (active_model_id, _, _, _) = active_model_id_and_path(&state.user_dir);
 
-        let (library_id, sample_path, anchor_duration_ms, allowed_libs) = {
-            let conn =
-                open_read_conn(&state.user_dir).map_err(|e| sanitize_err(&state.user_dir, &e))?;
+        let (anchor_pid, library_id, sample_path, anchor_duration_ms, allowed_libs) = {
+            let conn = state
+                .acquire_read_conn()
+                .map_err(|e| sanitize_err(&state.user_dir, &e))?;
             let pid = get_active_profile_id(&conn);
             let (lib_id, path) = validate_active_profile_sample_access(&conn, pid, sample_id)?;
             let duration_ms: i64 = conn
@@ -352,22 +365,29 @@ pub async fn find_similar_samples(
             let allowed = load_allowed_profile_library_ids(&conn, pid)?;
 
             let mut cache = ai_state.vector_cache.lock().map_err(|_| "AI similarity cache lock poisoned".to_string())?;
-            if cache.hydrated && cache.entries.iter().any(|e| !allowed.contains(&e.library_id)) {
+            if cache.hydrated
+                && (cache.profile_id != pid
+                    || cache.entries.iter().any(|e| !allowed.contains(&e.library_id)))
+            {
                 cache.clear();
             }
             cache.ensure_hydrated_for_profile(&conn, &active_model_id, pid)?;
-            (lib_id, path, duration_ms, allowed)
+            (pid, lib_id, path, duration_ms, allowed)
         };
         ai_state.touch_activity(Some(&state.db));
 
-        let anchor_vec = {
+        let (anchor_vec, effective_model_id) = {
             let cached_vec = {
                 let cache = ai_state.vector_cache.lock().map_err(|_| "AI similarity cache lock poisoned".to_string())?;
-                cache.id_to_index.get(&sample_id).and_then(|&idx| cache.entries.get(idx)).map(|e| e.vector)
+                if cache.hydrated && cache.model_id == active_model_id && cache.profile_id == anchor_pid {
+                    cache.id_to_index.get(&sample_id).and_then(|&idx| cache.entries.get(idx)).map(|e| e.vector)
+                } else {
+                    None
+                }
             };
 
             if let Some(vec) = cached_vec {
-                vec
+                (vec, active_model_id)
             } else {
                 // On-demand single-sample embedding if user invokes similarity before batch indexing
                 let (model, cfg) = ai_state.ensure_loaded_model(&state.user_dir).map_err(|e| sanitize_err(&state.user_dir, &e))?;
@@ -387,8 +407,16 @@ pub async fn find_similar_samples(
                 }
 
                 let mut cache = ai_state.vector_cache.lock().map_err(|_| "AI similarity cache lock poisoned".to_string())?;
-                cache.upsert(&cfg.model_id, sample_id, library_id, &sample_path, anchor_duration_ms, output.embedding);
-                output.embedding
+                cache.upsert_for_profile(
+                    anchor_pid,
+                    &cfg.model_id,
+                    sample_id,
+                    library_id,
+                    &sample_path,
+                    anchor_duration_ms,
+                    output.embedding,
+                );
+                (output.embedding, cfg.model_id)
             }
         };
 
@@ -402,11 +430,11 @@ pub async fn find_similar_samples(
             .vector_cache
             .lock()
             .map_err(|_| "AI similarity cache lock poisoned".to_string())?;
-        if !cache.hydrated || cache.model_id != active_model_id {
-            let conn =
-                open_read_conn(&state.user_dir).map_err(|e| sanitize_err(&state.user_dir, &e))?;
-            let pid = get_active_profile_id(&conn);
-            cache.ensure_hydrated_for_profile(&conn, &active_model_id, pid)?;
+        if !cache.hydrated || cache.model_id != effective_model_id || cache.profile_id != anchor_pid {
+            let conn = state
+                .acquire_read_conn()
+                .map_err(|e| sanitize_err(&state.user_dir, &e))?;
+            cache.ensure_hydrated_for_profile(&conn, &effective_model_id, anchor_pid)?;
         }
 
         let safe_min_score = min_score
@@ -450,38 +478,70 @@ pub async fn get_ai_tag_suggestions(
 }
 
 #[tauri::command]
-pub fn resolve_ai_tag_suggestion(
+pub async fn resolve_ai_tag_suggestion(
     state: State<'_, AppState>,
     sample_id: i64,
     tag_name: String,
     approve: bool,
 ) -> Result<(), String> {
-    let trimmed = tag_name.trim();
-    if trimmed.is_empty() || trimmed.len() > 64 {
-        return Err("Invalid AI tag suggestion name".to_string());
-    }
+    let state_owned = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let trimmed = tag_name.trim();
+        if trimmed.is_empty() || trimmed.len() > 64 {
+            return Err("Invalid AI tag suggestion name".to_string());
+        }
 
-    let conn = state.lock_db();
-    let profile_id = get_active_profile_id(&conn);
-    resolve_ai_tag_suggestion_in_db(&conn, &state.user_dir, profile_id, sample_id, trimmed, approve)
+        let conn = state_owned.lock_db();
+        let profile_id = get_active_profile_id(&conn);
+        resolve_ai_tag_suggestion_in_db(
+            &conn,
+            &state_owned.user_dir,
+            profile_id,
+            sample_id,
+            trimmed,
+            approve,
+        )
+    })
+    .await
+    .map_err(|e| format!("Resolve AI tag suggestion task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn approve_all_ai_tag_suggestions(
+pub async fn approve_all_ai_tag_suggestions(
     state: State<'_, AppState>,
     sample_ids: Option<Vec<i64>>,
 ) -> Result<usize, String> {
-    let conn = state.lock_db();
-    let profile_id = get_active_profile_id(&conn);
-    approve_all_ai_tag_suggestions_in_db(&conn, &state.user_dir, profile_id, sample_ids.as_deref())
+    let state_owned = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = state_owned.lock_db();
+        let profile_id = get_active_profile_id(&conn);
+        approve_all_ai_tag_suggestions_in_db(
+            &conn,
+            &state_owned.user_dir,
+            profile_id,
+            sample_ids.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("Approve AI suggestions task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn dismiss_all_ai_tag_suggestions(
+pub async fn dismiss_all_ai_tag_suggestions(
     state: State<'_, AppState>,
     sample_ids: Option<Vec<i64>>,
 ) -> Result<usize, String> {
-    let conn = state.lock_db();
-    let profile_id = get_active_profile_id(&conn);
-    dismiss_all_ai_tag_suggestions_in_db(&conn, &state.user_dir, profile_id, sample_ids.as_deref())
+    let state_owned = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = state_owned.lock_db();
+        let profile_id = get_active_profile_id(&conn);
+        dismiss_all_ai_tag_suggestions_in_db(
+            &conn,
+            &state_owned.user_dir,
+            profile_id,
+            sample_ids.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("Dismiss AI suggestions task failed: {}", e))?
 }

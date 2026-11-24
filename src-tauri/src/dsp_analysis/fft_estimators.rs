@@ -109,7 +109,9 @@ pub fn estimate_bpm_from_mono(mono: &[f32], sample_rate: u32) -> Option<f64> {
     let mut is_first = true;
     while pos + fft_size <= mono.len() {
         for i in 0..fft_size {
-            re[i] = mono[pos + i] * hann[i];
+            let raw = mono[pos + i];
+            let clean = if raw.is_finite() { raw } else { 0.0 };
+            re[i] = clean * hann[i];
             im[i] = 0.0;
         }
         fft_radix2(&mut re, &mut im);
@@ -147,7 +149,7 @@ pub fn estimate_bpm_from_mono(mono: &[f32], sample_rate: u32) -> Option<f64> {
     let onset_mean = (onset.iter().map(|&v| v as f64).sum::<f64>()) / (onset.len() as f64);
     let centered: Vec<f64> = onset.iter().map(|&v| (v as f64) - onset_mean).collect();
     let zero_var: f64 = centered.iter().map(|&v| v * v).sum();
-    if zero_var <= 1e-9 {
+    if !zero_var.is_finite() || zero_var <= 1e-9 {
         return None;
     }
 
@@ -215,8 +217,12 @@ pub fn estimate_bpm_from_mono(mono: &[f32], sample_rate: u32) -> Option<f64> {
     }
 
     let mean_pos_corr = corr_sum / lag_count;
-    // Confidence gate: reject non-periodic foley / ambience / white noise
-    if corr[best_lag] < 0.24 || (corr[best_lag] - mean_pos_corr) < 0.18 {
+    // Confidence gate: reject non-periodic foley / ambience / white noise / NaN
+    if !corr[best_lag].is_finite()
+        || !mean_pos_corr.is_finite()
+        || corr[best_lag] < 0.24
+        || (corr[best_lag] - mean_pos_corr) < 0.18
+    {
         return None;
     }
 
@@ -310,7 +316,8 @@ pub fn estimate_key_from_mono(mono: &[f32], sample_rate: u32) -> Option<(String,
     while pos + fft_size <= mono.len() {
         let mut frame_rms_sq = 0.0_f32;
         for i in 0..fft_size {
-            let s = mono[pos + i];
+            let raw = mono[pos + i];
+            let s = if raw.is_finite() { raw } else { 0.0 };
             frame_rms_sq += s * s;
             re[i] = s * hann[i];
             im[i] = 0.0;
@@ -318,7 +325,7 @@ pub fn estimate_key_from_mono(mono: &[f32], sample_rate: u32) -> Option<(String,
         pos += hop_size;
 
         let frame_rms = (frame_rms_sq / (fft_size as f32)).sqrt();
-        if frame_rms < 0.002 {
+        if !frame_rms.is_finite() || frame_rms < 0.002 {
             continue;
         }
         active_frames += 1;
@@ -336,7 +343,11 @@ pub fn estimate_key_from_mono(mono: &[f32], sample_rate: u32) -> Option<(String,
         }
         let geom_mean = (log_sum / flat_count).exp();
         let arith_mean = (arith_sum / flat_count).max(1e-12);
-        let flatness = (geom_mean / arith_mean).clamp(0.0, 1.0);
+        let raw_flatness = geom_mean / arith_mean;
+        if !raw_flatness.is_finite() {
+            continue;
+        }
+        let flatness = raw_flatness.clamp(0.0, 1.0);
         flatness_sum += flatness;
 
         if flatness > 0.42 {
@@ -390,12 +401,16 @@ pub fn estimate_key_from_mono(mono: &[f32], sample_rate: u32) -> Option<(String,
     }
     let avg_flatness = flatness_sum / (active_frames as f32);
     let tonal_ratio = (tonal_frames as f32) / (active_frames as f32);
-    if avg_flatness > 0.36 || tonal_ratio < 0.25 {
+    if !avg_flatness.is_finite()
+        || !tonal_ratio.is_finite()
+        || avg_flatness > 0.36
+        || tonal_ratio < 0.25
+    {
         return None;
     }
 
     let chroma_sum: f32 = chroma.iter().sum();
-    if chroma_sum <= 1e-6 {
+    if !chroma_sum.is_finite() || chroma_sum <= 1e-6 {
         return None;
     }
 
@@ -416,8 +431,12 @@ pub fn estimate_key_from_mono(mono: &[f32], sample_rate: u32) -> Option<(String,
     let (best_r, best_root, best_is_minor) = scores[0];
     let fourth_r = scores[3].0;
 
-    // Require strong correlation and clear separation over non-relative competing keys
-    if best_r < 0.48 || (best_r - fourth_r) < 0.05 {
+    // Require strong finite correlation and clear separation over non-relative competing keys
+    if !best_r.is_finite()
+        || !fourth_r.is_finite()
+        || best_r < 0.48
+        || (best_r - fourth_r) < 0.05
+    {
         return None;
     }
 

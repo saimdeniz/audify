@@ -222,13 +222,12 @@ pub fn detect_key_from_filename(file_name: &str, has_bpm_in_name: bool) -> Optio
             || lower.ends_with("min")
             || lower.ends_with("minor");
         let bytes = tok.as_bytes();
+        // Require lowercase `b` for flat accidental (e.g. `Ebm`, `Bbm`) so all-caps acronyms
+        // like `EBM`, `DBM`, `ABM`, `BBM`, `GBM` are never misclassified as flat-minor keys.
         let has_accidental_minor = !bytes.is_empty()
             && bytes[0].is_ascii_uppercase()
             && (tok.contains('#')
-                || (bytes.len() == 3
-                    && bytes[1].eq_ignore_ascii_case(&b'b')
-                    && bytes[2].eq_ignore_ascii_case(&b'm')
-                    && (bytes[1] == b'b' || bytes[2] == b'M')));
+                || (bytes.len() == 3 && bytes[1] == b'b' && bytes[2] == b'm'));
 
         if has_explicit_mode || has_accidental_minor {
             if let Some(res) = normalize_musical_or_camelot_key(tok) {

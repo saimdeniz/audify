@@ -30,6 +30,7 @@ export type ThemeMode = "dark" | "light" | "contrast";
 export type WaveformSensitivity = "logarithmic" | "high_boost" | "linear";
 export type WaveformStyle = "solid_baseline" | "symmetric";
 export type ExportAudioPreset = "original" | "wav_24" | "nle_48k_24";
+export type ExportLoudnessMode = "off" | "peak_m1" | "lufs_m14" | "lufs_m24";
 export type MiniDockEdgeSide = "right" | "left";
 
 export type WallpaperKind = "none" | "image" | "ascii_preset" | "ascii_magic";
@@ -273,6 +274,7 @@ export interface ProfileSettings {
   volume?: number;
   sliceMicroFade?: boolean;
   exportAudioPreset?: ExportAudioPreset;
+  exportLoudnessMode?: ExportLoudnessMode;
   skipLeadingSilence?: boolean;
   miniDockEdgePeek?: boolean;
   miniDockEdgeSide?: MiniDockEdgeSide;

@@ -70,8 +70,14 @@ export function createBinAndMiniDockActions(ctx: StoreSliceContext) {
       }
       const next = [...current, ...added];
       safeSetItem(AUDIFY_STORAGE_KEYS.binSampleIds, JSON.stringify(next));
+      const prevKnown = get().knownSampleIds;
+      const missingFromKnown = added.some((id) => !prevKnown.has(id));
+      const nextKnownIds = missingFromKnown
+        ? new Set([...prevKnown, ...added])
+        : prevKnown;
       set({
         binSampleIds: next,
+        ...(missingFromKnown ? { knownSampleIds: nextKnownIds } : {}),
         statusMessage: `Added ${added.length} track(s) to Session Bin (${next.length} in Bin)`,
       });
       if (get().binFilterActive) {

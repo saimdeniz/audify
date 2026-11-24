@@ -5,6 +5,7 @@ import { resolveSamplesByIds } from "../../utils/sampleLookup";
 import { clearSmartSearchCache } from "../../utils/smartSearch";
 import { invokeCommand } from "../../utils/tauriCommands";
 export { formatTrashOpLabel } from "../../utils/trashStatusFormat";
+import { resetPlayheadClock } from "../playheadClock";
 import {
   AUDIFY_STORAGE_KEYS,
   safeSetItem,
@@ -194,6 +195,12 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
             }
             if (removedAny) nextKnownIds = mutated;
           }
+          const selectedWasTrashed = Boolean(
+            state.selectedSample && targetSet.has(state.selectedSample.id)
+          );
+          if (selectedWasTrashed) {
+            resetPlayheadClock(0);
+          }
           return {
             allProfileSamples: nextAll,
             rawSamples: nextRaw,
@@ -213,10 +220,16 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
             selectedSampleIds: nextSelectedIds,
             lastSelectedIndex:
               nextIdx !== null && nextIdx >= 0 ? nextIdx : null,
-            isPlaying:
-              state.selectedSample && targetSet.has(state.selectedSample.id)
-                ? false
-                : state.isPlaying,
+            isPlaying: selectedWasTrashed ? false : state.isPlaying,
+            ...(selectedWasTrashed
+              ? {
+                  sliceRange: null,
+                  currentTimeSec: 0,
+                  durationSec: nextSelected
+                    ? Math.max(0.01, nextSelected.duration_ms / 1000)
+                    : 0,
+                }
+              : {}),
             trashedCount: summary.trashed_count,
             trashedTotalBytes: summary.total_bytes,
             fileOpUndoStack: nextUndoStack,

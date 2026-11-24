@@ -5,12 +5,16 @@ use rusqlite::{params, Connection};
 
 pub(crate) fn run_schema_migrations(conn: &Connection) -> Result<(), String> {
     // Drop premature/legacy FTS triggers if `samples_fts` predates v6 (`genre_meta` missing),
-    // so v3..v5 `UPDATE samples` migrations succeed before v6 rebuilds `samples_fts` and triggers.
+    // so v3..v5 `UPDATE samples` AND `DELETE FROM sample_tags` migrations succeed before v6
+    // rebuilds `samples_fts` and triggers.
     if !has_column(conn, "samples_fts", "genre_meta") {
         conn.execute_batch(
             "DROP TRIGGER IF EXISTS trg_samples_ai;
              DROP TRIGGER IF EXISTS trg_samples_ad;
-             DROP TRIGGER IF EXISTS trg_samples_au;",
+             DROP TRIGGER IF EXISTS trg_samples_au;
+             DROP TRIGGER IF EXISTS trg_sample_tags_ai;
+             DROP TRIGGER IF EXISTS trg_sample_tags_ad;
+             DROP TRIGGER IF EXISTS trg_tags_au;",
         )
         .map_err(|e| format!("Failed preparing pre-v6 FTS triggers: {}", e))?;
     }
@@ -509,6 +513,23 @@ pub(crate) fn run_schema_migrations(conn: &Connection) -> Result<(), String> {
         .map_err(|e| format!("Failed to apply v15 dead/redundant index cleanup migration: {}", e))?;
     }
 
+    let ver_v16: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap_or(0);
+    if ver_v16 < 16 {
+        // Drop redundant 50k indexes:
+        // - `idx_samples_file_path_nocase` is unused (all lookups use `LOWER(file_path)` -> `idx_samples_file_path_lower`)
+        // - `idx_samples_library_id` is a strict prefix of `idx_samples_lib_filename(library_id, file_name COLLATE NOCASE)`
+        conn.execute_batch(
+            "
+            DROP INDEX IF EXISTS idx_samples_file_path_nocase;
+            DROP INDEX IF EXISTS idx_samples_library_id;
+            PRAGMA user_version = 16;
+            ",
+        )
+        .map_err(|e| format!("Failed to apply v16 redundant sample index cleanup migration: {}", e))?;
+    }
+
     Ok(())
 }
 
@@ -588,12 +609,12 @@ mod tests {
         )
         .expect("seed v1 db");
 
-        init_schema_on_conn(&conn).expect("migrate v1 schema to v15");
+        init_schema_on_conn(&conn).expect("migrate v1 schema to v16");
 
         let user_version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("read user_version");
-        assert_eq!(user_version, 15);
+        assert_eq!(user_version, 16);
 
         let migrated_fav_count: i64 = conn
             .query_row(
@@ -792,12 +813,23 @@ mod tests {
         )
         .expect("downgrade to v12 state");
 
-        run_schema_migrations(&conn).expect("migrate v12 -> v15");
+        run_schema_migrations(&conn).expect("migrate v12 -> v16");
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 15);
+        assert_eq!(version, 16);
+
+        for dropped in ["idx_samples_file_path_nocase", "idx_samples_library_id"] {
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                    [dropped],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(exists, 0, "redundant index {} should be dropped", dropped);
+        }
 
         for idx_name in [
             "idx_collection_items_sample_id",

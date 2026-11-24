@@ -13,6 +13,7 @@ export const PROFILE_FIELD_STORAGE_KEYS = {
   audioOutputDeviceId: AUDIFY_STORAGE_KEYS.audioOutputDeviceId,
   sliceMicroFade: AUDIFY_STORAGE_KEYS.sliceMicroFade,
   exportAudioPreset: AUDIFY_STORAGE_KEYS.exportAudioPreset,
+  exportLoudnessMode: AUDIFY_STORAGE_KEYS.exportLoudnessMode,
   skipLeadingSilence: AUDIFY_STORAGE_KEYS.skipLeadingSilence,
   miniDockEdgePeek: AUDIFY_STORAGE_KEYS.miniDockEdgePeek,
   miniDockEdgeSide: AUDIFY_STORAGE_KEYS.miniDockEdgeSide,

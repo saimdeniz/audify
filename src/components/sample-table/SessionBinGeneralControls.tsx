@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useShallow } from "zustand/react/shallow";
 import { FileCheck2, MinusCircle, Trash2, X } from "lucide-react";
 import { Z_INDEX } from "../../constants/zIndex";
 import { useSampleStore } from "../../store/useSampleStore";
@@ -19,16 +18,19 @@ interface SessionBinGeneralControlsProps {
 export const SessionBinGeneralControls: React.FC<
   SessionBinGeneralControlsProps
 > = ({ compact = false }) => {
-  const binSamples = useSampleStore(
-    useShallow((s) =>
-      s.binSampleIds.length === 0
-        ? EMPTY_SAMPLES
-        : resolveSamplesByIds(
-            s.binSampleIds,
-            s.allProfileSamples.length > 0 ? s.allProfileSamples : s.rawSamples
-          )
-    )
-  );
+  const binSampleIds = useSampleStore((s) => s.binSampleIds);
+  const profilePoolLength = useSampleStore((s) => s.allProfileSamples.length);
+  const rawSamplesLength = useSampleStore((s) => s.rawSamples.length);
+  const binSamples = useMemo(() => {
+    if (binSampleIds.length === 0 || (profilePoolLength === 0 && rawSamplesLength === 0)) {
+      return EMPTY_SAMPLES;
+    }
+    const st = useSampleStore.getState();
+    return resolveSamplesByIds(
+      binSampleIds,
+      st.allProfileSamples.length > 0 ? st.allProfileSamples : st.rawSamples
+    );
+  }, [binSampleIds, profilePoolLength, rawSamplesLength]);
   const selectedSampleIds = useSampleStore((s) => s.selectedSampleIds);
   const enableLicensesSystem = useSampleStore((s) => s.enableLicensesSystem);
   const licenseGroups = useSampleStore((s) => s.licenseGroups);

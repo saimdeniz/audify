@@ -18,6 +18,7 @@ import {
   DuplicateScanProgressPayload,
   DuplicateScanResult,
   ExportAudioPreset,
+  ExportLoudnessMode,
   FileOpJournalEntry,
   TrashOpStatus,
   FolderStat,
@@ -173,6 +174,7 @@ export interface SampleStoreDataState {
   audioOutputDeviceId: string;
   sliceMicroFade: boolean;
   exportAudioPreset: ExportAudioPreset;
+  exportLoudnessMode: ExportLoudnessMode;
   skipLeadingSilence: boolean;
   normalizePreview: boolean;
   autoAnalyzeBpmKey: boolean;
@@ -212,6 +214,7 @@ export interface SampleStoreDataState {
   // In-App Drag-and-Drop state
   inAppDragSample: SampleItem | null;
   inAppDragSamples: SampleItem[];
+  inAppDragOrigin: "list" | "deck-header" | null;
 
   // Scanner & Diagnostics
   isScanning: boolean;
@@ -234,6 +237,7 @@ export interface SampleStoreDataState {
   isAnalyzingAi: boolean;
   aiIndexProgress: AiIndexProgressPayload | null;
   similaritySession: SimilaritySession | null;
+  externalSimilarityPendingFile: string | null;
   aiSuggestionsBySampleId: Record<number, AiTagSuggestionItem[]>;
   pendingAiSuggestionsCount: number;
 }
@@ -279,6 +283,9 @@ export interface SampleFilterAndPlaybackActions {
   setDurationSec: (sec: number) => void;
   requestSeek: (timeSec: number, playImmediately?: boolean) => void;
   setSliceRange: (range: SliceRange | null) => void;
-  setInAppDragSample: (sample: SampleItem | null) => void;
+  setInAppDragSample: (
+    sample: SampleItem | null,
+    opts?: { single?: boolean; origin?: "list" | "deck-header" }
+  ) => void;
   showInFolder: (filePath: string) => Promise<void>;
 }

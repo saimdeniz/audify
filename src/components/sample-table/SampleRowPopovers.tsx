@@ -143,7 +143,7 @@ export const SampleRowPopovers: React.FC<SampleRowPopoversProps> = ({
               left: hoverOverflowTags.x,
               zIndex: Z_INDEX.popoverFloating,
             }}
-            className="fixed w-[216px] bg-surface-2 backdrop-blur-md border border-accent/70 rounded-md p-2 shadow-2xl pointer-events-none space-y-1.5"
+            className="fixed w-[216px] bg-surface-2 audify-overlay-surface border border-accent/70 rounded-md p-2 shadow-2xl pointer-events-none space-y-1.5"
           >
             <div className="flex items-center justify-between border-b border-line pb-1">
               <span className="font-mono text-[9px] uppercase tracking-wider text-accent-fg truncate">
@@ -186,7 +186,7 @@ export const SampleRowPopovers: React.FC<SampleRowPopoversProps> = ({
             zIndex: Z_INDEX.popoverFloating,
           }}
           onClick={(e) => e.stopPropagation()}
-          className="fixed w-[256px] bg-surface-2 backdrop-blur-md border border-line-strong rounded-md p-2.5 shadow-2xl space-y-2.5 text-[12px] text-fg"
+          className="fixed w-[256px] bg-surface-2 audify-overlay-surface border border-line-strong rounded-md p-2.5 shadow-2xl space-y-2.5 text-[12px] text-fg"
         >
           <div className="flex items-center justify-between border-b border-line pb-1.5">
             <div className="min-w-0 flex-1 pr-2">
@@ -376,7 +376,7 @@ export const SampleRowPopovers: React.FC<SampleRowPopoversProps> = ({
             zIndex: Z_INDEX.popoverFloating,
           }}
           onClick={(e) => e.stopPropagation()}
-          className="fixed w-[248px] bg-surface-2 backdrop-blur-md border border-line-strong rounded-md p-2.5 shadow-2xl space-y-2 text-[12px] text-fg"
+          className="fixed w-[248px] bg-surface-2 audify-overlay-surface border border-line-strong rounded-md p-2.5 shadow-2xl space-y-2 text-[12px] text-fg"
         >
           <div className="flex items-center justify-between border-b border-line pb-1.5">
             <div className="min-w-0 flex-1 pr-2">

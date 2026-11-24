@@ -3,7 +3,9 @@ import { useSampleStore } from "../../store/useSampleStore";
 import { SampleItem } from "../../types";
 import {
   beginDragOnMove,
+  getActiveOsDragSample,
   isOsDragCurrentlyInFlight,
+  setActiveOsDragSample,
   startNativePitchedSampleDrag,
   startNativeSampleDrag as startNativeSampleDragRaw,
 } from "../../utils/drag";
@@ -74,6 +76,7 @@ export function useSampleTableInteractions({
       }
       if (sourceSample) {
         osDragSampleRef.current = sourceSample;
+        setActiveOsDragSample(sourceSample, false);
         setInAppDragSample(sourceSample);
       }
       const dragLabel =
@@ -83,18 +86,24 @@ export function useSampleTableInteractions({
             (paths[0] ? folderNameFromPath(paths[0]) : "") ||
             "1 sample selected";
       try {
-        const { pitchSemitones, sliceMicroFade } = useSampleStore.getState();
-        const shouldExportPitched =
-          paths.length === 1 &&
+        const { pitchSemitones, sliceMicroFade, exportLoudnessMode } =
+          useSampleStore.getState();
+        const withinRenderLimit =
           Boolean(sourceSample) &&
-          Math.abs(pitchSemitones) >= 0.01;
+          (sourceSample?.duration_ms ?? 0) > 0 &&
+          (sourceSample?.duration_ms ?? 0) <= 600_000;
+        const shouldExportRendered =
+          paths.length === 1 &&
+          withinRenderLimit &&
+          (Math.abs(pitchSemitones) >= 0.01 || exportLoudnessMode !== "off");
 
         const droppedExternally =
-          shouldExportPitched && sourceSample
+          shouldExportRendered && sourceSample
             ? await startNativePitchedSampleDrag(
                 sourceSample,
                 pitchSemitones,
-                sliceMicroFade
+                sliceMicroFade,
+                exportLoudnessMode
               )
             : await startNativeSampleDragRaw(paths, dragLabel);
 
@@ -124,6 +133,7 @@ export function useSampleTableInteractions({
           osDragCleanupTimerRef.current = null;
           if (!isOsDragCurrentlyInFlight()) {
             osDragSampleRef.current = null;
+            setActiveOsDragSample(null);
             setInAppDragSample(null);
           }
         }, 140);
@@ -225,12 +235,17 @@ export function useSampleTableInteractions({
       document.querySelector("aside")?.getBoundingClientRect().right ?? 296;
 
     const onDragOver = (e: DragEvent) => {
-      if (!isOsDragCurrentlyInFlight() || !osDragSampleRef.current) return;
-      if (
-        useSampleStore.getState().inAppDragSample?.id !==
-        osDragSampleRef.current.id
-      ) {
-        setInAppDragSample(osDragSampleRef.current);
+      if (!isOsDragCurrentlyInFlight()) return;
+      const shared = getActiveOsDragSample();
+      const dragSample = shared?.sample ?? osDragSampleRef.current;
+      if (!dragSample) return;
+      if (useSampleStore.getState().inAppDragSample?.id !== dragSample.id) {
+        setInAppDragSample(
+          dragSample,
+          shared
+            ? { single: shared.single, origin: shared.origin }
+            : undefined
+        );
       }
       if (e.clientX <= getSidebarRight()) {
         e.preventDefault();

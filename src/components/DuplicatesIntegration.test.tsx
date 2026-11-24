@@ -641,7 +641,6 @@ describe("Integrated Duplicates View & UI Polish", () => {
       <SampleTableRow
         sample={s}
         rowIndex={2}
-        totalSamples={4}
         startOffsetPx={68}
         totalTableWidth={900}
         isSimilarityMode={false}
@@ -915,7 +914,6 @@ describe("Integrated Duplicates View & UI Polish", () => {
       <SampleTableRow
         sample={s4}
         rowIndex={1}
-        totalSamples={4}
         startOffsetPx={34}
         totalTableWidth={900}
         isSimilarityMode={false}

@@ -31,8 +31,13 @@ interface CachedNameSortKey {
   key: string;
 }
 
-const nameSortKeyCache = new WeakMap<SampleItem, CachedNameSortKey>();
-const createdAtMsCache = new WeakMap<SampleItem, number>();
+let nameSortKeyCache = new WeakMap<SampleItem, CachedNameSortKey>();
+let createdAtMsCache = new WeakMap<SampleItem, number>();
+
+export function clearCatalogSortCaches(): void {
+  nameSortKeyCache = new WeakMap<SampleItem, CachedNameSortKey>();
+  createdAtMsCache = new WeakMap<SampleItem, number>();
+}
 
 function getCachedCreatedAtMs(sample: SampleItem): number {
   let cached = createdAtMsCache.get(sample);
@@ -274,7 +279,10 @@ export function doesSampleMatchInitialView(
   if (filter.srFilter !== null && sample.sample_rate !== filter.srFilter) return false;
   if (
     filter.licenseGroup &&
-    !isSampleInLicenseGroup(sample.file_path, filter.licenseGroup)
+    !isSampleInLicenseGroup(
+      sample.folder_path || sample.file_path,
+      filter.licenseGroup
+    )
   ) {
     return false;
   }

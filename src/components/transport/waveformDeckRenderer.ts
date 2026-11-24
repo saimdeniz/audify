@@ -50,12 +50,14 @@ export interface RenderWaveformDeckOptions {
   waveformStyle: WaveformStyle;
   logicalWidth: number;
   logicalHeight: number;
+  dpr?: number;
   crossfade?: WaveCrossfadeState | null;
 }
 
 export function buildWaveLayerStyleKey(opts: {
   logicalWidth: number;
   logicalHeight: number;
+  dpr?: number;
   waveformSensitivity: WaveformSensitivity;
   waveformStyle: WaveformStyle;
   themeMode: ThemeMode;
@@ -65,7 +67,7 @@ export function buildWaveLayerStyleKey(opts: {
 }): string {
   const width = Math.max(100, Math.floor(opts.logicalWidth));
   const height = Math.max(40, Math.floor(opts.logicalHeight));
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = opts.dpr ?? (window.devicePixelRatio || 1);
   const vp = opts.viewport ?? DEFAULT_WAVEFORM_VIEWPORT;
   const vpKey =
     vp.zoom <= 1
@@ -190,7 +192,7 @@ export function renderWaveformDeck(
 ): WaveLayerCache | null {
   const width = Math.max(100, Math.floor(opts.logicalWidth));
   const height = Math.max(40, Math.floor(opts.logicalHeight));
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = opts.dpr ?? (window.devicePixelRatio || 1);
 
   const targetW = Math.floor(width * dpr);
   const targetH = Math.floor(height * dpr);
@@ -256,7 +258,7 @@ export function renderWaveformDeck(
     ctx.font = '11px "JetBrains Mono", Consolas, monospace';
     ctx.fillText("No sample selected", 16, midY);
     ctx.restore();
-    return prevCache;
+    return null;
   }
 
   const peaks = opts.hiResPeaks ?? parsePeaks(opts.peaksJson);
@@ -510,14 +512,17 @@ export function renderWaveformDeck(
 
       const hoverSec =
         (opts.hoverRatio * opts.effectiveDuration).toFixed(rulerDecimals) + "s";
-      const labelW = rulerDecimals === 3 ? 56 : 50;
+      ctx.font = '10px "JetBrains Mono", Consolas, monospace';
+      const labelW = Math.max(
+        rulerDecimals === 3 ? 56 : 50,
+        Math.ceil(ctx.measureText(hoverSec).width) + 8
+      );
       const labelX = Math.min(width - labelW - 4, Math.max(4, gx + 5));
       ctx.fillStyle = palette.surface3;
       ctx.fillRect(labelX, height - 19, labelW, 15);
       ctx.strokeStyle = palette.lineStrong;
       ctx.strokeRect(labelX, height - 19, labelW, 15);
       ctx.fillStyle = palette.fg;
-      ctx.font = '10px "JetBrains Mono", Consolas, monospace';
       ctx.fillText(hoverSec, labelX + 4, height - 8);
     }
   }

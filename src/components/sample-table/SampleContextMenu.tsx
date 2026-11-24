@@ -52,6 +52,15 @@ export const SampleContextMenu: React.FC<SampleContextMenuProps> = ({
   childrenByParentId,
 }) => {
   const selectedCollectionId = useSampleStore((s) => s.selectedCollectionId);
+  const isSmartCollectionActive = useSampleStore(
+    (s) =>
+      s.selectedCollectionId !== null &&
+      Boolean(
+        s.collections
+          .find((c) => c.id === s.selectedCollectionId)
+          ?.smart_query?.trim()
+      )
+  );
   const enableLicensesSystem = useSampleStore((s) => s.enableLicensesSystem);
   const enableAdvancedFileOps = useSampleStore((s) => s.enableAdvancedFileOps);
   const binFilterActive = useSampleStore((s) => s.binFilterActive);
@@ -322,7 +331,7 @@ export const SampleContextMenu: React.FC<SampleContextMenuProps> = ({
       </SubmenuTriggerItem>
 
       {/* 3. Remove from Collection */}
-      {selectedCollectionId !== null && (
+      {selectedCollectionId !== null && !isSmartCollectionActive && (
         <MenuItem
           compactHeight
           tone="accent"

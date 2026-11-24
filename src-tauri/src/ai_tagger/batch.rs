@@ -6,7 +6,7 @@ use super::taxonomy::{
 };
 use super::types::{AiAnalysisSummary, AiIndexProgress, AiTaggingMode};
 use super::{infer_single_sample_path, AiTaggerState};
-use crate::db::{open_read_conn, AppState};
+use crate::db::AppState;
 use crate::security::sanitize_err;
 use rusqlite::{params, Connection};
 use std::path::Path;
@@ -170,7 +170,7 @@ pub fn run_batch_ai_analysis(
     let _running_guard = RunningGuard(&ai_state.analysis_running);
 
     let (model, cfg) = ai_state.ensure_loaded_model(&state.user_dir)?;
-    let read_conn = open_read_conn(&state.user_dir)?;
+    let read_conn = state.acquire_read_conn()?;
     let profile_id = crate::db::get_active_profile_id(&read_conn);
     let candidates = collect_analysis_candidates(
         &read_conn,

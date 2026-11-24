@@ -8,6 +8,7 @@ import {
 import { useSampleStore } from "../../store/useSampleStore";
 import {
   ExportAudioPreset,
+  ExportLoudnessMode,
   WaveformSensitivity,
   WaveformStyle,
 } from "../../types";
@@ -25,6 +26,61 @@ function applyCurvePreview(amp: number, curve: WaveformSensitivity): number {
   return amp;
 }
 
+const EXPORT_FORMAT_OPTIONS: ReadonlyArray<{ id: ExportAudioPreset; label: string }> = [
+  { id: "original", label: "Source" },
+  { id: "wav_24", label: "24-bit" },
+  { id: "nle_48k_24", label: "48k / 24b" },
+];
+
+const EXPORT_LOUDNESS_OPTIONS: ReadonlyArray<{ id: ExportLoudnessMode; label: string }> = [
+  { id: "off", label: "Off" },
+  { id: "peak_m1", label: "-1 dBTP" },
+  { id: "lufs_m14", label: "-14 LUFS" },
+  { id: "lufs_m24", label: "-24 LUFS" },
+];
+
+function SegmentedSettingRow<T extends string>({
+  label,
+  description,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  value: T;
+  options: ReadonlyArray<{ id: T; label: string }>;
+  onChange: (next: T) => void;
+}) {
+  return (
+    <div className="py-2 px-3 flex items-center justify-between gap-3">
+      <div className="min-w-0">
+        <div className="text-[12px] font-medium text-fg">{label}</div>
+        <div className="text-[11px] text-fg-2">{description}</div>
+      </div>
+      <div className="flex items-center p-0.5 bg-surface-2 rounded-xs border border-line shrink-0">
+        {options.map((opt) => {
+          const active = value === opt.id;
+          return (
+            <button
+              key={opt.id}
+              type="button"
+              onClick={() => onChange(opt.id)}
+              className={`h-[22px] px-2 rounded-xs text-[11px] flex items-center transition-colors cursor-pointer whitespace-nowrap ${
+                active
+                  ? "bg-accent-soft border border-accent/60 text-accent-fg font-semibold"
+                  : "text-fg-2 hover:text-fg border border-transparent font-medium"
+              }`}
+            >
+              {opt.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export const AudioTab: React.FC = () => {
   const waveformStyle = useSampleStore((s) => s.waveformStyle);
   const waveformSensitivity = useSampleStore((s) => s.waveformSensitivity);
@@ -33,6 +89,7 @@ export const AudioTab: React.FC = () => {
   const autoBinOnNleDrag = useSampleStore((s) => s.autoBinOnNleDrag);
   const sliceMicroFade = useSampleStore((s) => s.sliceMicroFade);
   const exportAudioPreset = useSampleStore((s) => s.exportAudioPreset);
+  const exportLoudnessMode = useSampleStore((s) => s.exportLoudnessMode);
   const skipLeadingSilence = useSampleStore((s) => s.skipLeadingSilence);
   const normalizePreview = useSampleStore((s) => s.normalizePreview);
   const autoAnalyzeBpmKey = useSampleStore((s) => s.autoAnalyzeBpmKey);
@@ -54,6 +111,7 @@ export const AudioTab: React.FC = () => {
   const setAutoBinOnNleDrag = useSampleStore((s) => s.setAutoBinOnNleDrag);
   const setSliceMicroFade = useSampleStore((s) => s.setSliceMicroFade);
   const setExportAudioPreset = useSampleStore((s) => s.setExportAudioPreset);
+  const setExportLoudnessMode = useSampleStore((s) => s.setExportLoudnessMode);
   const setSkipLeadingSilence = useSampleStore((s) => s.setSkipLeadingSilence);
   const setNormalizePreview = useSampleStore((s) => s.setNormalizePreview);
   const setAutoAnalyzeBpmKey = useSampleStore((s) => s.setAutoAnalyzeBpmKey);
@@ -404,45 +462,36 @@ export const AudioTab: React.FC = () => {
           />
 
           {/* Export WAV format preset */}
-          <div className="py-2 px-3 flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-[12px] font-medium text-fg">
-                Export format (Slice &amp; Pitch)
-              </div>
-              <div className="text-[11px] text-fg-2">
-                {exportAudioPreset === "nle_48k_24"
-                  ? "Broadcast 48 kHz / 24-bit WAV for Premiere & Resolve"
-                  : exportAudioPreset === "wav_24"
-                  ? "Lossless 24-bit WAV at original sample rate"
-                  : "Keeps source rate & preserves 24-bit on hi-res audio"}
-              </div>
-            </div>
-            <div className="flex items-center p-0.5 bg-surface-2 rounded-xs border border-line shrink-0">
-              {(
-                [
-                  { id: "original", label: "Source" },
-                  { id: "wav_24", label: "24-bit" },
-                  { id: "nle_48k_24", label: "48k / 24b" },
-                ] as { id: ExportAudioPreset; label: string }[]
-              ).map((opt) => {
-                const active = exportAudioPreset === opt.id;
-                return (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => setExportAudioPreset(opt.id)}
-                    className={`h-[22px] px-2 rounded-xs text-[11px] flex items-center transition-colors cursor-pointer whitespace-nowrap ${
-                      active
-                        ? "bg-accent-soft border border-accent/60 text-accent-fg font-semibold"
-                        : "text-fg-2 hover:text-fg border border-transparent font-medium"
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          <SegmentedSettingRow
+            label="Export format (Slice & Pitch)"
+            description={
+              exportAudioPreset === "nle_48k_24"
+                ? "Broadcast 48 kHz / 24-bit WAV for Premiere & Resolve"
+                : exportAudioPreset === "wav_24"
+                ? "Lossless 24-bit WAV at original sample rate"
+                : "Keeps source rate & preserves 24-bit on hi-res audio"
+            }
+            value={exportAudioPreset}
+            options={EXPORT_FORMAT_OPTIONS}
+            onChange={setExportAudioPreset}
+          />
+
+          {/* Export loudness normalization (Peak / LUFS) */}
+          <SegmentedSettingRow
+            label="Export loudness (NLE Drag & Slice)"
+            description={
+              exportLoudnessMode === "peak_m1"
+                ? "Normalizes true peak to -1.0 dBTP on slice & single-track NLE drags"
+                : exportLoudnessMode === "lufs_m14"
+                ? "Normalizes to -14 LUFS (Streaming / YouTube) with -1 dBTP peak ceiling"
+                : exportLoudnessMode === "lufs_m24"
+                ? "Normalizes to -24 LUFS (EBU R128 / Broadcast) with -1 dBTP peak ceiling"
+                : "Off — preserves original amplitude on exported WAVs & NLE drags"
+            }
+            value={exportLoudnessMode}
+            options={EXPORT_LOUDNESS_OPTIONS}
+            onChange={setExportLoudnessMode}
+          />
 
           {/* Slice 3 ms micro-fade */}
           <ToggleRow

@@ -236,7 +236,9 @@ export const AtmosphereMiniPreview: React.FC = React.memo(() => {
         <div className="absolute inset-0 flex flex-col p-2 gap-1.5 pointer-events-none z-10">
           <div
             className={`h-[24px] rounded-xs px-2 flex items-center justify-between border border-line bg-surface-1 ${
-              enableMica ? "backdrop-blur-md" : ""
+              hasBackdrop && enableMica && themeMode !== "contrast"
+                ? "backdrop-blur-md"
+                : ""
             }`}
           >
             <div className="flex items-center space-x-1.5">
@@ -271,7 +273,9 @@ export const AtmosphereMiniPreview: React.FC = React.memo(() => {
           <div className="flex-1 flex gap-1.5 min-h-0">
             <div
               className={`w-[56px] rounded-xs p-1.5 flex flex-col gap-1.5 border border-line bg-surface-1 ${
-                enableMica ? "backdrop-blur-md" : ""
+                hasBackdrop && enableMica && themeMode !== "contrast"
+                  ? "backdrop-blur-md"
+                  : ""
               }`}
             >
               <div className="flex items-center space-x-1">

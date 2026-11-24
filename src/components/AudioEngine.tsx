@@ -20,7 +20,7 @@ import {
 } from "../store/playheadClock";
 import { useSampleStore } from "../store/useSampleStore";
 import {
-  isAppWindowActive,
+  isViewportRenderActive,
   subscribeAppActivity,
 } from "../utils/appFocusMonitor";
 import { normalizePathForMatch } from "../utils/pathHelpers";
@@ -85,6 +85,8 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
   const lastAppliedSeekSeqRef = useRef<number>(0);
   const loadRequestSeqRef = useRef<number>(0);
   const loadedSampleRef = useRef<{ id: number; path: string } | null>(null);
+  const loadingSampleRef = useRef<{ id: number; path: string } | null>(null);
+  const pendingSeekDuringLoadRef = useRef<number | null>(null);
   const lastLoadHandledRef = useRef<{
     sampleId: number | null;
     triggerSeq: number;
@@ -202,6 +204,8 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
 
     if (selectedSampleId === null || !activeSample) {
       loadedSampleRef.current = null;
+      loadingSampleRef.current = null;
+      pendingSeekDuringLoadRef.current = null;
       anchorRef.current = { ...DEFAULT_ANCHOR };
       resetPlayheadClock(0);
       lastLoadHandledRef.current = {
@@ -268,10 +272,14 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
       return;
     }
 
-    loadedSampleRef.current = {
+    // Mark the track as in-flight rather than already loaded so mid-load seeks
+    // are queued for the new track instead of racing onto the previous track.
+    loadedSampleRef.current = null;
+    loadingSampleRef.current = {
       id: activeSample.id,
       path: activeSample.file_path,
     };
+    pendingSeekDuringLoadRef.current = null;
 
     void nativeAudioLoad({
       filePath: activeSample.file_path,
@@ -287,18 +295,58 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
     })
       .then((payload) => {
         if (reqSeq !== loadRequestSeqRef.current) return;
+        loadingSampleRef.current = null;
+        loadedSampleRef.current = {
+          id: activeSample.id,
+          path: activeSample.file_path,
+        };
+        const queuedSeek = pendingSeekDuringLoadRef.current;
+        pendingSeekDuringLoadRef.current = null;
+
         const liveNow = useSampleStore.getState();
         // If user pressed Pause while decode was in-flight, honor Pause immediately
         if (!liveNow.isPlaying && payload.isPlaying) {
           anchorRef.current.isPlaying = false;
           void nativeAudioPause().catch(() => {});
+          if (queuedSeek !== null) {
+            const clamped =
+              payload.durationSec > 0
+                ? Math.max(0, Math.min(payload.durationSec, queuedSeek))
+                : Math.max(0, queuedSeek);
+            anchorRef.current.positionSec = clamped;
+            anchorRef.current.anchorMs = performance.now();
+            resetPlayheadClock(clamped);
+            void nativeAudioSeek(clamped).catch(() => {});
+          }
           return;
         }
         applySyncPayload(payload);
+        if (queuedSeek !== null) {
+          const clamped =
+            payload.durationSec > 0
+              ? Math.max(0, Math.min(payload.durationSec, queuedSeek))
+              : Math.max(0, queuedSeek);
+          anchorRef.current.positionSec = clamped;
+          anchorRef.current.anchorMs = performance.now();
+          resetPlayheadClock(clamped);
+          void nativeAudioSeek(clamped).catch(() => {});
+        }
+        // Symmetric race fix: if user pressed Play while an autoplay:false load was in-flight,
+        // start playback now that the new track is actually loaded in the engine.
+        if (liveNow.isPlaying && !payload.isPlaying) {
+          anchorRef.current.isPlaying = true;
+          anchorRef.current.anchorMs = performance.now();
+          void nativeAudioPlay().catch(() => {
+            lastEngineForcedPlayingRef.current = false;
+            useSampleStore.getState().setIsPlaying(false);
+          });
+        }
       })
       .catch((err) => {
         if (reqSeq !== loadRequestSeqRef.current) return;
+        loadingSampleRef.current = null;
         loadedSampleRef.current = null;
+        pendingSeekDuringLoadRef.current = null;
         const msg = String(err || "Audio load failed");
         if (msg.includes("Native audio engine is not initialized")) {
           onFallbackRef.current();
@@ -335,6 +383,9 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
     lastEngineForcedPlayingRef.current = null;
 
     if (selectedSampleId === null) return;
+    // Defer Play/Pause commands while a track load IPC is still in-flight so we never
+    // accidentally resume/pause the previously loaded track; `.then(payload)` reconciles.
+    if (loadingSampleRef.current) return;
 
     if (isPlaying) {
       anchorRef.current.isPlaying = true;
@@ -397,17 +448,24 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
     anchorRef.current.positionSec = targetSec;
     anchorRef.current.anchorMs = performance.now();
     resetPlayheadClock(targetSec);
+    // If a new track is still decoding in Rust, queue this seek until load resolves
+    // instead of firing `nativeAudioSeek` against the previous track.
+    if (loadingSampleRef.current !== null) {
+      pendingSeekDuringLoadRef.current = targetSec;
+      return;
+    }
     void nativeAudioSeek(targetSec).catch(() => {});
   }, [seekRequest, selectedSampleId, effectiveDuration]);
 
   // Smooth 60–144 Hz local monotonic playhead animation (zero per-frame IPC;
-  // automatically pauses rAF when Audify is hidden/minimized to save CPU/battery)
+  // stays smooth while Always-on-Top Mini Dock is unfocused beside an NLE, and
+  // pauses rAF automatically when hidden/minimized or Edge-Peek collapsed)
   useEffect(() => {
     if (!isPlaying) return;
 
     const tick = () => {
       const live = useSampleStore.getState();
-      if (!live.isPlaying || !isAppWindowActive()) {
+      if (!live.isPlaying || !isViewportRenderActive()) {
         rafRef.current = null;
         return;
       }
@@ -423,13 +481,13 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
     };
 
     const startIfActive = () => {
-      if (rafRef.current === null && isAppWindowActive()) {
+      if (rafRef.current === null && isViewportRenderActive()) {
         rafRef.current = requestAnimationFrame(tick);
       }
     };
 
     const unsubActivity = subscribeAppActivity(() => {
-      if (isAppWindowActive()) {
+      if (isViewportRenderActive()) {
         startIfActive();
       } else if (rafRef.current !== null) {
         cancelAnimationFrame(rafRef.current);

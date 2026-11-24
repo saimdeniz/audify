@@ -1,6 +1,7 @@
 use super::types::{AiModelStatus, ResolvedAiModelConfig, AI_EMBEDDING_DIM};
 use crate::security::{
-    ensure_inside, has_ntfs_ads_colon, is_unc_or_network_path, sanitize_err,
+    ensure_inside, has_ntfs_ads_colon, is_unc_or_network_path, reject_symlink_ancestors,
+    sanitize_err,
 };
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
@@ -76,20 +77,6 @@ fn is_regular_non_symlink_file(path: &Path) -> bool {
     fs::symlink_metadata(path)
         .map(|m| !m.file_type().is_symlink() && m.is_file())
         .unwrap_or(false)
-}
-
-fn reject_symlink_chain(path: &Path) -> Result<(), String> {
-    for anc in path.ancestors() {
-        if anc.as_os_str().is_empty() || anc.parent().is_none() {
-            break;
-        }
-        let meta = fs::symlink_metadata(anc)
-            .map_err(|_| "Source path or parent directory cannot be read".to_string())?;
-        if meta.file_type().is_symlink() {
-            return Err("Symlinks and junctions are blocked for security".to_string());
-        }
-    }
-    Ok(())
 }
 
 pub fn active_model_id_and_path(user_dir: &Path) -> (String, String, PathBuf, bool) {
@@ -303,7 +290,7 @@ fn validate_local_import_source(
         return Err("Invalid or unsupported source file path".to_string());
     }
     let path = PathBuf::from(trimmed);
-    reject_symlink_chain(&path)?;
+    reject_symlink_ancestors(&path)?;
     let sym = fs::symlink_metadata(&path)
         .map_err(|_| "Source file does not exist or cannot be read".to_string())?;
     if sym.file_type().is_symlink() || !sym.is_file() {

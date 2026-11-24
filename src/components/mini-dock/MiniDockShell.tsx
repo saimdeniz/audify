@@ -1,15 +1,17 @@
 import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Search, Sparkles, X } from "lucide-react";
 import { useSampleStore } from "../../store/useSampleStore";
 import { SampleItem } from "../../types";
 import { setEdgePeekCollapsedState } from "../../utils/appFocusMonitor";
 import {
+  getActiveOsDragSample,
   isOsDragCurrentlyInFlight,
+  setActiveOsDragSample,
   startNativePitchedSampleDrag,
   startNativeSampleDrag,
 } from "../../utils/drag";
+import { formatShortcutDisplay } from "../../utils/shortcuts";
 import { LeftSidebar } from "../LeftSidebar";
 import { ActiveFilterBanner } from "../sample-table/ActiveFilterBanner";
 import { FilterDrawer } from "../sample-table/FilterDrawer";
@@ -20,7 +22,7 @@ import {
 } from "./MiniDockContextMenu";
 import { MiniDockHeader } from "./MiniDockHeader";
 import { MiniDockList } from "./MiniDockList";
-import { MiniDockSortDropdown } from "./MiniDockSortDropdown";
+import { MiniDockSearchBar } from "./MiniDockSearchBar";
 import { MiniDockTransport } from "./MiniDockTransport";
 
 const LazySlicesTableView = lazy(() =>
@@ -34,10 +36,10 @@ export const MiniDockShell: React.FC = () => {
   const totalProfileSamplesCount = useSampleStore(
     (s) => s.allProfileSamples.length || s.samples.length
   );
-  const searchQuery = useSampleStore((s) => s.searchQuery);
-  const smartSearchSynonyms = useSampleStore((s) => s.smartSearchSynonyms);
   const autoBinOnNleDrag = useSampleStore((s) => s.autoBinOnNleDrag);
   const statusMessage = useSampleStore((s) => s.statusMessage);
+  const isScanning = useSampleStore((s) => s.isScanning);
+  const setStatusMessage = useSampleStore((s) => s.setStatusMessage);
   const miniDockShortcut = useSampleStore((s) => s.shortcuts.toggleMiniDock);
   const slicesFilterActive = useSampleStore((s) => s.slicesFilterActive);
   const trashFilterActive = useSampleStore((s) => s.trashFilterActive);
@@ -47,10 +49,6 @@ export const MiniDockShell: React.FC = () => {
   const themeMode = useSampleStore((s) => s.themeMode);
   const accentColor = useSampleStore((s) => s.accentColor);
 
-  const setSearchQuery = useSampleStore((s) => s.setSearchQuery);
-  const setSmartSearchSynonyms = useSampleStore(
-    (s) => s.setSmartSearchSynonyms
-  );
   const setInAppDragSample = useSampleStore((s) => s.setInAppDragSample);
   const addSamplesToBin = useSampleStore((s) => s.addSamplesToBin);
 
@@ -58,6 +56,7 @@ export const MiniDockShell: React.FC = () => {
     slicesFilterActive || (trashFilterActive && trashViewTab === "slices");
 
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const osDragSampleRef = useRef<SampleItem | null>(null);
   const osDragCleanupTimerRef = useRef<number | null>(null);
   const [miniContextMenu, setMiniContextMenu] =
     useState<MiniContextMenuState | null>(null);
@@ -65,6 +64,15 @@ export const MiniDockShell: React.FC = () => {
     "collection" | "tag" | "genre" | null
   >(null);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+
+  // Auto-clear transient status messages in Mini Dock (mirrors BottomStatusBar)
+  useEffect(() => {
+    if (!statusMessage || isScanning) return;
+    const timer = window.setTimeout(() => {
+      setStatusMessage(null);
+    }, 3500);
+    return () => window.clearTimeout(timer);
+  }, [statusMessage, isScanning, setStatusMessage]);
 
   // Sync Windows Edge-Peek controller with store preference & pause animations when collapsed
   useEffect(() => {
@@ -219,25 +227,85 @@ export const MiniDockShell: React.FC = () => {
     };
   }, [miniContextMenu, batchPopover]);
 
+  // Dynamic OS Drag <-> LeftSidebar / Waveform Bridge in Mini Dock
+  useEffect(() => {
+    const getSidebarRight = () =>
+      document.querySelector("aside")?.getBoundingClientRect().right ?? 296;
+
+    const onDragOver = (e: DragEvent) => {
+      if (!isOsDragCurrentlyInFlight()) return;
+      const shared = getActiveOsDragSample();
+      const dragSample = shared?.sample ?? osDragSampleRef.current;
+      if (!dragSample) return;
+      if (useSampleStore.getState().inAppDragSample?.id !== dragSample.id) {
+        setInAppDragSample(
+          dragSample,
+          shared
+            ? { single: shared.single, origin: shared.origin }
+            : { single: false, origin: "list" }
+        );
+      }
+      if (e.clientX <= getSidebarRight()) {
+        e.preventDefault();
+        if (e.dataTransfer) {
+          e.dataTransfer.dropEffect = "copy";
+        }
+      }
+    };
+
+    const onDragLeave = (e: DragEvent) => {
+      if (!isOsDragCurrentlyInFlight()) return;
+      if (
+        e.clientX <= 0 ||
+        e.clientY <= 0 ||
+        e.clientX >= window.innerWidth ||
+        e.clientY >= window.innerHeight
+      ) {
+        setInAppDragSample(null);
+      }
+    };
+
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("dragleave", onDragLeave);
+    return () => {
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("dragleave", onDragLeave);
+      if (osDragCleanupTimerRef.current !== null) {
+        window.clearTimeout(osDragCleanupTimerRef.current);
+        osDragCleanupTimerRef.current = null;
+      }
+    };
+  }, [setInAppDragSample]);
+
   const startSampleDrag = useCallback(
     async (paths: string[], sourceSample: SampleItem) => {
       if (osDragCleanupTimerRef.current !== null) {
         window.clearTimeout(osDragCleanupTimerRef.current);
         osDragCleanupTimerRef.current = null;
       }
-      setInAppDragSample(sourceSample);
+      osDragSampleRef.current = sourceSample;
+      setActiveOsDragSample(sourceSample, false, "list");
+      setInAppDragSample(sourceSample, { single: false, origin: "list" });
 
       try {
-        const { pitchSemitones: livePitch, sliceMicroFade: liveFade } =
-          useSampleStore.getState();
-        const shouldExportPitched =
-          paths.length === 1 && Math.abs(livePitch) >= 0.01;
+        const {
+          pitchSemitones: livePitch,
+          sliceMicroFade: liveFade,
+          exportLoudnessMode: liveLoudness,
+        } = useSampleStore.getState();
+        const withinRenderLimit =
+          sourceSample.duration_ms > 0 && sourceSample.duration_ms <= 600_000;
+        const shouldExportRendered =
+          paths.length === 1 &&
+          withinRenderLimit &&
+          (Math.abs(livePitch) >= 0.01 || liveLoudness !== "off");
 
-        const droppedExternally = shouldExportPitched
+        const droppedExternally = shouldExportRendered
           ? await startNativePitchedSampleDrag(
               sourceSample,
               livePitch,
-              liveFade
+              liveFade,
+              liveLoudness
             )
           : await startNativeSampleDrag(
               paths,
@@ -266,6 +334,8 @@ export const MiniDockShell: React.FC = () => {
         osDragCleanupTimerRef.current = window.setTimeout(() => {
           osDragCleanupTimerRef.current = null;
           if (!isOsDragCurrentlyInFlight()) {
+            osDragSampleRef.current = null;
+            setActiveOsDragSample(null);
             setInAppDragSample(null);
           }
         }, 140);
@@ -293,64 +363,11 @@ export const MiniDockShell: React.FC = () => {
             <WaveformDeckCanvas />
           </div>
 
-          {/* Search Bar with Bilingual UCS Synonym Toggle */}
-          <div className="bg-surface-1 border-b border-line px-2 py-1.5 flex items-center gap-1.5 shrink-0">
-            <div
-              data-search-keep-focus="true"
-              className="flex-1 min-w-0 flex items-center bg-surface-3 border border-line-strong focus-within:border-accent rounded-xs h-[28px] pl-2.5 pr-1"
-            >
-              <Search className="w-3.5 h-3.5 text-fg-2 mr-2 shrink-0" />
-              <input
-                ref={searchInputRef}
-                data-search-input="true"
-                type="text"
-                value={searchQuery}
-                onFocus={() => setIsSearchFocused(true)}
-                onBlur={() => setIsSearchFocused(false)}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") {
-                    e.stopPropagation();
-                    if (searchQuery) setSearchQuery("");
-                    e.currentTarget.blur();
-                  } else if (e.key === "ArrowDown" || e.key === "Enter") {
-                    e.currentTarget.blur();
-                  }
-                }}
-                placeholder="Search samples..."
-                className="bg-transparent border-none text-[12px] text-fg placeholder-fg-3 w-full focus:outline-none min-w-0"
-              />
-              {searchQuery && (
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setSearchQuery("")}
-                  className="w-[20px] h-[20px] flex items-center justify-center text-fg-2 hover:text-fg shrink-0"
-                  title="Clear search"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
-              <button
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => setSmartSearchSynonyms(!smartSearchSynonyms)}
-                title={
-                  smartSearchSynonyms
-                    ? "Bilingual UCS Synonyms: ON"
-                    : "Bilingual UCS Synonyms: OFF"
-                }
-                className={`w-[22px] h-[22px] ml-0.5 rounded-xs flex items-center justify-center shrink-0 transition-colors ${
-                  smartSearchSynonyms
-                    ? "bg-accent-soft text-accent-fg border border-accent/60"
-                    : "text-fg-2 hover:text-fg"
-                }`}
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-              </button>
-            </div>
-            {!showSlicesTable && <MiniDockSortDropdown />}
-          </div>
+          <MiniDockSearchBar
+            searchInputRef={searchInputRef}
+            showSlicesTable={showSlicesTable}
+            onFocusChange={setIsSearchFocused}
+          />
 
           <ActiveFilterBanner />
 
@@ -377,12 +394,22 @@ export const MiniDockShell: React.FC = () => {
         aria-live="polite"
         className="h-[22px] bg-accent-soft border-t border-accent/40 px-2.5 flex items-center justify-between font-mono text-[10px] text-accent-fg shrink-0"
       >
-        <span className="truncate font-semibold">
-          {statusMessage ||
-            `${samples.length.toLocaleString()} / ${totalProfileSamplesCount.toLocaleString()} files`}
-        </span>
+        {statusMessage ? (
+          <button
+            type="button"
+            onClick={() => setStatusMessage(null)}
+            title="Click to dismiss"
+            className="truncate font-semibold text-left hover:opacity-80 transition-opacity cursor-pointer"
+          >
+            {statusMessage}
+          </button>
+        ) : (
+          <span className="truncate font-semibold">
+            {`${samples.length.toLocaleString()} / ${totalProfileSamplesCount.toLocaleString()} files`}
+          </span>
+        )}
         <span className="shrink-0 ml-1 opacity-90">
-          {miniDockShortcut || "Ctrl+M"}
+          {formatShortcutDisplay(miniDockShortcut || "Ctrl+M")}
         </span>
       </footer>
 

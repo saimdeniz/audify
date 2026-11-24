@@ -1,7 +1,9 @@
 export {
   beginDragOnMove,
   beginWindowTitlebarDrag,
+  getActiveOsDragSample,
   isOsDragCurrentlyInFlight,
+  setActiveOsDragSample,
   startNativeSampleDrag,
 } from "./dragCore";
 export {

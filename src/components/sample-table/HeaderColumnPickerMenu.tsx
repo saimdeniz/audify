@@ -49,7 +49,7 @@ export const HeaderColumnPickerMenu: React.FC<HeaderColumnPickerMenuProps> = ({
         zIndex: Z_INDEX.floatingMenu,
       }}
       onClick={(e) => e.stopPropagation()}
-      className="w-[196px] bg-surface-2 backdrop-blur-md border border-line-strong rounded-md p-2 shadow-2xl space-y-1.5 text-[11px] font-sans normal-case tracking-normal font-normal text-fg"
+      className="w-[196px] bg-surface-2 audify-overlay-surface border border-line-strong rounded-md p-2 shadow-2xl space-y-1.5 text-[11px] font-sans normal-case tracking-normal font-normal text-fg"
     >
       <div className="flex items-center justify-between border-b border-line pb-1">
         <span className="font-mono text-[9px] uppercase tracking-wider text-accent-fg font-semibold">

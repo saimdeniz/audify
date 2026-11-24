@@ -24,14 +24,14 @@ interface SampleTableRowsPaneProps {
   selectedIdSet: ReadonlySet<number>;
   selectedTagSet: ReadonlySet<number>;
   selectedCollectionId: number | null;
+  isSmartCollectionActive: boolean;
   selectedGenre: string | null;
   similaritySession: SimilaritySession | null;
   isSimilarityMode: boolean;
   duplicateMetaBySampleId: ReadonlyMap<number, DuplicateSampleMeta> | null;
   aiSuggestionsBySampleId: Record<number, AiTagSuggestionItem[]>;
-  rowTagPopover: RowPopoverPosition | null;
-  rowGenrePopover: RowPopoverPosition | null;
-  hoverOverflowTags: RowPopoverPosition | null;
+  activeTagPopoverSampleId: number | null;
+  activeGenrePopoverSampleId: number | null;
   setHoverOverflowTags: React.Dispatch<
     React.SetStateAction<RowPopoverPosition | null>
   >;
@@ -57,7 +57,8 @@ interface SampleTableRowsPaneProps {
  * Virtualized scrollable rows pane for `SampleTable`, owning row virtualization,
  * horizontal scroll header sync, and active-sample scroll-into-view tracking.
  */
-export const SampleTableRowsPane: React.FC<SampleTableRowsPaneProps> = ({
+export const SampleTableRowsPane: React.FC<SampleTableRowsPaneProps> =
+  React.memo(({
   parentRef,
   headerRef,
   samples,
@@ -65,14 +66,14 @@ export const SampleTableRowsPane: React.FC<SampleTableRowsPaneProps> = ({
   selectedIdSet,
   selectedTagSet,
   selectedCollectionId,
+  isSmartCollectionActive,
   selectedGenre,
   similaritySession,
   isSimilarityMode,
   duplicateMetaBySampleId,
   aiSuggestionsBySampleId,
-  rowTagPopover,
-  rowGenrePopover,
-  hoverOverflowTags,
+  activeTagPopoverSampleId,
+  activeGenrePopoverSampleId,
   setHoverOverflowTags,
   columnOrder,
   visibleCols,
@@ -116,7 +117,7 @@ export const SampleTableRowsPane: React.FC<SampleTableRowsPaneProps> = ({
         if (headerRef.current) {
           headerRef.current.scrollLeft = e.currentTarget.scrollLeft;
         }
-        if (hoverOverflowTags) setHoverOverflowTags(null);
+        setHoverOverflowTags((prev) => (prev ? null : prev));
       }}
       className="flex-1 overflow-auto relative outline-none"
       tabIndex={0}
@@ -185,7 +186,6 @@ export const SampleTableRowsPane: React.FC<SampleTableRowsPaneProps> = ({
               key={sample.id}
               sample={sample}
               rowIndex={virtualRow.index}
-              totalSamples={samples.length}
               startOffsetPx={virtualRow.start}
               totalTableWidth={totalTableWidth}
               isSimilarityMode={isSimilarityMode}
@@ -200,12 +200,13 @@ export const SampleTableRowsPane: React.FC<SampleTableRowsPaneProps> = ({
               pendingAiTags={pendingAiTags}
               isPrimarySelected={isPrimarySelected}
               isRowSelected={isRowSelected}
-              isTagPopoverOpen={rowTagPopover?.sampleId === sample.id}
-              isGenrePopoverOpen={rowGenrePopover?.sampleId === sample.id}
+              isTagPopoverOpen={activeTagPopoverSampleId === sample.id}
+              isGenrePopoverOpen={activeGenrePopoverSampleId === sample.id}
               columnOrder={columnOrder}
               visibleCols={visibleCols}
               colWidths={colWidths}
               selectedCollectionId={selectedCollectionId}
+              isSmartCollectionActive={isSmartCollectionActive}
               selectedGenre={selectedGenre}
               selectedTagSet={selectedTagSet}
               genreColorMap={genreColorMap}
@@ -223,4 +224,4 @@ export const SampleTableRowsPane: React.FC<SampleTableRowsPaneProps> = ({
       </div>
     </div>
   );
-};
+});

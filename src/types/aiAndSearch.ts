@@ -69,6 +69,16 @@ export interface SimilaritySearchResult {
   scanned_vectors: number;
 }
 
+export interface ExternalSimilaritySearchResult {
+  anchor_sample_id: number;
+  probe_id: string;
+  file_name: string;
+  anchor_duration_ms: number;
+  matches: SimilarityMatch[];
+  elapsed_ms: number;
+  scanned_vectors: number;
+}
+
 export interface AiTagSuggestionItem {
   sample_id: number;
   tag_name: string;

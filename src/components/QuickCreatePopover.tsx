@@ -202,7 +202,7 @@ export const QuickCreatePopover: React.FC<QuickCreatePopoverProps> = ({
               width: `${popoverPos.width}px`,
               zIndex: Z_INDEX.popoverFloating,
             }}
-            className="bg-surface-2 border border-line-strong rounded-lg p-2.5 shadow-2xl select-none text-fg backdrop-blur-md"
+            className="bg-surface-2 border border-line-strong rounded-lg p-2.5 shadow-2xl select-none text-fg audify-overlay-surface"
             onClick={(e) => e.stopPropagation()}
           >
             <form onSubmit={handleSubmit} className="space-y-2">

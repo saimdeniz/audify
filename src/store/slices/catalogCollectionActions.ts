@@ -270,6 +270,14 @@ export function createCatalogCollectionActions(ctx: StoreSliceContext) {
       sampleIds: number[]
     ) => {
       if (sampleIds.length === 0) return;
+      const targetCol = get().collections.find((c) => c.id === collectionId);
+      if (targetCol?.smart_query?.trim()) {
+        emitNotice(
+          "Smart Collections are dynamic — edit the query to change matched items",
+          "info"
+        );
+        return;
+      }
       try {
         const col = await invokeCommand("remove_samples_from_collection", {
           collectionId,

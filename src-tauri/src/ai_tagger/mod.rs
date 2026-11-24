@@ -19,6 +19,7 @@ use self::similarity::AiVectorCache;
 use self::types::ResolvedAiModelConfig;
 use crate::db::deterministic_color_for_name;
 use rusqlite::{params, Connection};
+use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -76,10 +77,23 @@ pub(crate) fn unload_idle_caches_at(
     freed
 }
 
+#[derive(Debug, Clone)]
+pub struct ExternalSimilarityProbe {
+    pub probe_id: String,
+    pub file_name: String,
+    pub duration_ms: i64,
+    pub model_id: String,
+    pub embedding: [f32; self::types::AI_EMBEDDING_DIM],
+}
+
 #[derive(Default)]
 pub struct AiTaggerState {
     pub loaded_model: Arc<Mutex<Option<Arc<LoadedOnnxModel>>>>,
+    /// Serializes cold ONNX session initialization so concurrent similarity/tagging calls
+    /// never load duplicate ~15-30 MB model sessions simultaneously.
+    model_load_lock: Mutex<()>,
     pub vector_cache: Arc<Mutex<AiVectorCache>>,
+    pub external_probes: Arc<Mutex<VecDeque<ExternalSimilarityProbe>>>,
     pub download_cancel: Arc<AtomicBool>,
     pub analysis_cancel: Arc<AtomicBool>,
     pub download_running: AtomicBool,
@@ -136,6 +150,9 @@ impl AiTaggerState {
         user_dir: &Path,
     ) -> Result<(Arc<LoadedOnnxModel>, ResolvedAiModelConfig), String> {
         self.touch_activity(None);
+        if self.download_running.load(Ordering::SeqCst) {
+            return Err("AI model update is currently in progress; try again shortly".to_string());
+        }
         // Fast path: check already-loaded ONNX session BEFORE running disk SHA-256 verification
         // on the ~15 MB runtime DLLs. Any model download/import/removal calls `clear_cached_runtime_state()`.
         let (expected_id, _name, raw_model_path, _is_custom) =
@@ -162,6 +179,17 @@ impl AiTaggerState {
                     return Ok((Arc::clone(existing), cfg));
                 }
             }
+        }
+
+        // Serialize cold model loads so concurrent calls share one ONNX session and coordinate
+        // cleanly with `clear_cached_runtime_state()` during model import/removal.
+        let _load_guard = self
+            .model_load_lock
+            .lock()
+            .map_err(|_| "AI model load lock poisoned".to_string())?;
+
+        if self.download_running.load(Ordering::SeqCst) {
+            return Err("AI model update is currently in progress; try again shortly".to_string());
         }
 
         let cfg = resolve_ready_ai_config(user_dir)?;
@@ -191,11 +219,15 @@ impl AiTaggerState {
     }
 
     pub fn clear_cached_runtime_state(&self) {
+        let _load_guard = self.model_load_lock.lock();
         if let Ok(mut guard) = self.loaded_model.lock() {
             *guard = None;
         }
         if let Ok(mut cache) = self.vector_cache.lock() {
             cache.clear();
+        }
+        if let Ok(mut probes) = self.external_probes.lock() {
+            probes.clear();
         }
     }
 
@@ -304,7 +336,7 @@ mod tests {
     use super::unload_idle_caches_at;
     use rusqlite::Connection;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn yamnet_class_map_csv_has_521_labels() {
@@ -616,7 +648,7 @@ mod tests {
             sample_id: 1,
             library_id: 1,
             duration_ms: 500,
-            parent_folder_norm: "f:/sfx".to_string(),
+            parent_folder_norm: Arc::from("f:/sfx"),
             vector: [0.0; 128],
         });
         initial_cache.id_to_index.insert(1, 0);

@@ -12,7 +12,7 @@ use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{COLORREF, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject,
     AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION,
@@ -22,8 +22,8 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, IsWindow, LoadCursorW,
     PeekMessageW, RegisterClassExW, SetCursor, SetWindowPos, ShowWindow, TranslateMessage,
-    UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, HMENU, HWND_TOPMOST, IDC_HAND, MA_NOACTIVATE,
-    MSG, PM_REMOVE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA,
+    UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, HWND_TOPMOST, IDC_HAND, MA_NOACTIVATE, MSG,
+    PM_REMOVE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA,
     WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_SETCURSOR, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
@@ -52,8 +52,8 @@ unsafe extern "system" fn pill_wnd_proc(
             LRESULT(0)
         }
         WM_SETCURSOR => {
-            if let Ok(cursor) = LoadCursorW(HINSTANCE(0), IDC_HAND) {
-                SetCursor(cursor);
+            if let Ok(cursor) = LoadCursorW(None, IDC_HAND) {
+                SetCursor(Some(cursor));
                 return LRESULT(1);
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -66,7 +66,7 @@ fn ensure_class_registered() -> bool {
     *CLASS_REGISTERED.get_or_init(|| unsafe {
         let hinstance: HINSTANCE = GetModuleHandleW(PCWSTR::null())
             .map(Into::into)
-            .unwrap_or(HINSTANCE(0));
+            .unwrap_or_default();
         let class_name = wide_null("AudifyEdgePeekPillWindow");
         let wc = WNDCLASSEXW {
             cbSize: size_of::<WNDCLASSEXW>() as u32,
@@ -99,10 +99,10 @@ impl NativeEdgePill {
         }
         let class_name = wide_null("AudifyEdgePeekPillWindow");
         let title = wide_null("Audify Edge Handle");
-        let hwnd = unsafe {
+        let Ok(hwnd) = (unsafe {
             let hinstance: HINSTANCE = GetModuleHandleW(PCWSTR::null())
                 .map(Into::into)
-                .unwrap_or(HINSTANCE(0));
+                .unwrap_or_default();
             CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
                 PCWSTR(class_name.as_ptr()),
@@ -112,13 +112,15 @@ impl NativeEdgePill {
                 0,
                 10,
                 148,
-                HWND(0),
-                HMENU(0),
-                hinstance,
+                None,
+                None,
+                Some(hinstance),
                 None,
             )
+        }) else {
+            return None;
         };
-        if hwnd.0 == 0 {
+        if hwnd.is_invalid() {
             return None;
         }
         Some(Self {
@@ -137,7 +139,7 @@ impl NativeEdgePill {
     pub(super) fn pump_messages(&self) {
         unsafe {
             let mut msg = MSG::default();
-            while PeekMessageW(&mut msg, HWND(0), 0, 0, PM_REMOVE).as_bool() {
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
@@ -149,7 +151,7 @@ impl NativeEdgePill {
             return;
         }
         unsafe {
-            if IsWindow(self.hwnd).as_bool() {
+            if IsWindow(Some(self.hwnd)).as_bool() {
                 let _ = ShowWindow(self.hwnd, SW_HIDE);
             }
         }
@@ -179,6 +181,7 @@ impl NativeEdgePill {
             || self.last_y != y
             || !self.visible;
 
+        let was_visible = self.visible;
         if needs_redraw {
             self.render_layered(x, y, w, h, scale, side, theme, hovered);
             self.last_x = x;
@@ -190,21 +193,23 @@ impl NativeEdgePill {
             self.last_hovered = hovered;
         }
 
-        unsafe {
-            if IsWindow(self.hwnd).as_bool() {
-                if !self.visible {
-                    let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
-                    self.visible = true;
+        if !was_visible || needs_redraw {
+            unsafe {
+                if IsWindow(Some(self.hwnd)).as_bool() {
+                    if !self.visible {
+                        let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+                        self.visible = true;
+                    }
+                    let _ = SetWindowPos(
+                        self.hwnd,
+                        Some(HWND_TOPMOST),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+                    );
                 }
-                let _ = SetWindowPos(
-                    self.hwnd,
-                    HWND_TOPMOST,
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
-                );
             }
         }
     }
@@ -222,16 +227,16 @@ impl NativeEdgePill {
         hovered: bool,
     ) {
         unsafe {
-            if !IsWindow(self.hwnd).as_bool() {
+            if !IsWindow(Some(self.hwnd)).as_bool() {
                 return;
             }
-            let screen_dc = GetDC(HWND(0));
-            if screen_dc.0 == 0 {
+            let screen_dc = GetDC(None);
+            if screen_dc.is_invalid() {
                 return;
             }
-            let mem_dc = CreateCompatibleDC(screen_dc);
-            if mem_dc.0 == 0 {
-                let _ = ReleaseDC(HWND(0), screen_dc);
+            let mem_dc = CreateCompatibleDC(Some(screen_dc));
+            if mem_dc.is_invalid() {
+                let _ = ReleaseDC(None, screen_dc);
                 return;
             }
 
@@ -250,21 +255,21 @@ impl NativeEdgePill {
 
             let mut bits_ptr: *mut c_void = null_mut();
             let dib = CreateDIBSection(
-                screen_dc,
+                Some(screen_dc),
                 &bmi,
                 DIB_RGB_COLORS,
                 &mut bits_ptr,
-                HANDLE(0),
+                None,
                 0,
             );
             let Ok(hbitmap) = dib else {
                 let _ = DeleteDC(mem_dc);
-                let _ = ReleaseDC(HWND(0), screen_dc);
+                let _ = ReleaseDC(None, screen_dc);
                 return;
             };
-            if hbitmap.0 == 0 || bits_ptr.is_null() {
+            if hbitmap.is_invalid() || bits_ptr.is_null() {
                 let _ = DeleteDC(mem_dc);
-                let _ = ReleaseDC(HWND(0), screen_dc);
+                let _ = ReleaseDC(None, screen_dc);
                 return;
             }
 
@@ -272,7 +277,7 @@ impl NativeEdgePill {
             let pixels = std::slice::from_raw_parts_mut(bits_ptr as *mut u8, total_bytes);
             paint_pill_rgba(pixels, w, h, scale as f32, side, theme, hovered);
 
-            let old_obj = SelectObject(mem_dc, hbitmap);
+            let old_obj = SelectObject(mem_dc, hbitmap.into());
             let pt_dst = POINT { x, y };
             let size = SIZE { cx: w, cy: h };
             let pt_src = POINT { x: 0, y: 0 };
@@ -284,10 +289,10 @@ impl NativeEdgePill {
             };
             let _ = UpdateLayeredWindow(
                 self.hwnd,
-                screen_dc,
+                Some(screen_dc),
                 Some(&pt_dst),
                 Some(&size),
-                mem_dc,
+                Some(mem_dc),
                 Some(&pt_src),
                 COLORREF(0),
                 Some(&blend),
@@ -295,9 +300,9 @@ impl NativeEdgePill {
             );
 
             let _ = SelectObject(mem_dc, old_obj);
-            let _ = DeleteObject(hbitmap);
+            let _ = DeleteObject(hbitmap.into());
             let _ = DeleteDC(mem_dc);
-            let _ = ReleaseDC(HWND(0), screen_dc);
+            let _ = ReleaseDC(None, screen_dc);
         }
     }
 }
@@ -305,7 +310,7 @@ impl NativeEdgePill {
 impl Drop for NativeEdgePill {
     fn drop(&mut self) {
         unsafe {
-            if self.hwnd.0 != 0 && IsWindow(self.hwnd).as_bool() {
+            if !self.hwnd.is_invalid() && IsWindow(Some(self.hwnd)).as_bool() {
                 let _ = DestroyWindow(self.hwnd);
             }
         }

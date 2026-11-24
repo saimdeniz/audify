@@ -323,7 +323,8 @@ dependencies = [
  "tauri-plugin-dialog",
  "ureq",
  "walkdir",
- "windows 0.52.0",
+ "webview2-com",
+ "windows 0.62.2",
  "zip",
 ]
 

@@ -2,6 +2,11 @@ import { describe, expect, it, beforeEach } from "vitest";
 import { applySort } from "../store/filterEngine";
 import { SampleItem } from "../types";
 import { getMatchingSynonymsForQuery } from "./sfxThesaurus";
+import { transposeMusicalKey } from "./search/musicalKey";
+import {
+  applyAutocompleteSuggestion,
+  getSearchAutocompleteSuggestions,
+} from "./search/searchAutocomplete";
 import {
   clearSmartSearchCache,
   executeSmartSearch,
@@ -325,5 +330,116 @@ describe("smartSearch engine", () => {
     expect(
       executeSmartSearch(samples, "pad channels:stereo sr:48k bit:24").map((s) => s.id)
     ).toEqual([2]);
+  });
+
+  it("transposes musical & Camelot keys accurately across positive, negative, and octave shifts", () => {
+    expect(transposeMusicalKey("Am", 3)).toEqual({
+      fromKey: "Am",
+      fromCamelot: "8A",
+      toKey: "Cm",
+      toCamelot: "5A",
+    });
+    expect(transposeMusicalKey("8A", -2)).toEqual({
+      fromKey: "Am",
+      fromCamelot: "8A",
+      toKey: "Gm",
+      toCamelot: "6A",
+    });
+    expect(transposeMusicalKey("8B", -2)).toEqual({
+      fromKey: "C",
+      fromCamelot: "8B",
+      toKey: "Bb",
+      toCamelot: "6B",
+    });
+    expect(transposeMusicalKey("C", 12)).toEqual({
+      fromKey: "C",
+      fromCamelot: "8B",
+      toKey: "C",
+      toCamelot: "8B",
+    });
+    expect(transposeMusicalKey("F#m", -12)).toEqual({
+      fromKey: "F#m",
+      fromCamelot: "11A",
+      toKey: "F#m",
+      toCamelot: "11A",
+    });
+    expect(transposeMusicalKey("", 3)).toBeNull();
+    expect(transposeMusicalKey("NotAKey", 2)).toBeNull();
+  });
+
+  it("provides Smart Search inline autocomplete for tag:, genre:, key:~, and operators while ignoring plain keywords", () => {
+    const tags = [
+      { id: 1, name: "Impact", color: "#F59E0B", sample_count: 120 },
+      { id: 2, name: "Sci Fi", color: "#38BDF8", sample_count: 80 },
+      { id: 3, name: "Işık", color: "#10B981", sample_count: 15 },
+    ];
+    const genres = [
+      { id: 1, name: "Ambient", color: "#8B5CF6", sample_count: 200 },
+      { id: 2, name: "Jazz", color: "#EC4899", sample_count: 50 },
+    ];
+
+    // Plain keyword must never interrupt normal searching
+    expect(getSearchAutocompleteSuggestions("whoosh", 6, tags, genres)).toBeNull();
+
+    // tag: prefix with Turkish folding + auto-quoting multi-word tags
+    const tagCtx = getSearchAutocompleteSuggestions("whoosh tag:sci", 14, tags, genres);
+    expect(tagCtx?.items[0].label).toBe("Sci Fi");
+    const applied = applyAutocompleteSuggestion("whoosh tag:sci", tagCtx!, tagCtx!.items[0]);
+    expect(applied.nextQuery).toBe('whoosh tag:"Sci Fi" ');
+
+    // Negated genre: and harmonic key:~
+    const genreCtx = getSearchAutocompleteSuggestions("-genre:ja", 9, tags, genres);
+    expect(genreCtx?.items[0].insertToken).toBe("-genre:Jazz");
+
+    const keyCtx = getSearchAutocompleteSuggestions("key:~8a", 7, tags, genres);
+    expect(keyCtx?.items[0].insertToken).toBe("key:~Am");
+    expect(keyCtx?.items[0].meta).toBe("8A");
+
+    // Static audio operator ext:
+    const extCtx = getSearchAutocompleteSuggestions("ext:fl", 6, tags, genres);
+    expect(extCtx?.items[0].insertToken).toBe("ext:flac");
+
+    // type: offers loop/oneshot/fav (never invalid wav/mp3) and supports is:/format:/size:
+    const typeCtx = getSearchAutocompleteSuggestions("type:", 5, tags, genres);
+    expect(typeCtx?.items.map((i) => i.label)).toEqual([
+      "type:loop",
+      "type:oneshot",
+      "type:fav",
+    ]);
+    const isCtx = getSearchAutocompleteSuggestions("is:fa", 5, tags, genres);
+    expect(isCtx?.items[0].insertToken).toBe("is:fav");
+    const fmtCtx = getSearchAutocompleteSuggestions("format:wa", 9, tags, genres);
+    expect(fmtCtx?.items[0].insertToken).toBe("format:wav");
+
+    // Quoted multi-word tag preserves active token across spaces
+    const quotedCtx = getSearchAutocompleteSuggestions('tag:"Sci ', 9, tags, genres);
+    expect(quotedCtx?.items[0].label).toBe("Sci Fi");
+
+    // Exact completed token auto-dismisses popup
+    expect(getSearchAutocompleteSuggestions("ext:wav", 7, tags, genres)).toBeNull();
+    expect(getSearchAutocompleteSuggestions("tag:Impact", 10, tags, genres)).toBeNull();
+
+    // Dynamic folder: / -path: autocomplete with auto-quoting for multi-word folder names
+    const folderStats = [
+      { library_id: 1, folder_path: "D:/SFX/Ambient", count: 146 },
+      { library_id: 1, folder_path: "D:/SFX/Scott Buckley", count: 81 },
+    ];
+    const folderCtx = getSearchAutocompleteSuggestions(
+      "folder:sco",
+      10,
+      tags,
+      genres,
+      folderStats
+    );
+    expect(folderCtx?.items[0].label).toBe("Scott Buckley");
+    expect(folderCtx?.items[0].insertToken).toBe('folder:"Scott Buckley"');
+    const negPathCtx = getSearchAutocompleteSuggestions(
+      "-path:amb",
+      9,
+      tags,
+      genres,
+      folderStats
+    );
+    expect(negPathCtx?.items[0].insertToken).toBe("-path:Ambient");
   });
 });

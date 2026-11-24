@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { AUDIFY_STORAGE_KEYS } from "../constants/storageKeys";
+import type { SampleItem } from "../types";
 import { safeGetItem } from "./localStorageSafe";
 import { folderNameFromPath } from "./pathHelpers";
 
@@ -78,6 +79,27 @@ export function beginWindowTitlebarDrag(
 
 let isNativeDragInFlight = false;
 let isLeftMouseButtonHeld = false;
+let activeOsDragPayload: {
+  sample: SampleItem;
+  single: boolean;
+  origin: "list" | "deck-header";
+} | null = null;
+
+export function setActiveOsDragSample(
+  sample: SampleItem | null,
+  single = false,
+  origin: "list" | "deck-header" = "list"
+): void {
+  activeOsDragPayload = sample ? { sample, single, origin } : null;
+}
+
+export function getActiveOsDragSample(): {
+  sample: SampleItem;
+  single: boolean;
+  origin: "list" | "deck-header";
+} | null {
+  return activeOsDragPayload;
+}
 
 export function isOsDragCurrentlyInFlight(): boolean {
   return isNativeDragInFlight;

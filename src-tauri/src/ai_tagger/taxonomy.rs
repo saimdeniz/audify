@@ -181,7 +181,7 @@ pub fn persist_ai_tags_for_sample(
 ) -> Result<(usize, usize), String> {
     let existing_tags: HashSet<String> = {
         let mut stmt = conn
-            .prepare(
+            .prepare_cached(
                 "SELECT LOWER(t.name)
                  FROM sample_tags st
                  JOIN tags t ON t.id = st.tag_id
@@ -196,7 +196,7 @@ pub fn persist_ai_tags_for_sample(
 
     let dismissed: HashSet<String> = {
         let mut stmt = conn
-            .prepare(
+            .prepare_cached(
                 "SELECT LOWER(tag_name)
                  FROM ai_tag_suggestions
                  WHERE sample_id = ?1 AND model_id = ?2 AND status = 'dismissed'",
@@ -218,52 +218,65 @@ pub fn persist_ai_tags_for_sample(
         }
 
         if auto_apply {
-            let tag_id: i64 = match conn.query_row(
-                "SELECT id FROM tags WHERE LOWER(name) = LOWER(?1) LIMIT 1",
-                [&item.tag_name],
-                |r| r.get(0),
-            ) {
-                Ok(id) => id,
-                Err(_) => {
-                    let color = deterministic_color_for_name(&item.tag_name);
-                    conn.execute(
-                        "INSERT INTO tags (name, color, is_manual) VALUES (?1, ?2, 0)",
-                        params![item.tag_name, color],
-                    )
+            let tag_id: i64 = {
+                let mut find_tag = conn
+                    .prepare_cached("SELECT id FROM tags WHERE LOWER(name) = LOWER(?1) LIMIT 1")
                     .map_err(|e| e.to_string())?;
-                    conn.last_insert_rowid()
+                match find_tag.query_row([&item.tag_name], |r| r.get(0)) {
+                    Ok(id) => id,
+                    Err(_) => {
+                        let color = deterministic_color_for_name(&item.tag_name);
+                        let mut ins_tag = conn
+                            .prepare_cached(
+                                "INSERT INTO tags (name, color, is_manual) VALUES (?1, ?2, 0)",
+                            )
+                            .map_err(|e| e.to_string())?;
+                        ins_tag
+                            .execute(params![item.tag_name, color])
+                            .map_err(|e| e.to_string())?;
+                        conn.last_insert_rowid()
+                    }
                 }
             };
-            let inserted = conn
-                .execute(
-                    "INSERT OR IGNORE INTO sample_tags (sample_id, tag_id, is_manual, source) VALUES (?1, ?2, 0, 'ai_auto')",
-                    params![sample_id, tag_id],
-                )
-                .map_err(|e| format!("Failed inserting auto AI tag: {}", e))?;
+            let inserted = {
+                let mut ins_st = conn
+                    .prepare_cached(
+                        "INSERT OR IGNORE INTO sample_tags (sample_id, tag_id, is_manual, source) VALUES (?1, ?2, 0, 'ai_auto')",
+                    )
+                    .map_err(|e| format!("Failed inserting auto AI tag: {}", e))?;
+                ins_st
+                    .execute(params![sample_id, tag_id])
+                    .map_err(|e| format!("Failed inserting auto AI tag: {}", e))?
+            };
             if inserted > 0 {
                 tags_applied += 1;
             }
-            conn.execute(
-                "INSERT INTO ai_tag_suggestions (sample_id, tag_name, confidence, model_id, status)
-                 VALUES (?1, ?2, ?3, ?4, 'approved')
-                 ON CONFLICT(sample_id, tag_name) DO UPDATE SET
-                     confidence = excluded.confidence,
-                     model_id = excluded.model_id,
-                     status = CASE WHEN ai_tag_suggestions.status = 'dismissed' THEN 'dismissed' ELSE 'approved' END",
-                params![sample_id, item.tag_name, item.confidence, model_id],
-            )
-            .map_err(|e| format!("Failed recording approved AI suggestion: {}", e))?;
+            let mut ins_app = conn
+                .prepare_cached(
+                    "INSERT INTO ai_tag_suggestions (sample_id, tag_name, confidence, model_id, status)
+                     VALUES (?1, ?2, ?3, ?4, 'approved')
+                     ON CONFLICT(sample_id, tag_name) DO UPDATE SET
+                         confidence = excluded.confidence,
+                         model_id = excluded.model_id,
+                         status = CASE WHEN ai_tag_suggestions.status = 'dismissed' THEN 'dismissed' ELSE 'approved' END",
+                )
+                .map_err(|e| format!("Failed recording approved AI suggestion: {}", e))?;
+            ins_app
+                .execute(params![sample_id, item.tag_name, item.confidence, model_id])
+                .map_err(|e| format!("Failed recording approved AI suggestion: {}", e))?;
         } else {
-            let affected = conn
-                .execute(
+            let mut ins_pend = conn
+                .prepare_cached(
                     "INSERT INTO ai_tag_suggestions (sample_id, tag_name, confidence, model_id, status)
                      VALUES (?1, ?2, ?3, ?4, 'pending')
                      ON CONFLICT(sample_id, tag_name) DO UPDATE SET
                          confidence = excluded.confidence,
                          model_id = excluded.model_id
                      WHERE ai_tag_suggestions.status = 'pending'",
-                    params![sample_id, item.tag_name, item.confidence, model_id],
                 )
+                .map_err(|e| format!("Failed recording pending AI suggestion: {}", e))?;
+            let affected = ins_pend
+                .execute(params![sample_id, item.tag_name, item.confidence, model_id])
                 .map_err(|e| format!("Failed recording pending AI suggestion: {}", e))?;
             if affected > 0 {
                 suggestions_added += 1;

@@ -80,6 +80,8 @@ export interface SampleItem {
   created_at: string;
   file_modified_at?: number | null;
   tags: SampleTagBadge[];
+  /** Transient compact IPC wire field hydrated into `tags` by `internSamplePool` and stripped. */
+  tag_ids?: number[];
   is_trashed?: boolean;
   trashed_at?: string | null;
   original_file_path?: string | null;
@@ -114,8 +116,16 @@ export interface SliceRange {
   endSec: number;
 }
 
+export interface ExternalSimilaritySource {
+  probeId: string;
+  fileName: string;
+  filePath?: string;
+  durationMs: number;
+}
+
 export interface SimilaritySession {
   anchorSample: SampleItem;
+  externalSource?: ExternalSimilaritySource;
   scoresById: ReadonlyMap<number, number>;
   minScore: number;
   topK: number;

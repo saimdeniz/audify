@@ -1,17 +1,17 @@
 use super::decoder::{AudioSource, DecodedTrack};
-use super::streaming::StreamRing;
+use super::streaming::{StreamRing, StreamingTrack};
 use std::sync::MutexGuard;
 
 enum SourceReader<'a> {
     InMemory(&'a DecodedTrack),
-    Streaming(Option<MutexGuard<'a, StreamRing>>),
+    Streaming(&'a StreamingTrack, Option<MutexGuard<'a, StreamRing>>),
 }
 
 impl<'a> SourceReader<'a> {
     fn from_source(src: &'a AudioSource) -> Self {
         match src {
             AudioSource::InMemory(t) => Self::InMemory(t),
-            AudioSource::Streaming(t) => Self::Streaming(t.try_lock_ring()),
+            AudioSource::Streaming(t) => Self::Streaming(t, t.try_lock_ring()),
         }
     }
 
@@ -19,14 +19,28 @@ impl<'a> SourceReader<'a> {
     fn read_frame(&self, frame: i64) -> Option<(f32, f32)> {
         match self {
             Self::InMemory(t) => t.read_frame(frame),
-            Self::Streaming(Some(guard)) => guard.read_frame(frame),
-            Self::Streaming(None) => None,
+            Self::Streaming(_, Some(guard)) => guard.read_frame(frame),
+            Self::Streaming(_, None) => None,
         }
     }
 
-    fn advance_floor(&mut self, playhead_frame: u64) {
-        if let Self::Streaming(Some(guard)) = self {
-            guard.advance_read_floor(playhead_frame);
+    fn advance_floor(self, playhead_frame: u64) {
+        match self {
+            Self::Streaming(track, Some(mut guard)) => {
+                guard.advance_read_floor(playhead_frame);
+                let should_wake = !track.is_eof() && guard.free_frames() >= 4096;
+                drop(guard);
+                if should_wake {
+                    track.notify_producer();
+                }
+            }
+            Self::Streaming(track, None) => {
+                // Recover from contended ring lock or missed Condvar wakeup during seek/refill
+                if track.has_pending_seek() || !track.is_eof() {
+                    track.notify_producer();
+                }
+            }
+            Self::InMemory(_) => {}
         }
     }
 }
@@ -94,6 +108,8 @@ pub struct PlaybackDsp {
     declick_l: f32,
     declick_r: f32,
     declick_env: f32,
+    loop_post_tail_active: bool,
+    did_head_xfade: bool,
 }
 
 impl PlaybackDsp {
@@ -118,6 +134,8 @@ impl PlaybackDsp {
             declick_l: 0.0,
             declick_r: 0.0,
             declick_env: 0.0,
+            loop_post_tail_active: false,
+            did_head_xfade: false,
         }
     }
 
@@ -132,11 +150,12 @@ impl PlaybackDsp {
         start_sec: f64,
         slice_start_sec: Option<f64>,
         slice_end_sec: Option<f64>,
-    ) {
+    ) -> Option<(AudioSource, u64)> {
         let sr = source.sample_rate().max(1) as f64;
         let max_frame = source.total_frames() as f64;
         let clamped_frame = (start_sec.max(0.0) * sr).min(max_frame);
-        source.request_seek(clamped_frame.floor() as u64);
+        let pending_seek = matches!(source, AudioSource::Streaming(_))
+            .then(|| (source.clone(), clamped_frame.floor() as u64));
 
         if self.playing && (self.last_out_l.abs() > 1e-4 || self.last_out_r.abs() > 1e-4) {
             self.declick_l = self.last_out_l;
@@ -146,6 +165,8 @@ impl PlaybackDsp {
         self.slice_start_sec = slice_start_sec;
         self.slice_end_sec = slice_end_sec;
         self.respect_slice_bounds = true;
+        self.loop_post_tail_active = false;
+        self.did_head_xfade = false;
         self.source = Some(source);
         self.playhead_frame = clamped_frame;
         self.gain_smooth = self.target_gain();
@@ -157,6 +178,7 @@ impl PlaybackDsp {
             self.fade_env = 0.0;
             self.fade_mode = FadeMode::Steady;
         }
+        pending_seek
     }
 
     pub fn clear_source(&mut self) -> Option<AudioSource> {
@@ -169,6 +191,8 @@ impl PlaybackDsp {
         self.fade_env = 0.0;
         self.fade_mode = FadeMode::Steady;
         self.playhead_frame = 0.0;
+        self.loop_post_tail_active = false;
+        self.did_head_xfade = false;
         self.source.take()
     }
 
@@ -245,21 +269,23 @@ impl PlaybackDsp {
         }
     }
 
-    pub fn play(&mut self) {
-        let Some(src) = self.source.as_ref() else {
-            return;
-        };
+    pub fn play(&mut self) -> Option<(AudioSource, u64)> {
+        let src = self.source.as_ref()?;
         let (start_f, end_f) = if self.respect_slice_bounds {
             self.active_frame_bounds(src)
         } else {
             (0.0, src.total_frames().max(1) as f64)
         };
+        let mut pending_seek = None;
         if self.playhead_frame >= end_f - 1.0 || self.playhead_frame < start_f {
             self.playhead_frame = start_f;
-            src.request_seek(start_f.floor() as u64);
+            if matches!(src, AudioSource::Streaming(_)) {
+                pending_seek = Some((src.clone(), start_f.floor() as u64));
+            }
         }
         self.playing = true;
         self.fade_mode = FadeMode::FadeIn;
+        pending_seek
     }
 
     pub fn pause(&mut self) {
@@ -268,21 +294,39 @@ impl PlaybackDsp {
         }
     }
 
-    pub fn stop(&mut self) {
+    /// Immediately clears playback state when no active audio output stream exists
+    /// (e.g., after DAC disconnect or output device open failure) so the controller
+    /// parks cleanly instead of spinning in `FadeOutToPause` forever.
+    pub fn force_pause_immediate(&mut self) {
+        self.playing = false;
+        self.fade_env = 0.0;
+        self.fade_mode = FadeMode::Steady;
+        self.declick_env = 0.0;
+        self.loop_post_tail_active = false;
+        self.did_head_xfade = false;
+    }
+
+    pub fn stop(&mut self) -> Option<(AudioSource, u64)> {
         self.respect_slice_bounds = true;
+        self.loop_post_tail_active = false;
+        self.did_head_xfade = false;
         if self.playing {
             self.fade_mode = FadeMode::FadeOutToStop;
+            None
         } else if let Some(src) = self.source.as_ref() {
             let (start_f, _) = self.active_frame_bounds(src);
             self.playhead_frame = start_f;
-            src.request_seek(start_f.floor() as u64);
+            matches!(src, AudioSource::Streaming(_))
+                .then(|| (src.clone(), start_f.floor() as u64))
+        } else {
+            None
         }
     }
 
-    pub fn seek_sec(&mut self, target_sec: f64) {
-        let Some(src) = self.source.as_ref() else {
-            return;
-        };
+    pub fn seek_sec(&mut self, target_sec: f64) -> Option<(AudioSource, u64)> {
+        let src = self.source.as_ref()?;
+        self.loop_post_tail_active = false;
+        self.did_head_xfade = false;
         let sr = src.sample_rate().max(1) as f64;
         let total = src.total_frames().max(1) as f64;
         let target_f = (target_sec.max(0.0) * sr).clamp(0.0, total);
@@ -300,11 +344,13 @@ impl PlaybackDsp {
             self.declick_env = 1.0;
         }
         self.playhead_frame = target_f;
-        src.request_seek(target_f.floor() as u64);
+        let pending_seek = matches!(src, AudioSource::Streaming(_))
+            .then(|| (src.clone(), target_f.floor() as u64));
         if self.playing {
             self.fade_env = 0.0;
             self.fade_mode = FadeMode::FadeIn;
         }
+        pending_seek
     }
 
     #[inline]
@@ -408,15 +454,24 @@ impl PlaybackDsp {
             return events;
         };
         let src_sr = src.sample_rate().max(1) as f64;
+        let total_f = src.total_frames().max(1) as f64;
         let step = (src_sr / out_sr) * rate;
         let (start_f, end_f) = if has_slice {
             self.active_frame_bounds(src)
         } else {
-            (0.0, src.total_frames().max(1) as f64)
+            (0.0, total_f)
         };
+        let span_len = (end_f - start_f).max(1.0);
+        let xfade_len = (src_sr * 0.0025).min(span_len * 0.25);
+        // Streaming tracks reset their ring to `start_f` upon loop wrap, so `end_f + elapsed`
+        // is no longer resident; restrict post-tail blending to full in-memory sources.
+        let has_post_tail = matches!(src, AudioSource::InMemory(_))
+            && has_slice
+            && xfade_len >= 4.0
+            && end_f + xfade_len <= total_f;
         let src_eof = src.is_eof();
         // Acquire streaming ring lock ONCE per audio callback buffer (zero per-sample mutex ops)
-        let mut reader = SourceReader::from_source(src);
+        let reader = SourceReader::from_source(src);
         let mut pending_rt_seek: Option<u64> = None;
 
         for frame_out in out.chunks_exact_mut(out_channels) {
@@ -435,17 +490,13 @@ impl PlaybackDsp {
                 self.gain_smooth += g_diff.signum() * gain_step;
             }
 
-            // Envelope state machine (anti-click fade-in / fade-out)
+            // Advance FadeOut envelopes BEFORE reading audio so pause/stop never hangs on underrun;
+            // FadeIn is intentionally deferred until real audio samples are available below.
             match self.fade_mode {
                 FadeMode::Steady => {
                     self.fade_env = 1.0;
                 }
-                FadeMode::FadeIn => {
-                    self.fade_env = (self.fade_env + fade_step).min(1.0);
-                    if self.fade_env >= 1.0 {
-                        self.fade_mode = FadeMode::Steady;
-                    }
-                }
+                FadeMode::FadeIn => {}
                 FadeMode::FadeOutToPause => {
                     self.fade_env = (self.fade_env - fade_step).max(0.0);
                     if self.fade_env <= 0.0 {
@@ -478,14 +529,38 @@ impl PlaybackDsp {
             if at_end {
                 if self.looping {
                     let overshoot = (self.playhead_frame - end_f).max(0.0);
-                    let span = (end_f - start_f).max(1.0);
-                    self.playhead_frame = start_f + (overshoot % span);
+                    if has_post_tail {
+                        // Slice loop with real audio past `end_f`: wrap with 0 drift and blend
+                        // the natural post-tail into the head over `xfade_len` after wrap.
+                        self.playhead_frame = start_f + (overshoot % span_len);
+                        self.loop_post_tail_active = true;
+                        self.did_head_xfade = false;
+                    } else if self.did_head_xfade && xfade_len >= 4.0 {
+                        // Full-track / EOF loop already blended `[start_f .. start_f + xfade_len)`
+                        // across `[end_f - xfade_len .. end_f)`. Resume right at `start_f + xfade_len`
+                        // so the seam stays sample-continuous with zero double-triggering.
+                        let eff_span = (span_len - xfade_len).max(1.0);
+                        self.playhead_frame = start_f + xfade_len + (overshoot % eff_span);
+                        self.did_head_xfade = false;
+                        self.loop_post_tail_active = false;
+                    } else {
+                        self.playhead_frame = start_f + (overshoot % span_len);
+                        self.did_head_xfade = false;
+                        self.loop_post_tail_active = false;
+                        if self.last_out_l.abs() > 1e-4 || self.last_out_r.abs() > 1e-4 {
+                            self.declick_l = self.last_out_l;
+                            self.declick_r = self.last_out_r;
+                            self.declick_env = 1.0;
+                        }
+                    }
                     pending_rt_seek = Some(self.playhead_frame.floor() as u64);
                     events.looped = true;
                 } else {
                     self.playing = false;
                     self.fade_env = 0.0;
                     self.fade_mode = FadeMode::Steady;
+                    self.loop_post_tail_active = false;
+                    self.did_head_xfade = false;
                     self.playhead_frame = start_f;
                     pending_rt_seek = Some(start_f.floor() as u64);
                     events.ended = true;
@@ -498,23 +573,74 @@ impl PlaybackDsp {
 
             let Some((mut l, mut r)) = Self::sample_with_aa(&reader, self.playhead_frame, step)
             else {
-                // Streaming buffer momentarily refilling after seek -> output silence without advancing
-                frame_out.fill(0.0);
-                self.last_out_l = 0.0;
-                self.last_out_r = 0.0;
+                // Streaming buffer momentarily refilling after seek/underrun:
+                // smoothly decay any prior output via declick_env and re-arm FadeIn for resumption.
+                if self.declick_env <= 0.0
+                    && (self.last_out_l.abs() > 1e-4 || self.last_out_r.abs() > 1e-4)
+                {
+                    self.declick_l = self.last_out_l;
+                    self.declick_r = self.last_out_r;
+                    self.declick_env = 1.0;
+                }
+                let (mut out_l, mut out_r) = (0.0_f32, 0.0_f32);
+                if self.declick_env > 0.0 {
+                    out_l = self.declick_l * self.declick_env;
+                    out_r = self.declick_r * self.declick_env;
+                    self.declick_env = (self.declick_env - fade_step).max(0.0);
+                }
+                self.last_out_l = out_l;
+                self.last_out_r = out_r;
+                if !matches!(
+                    self.fade_mode,
+                    FadeMode::FadeOutToPause | FadeMode::FadeOutToStop
+                ) {
+                    self.fade_env = 0.0;
+                    self.fade_mode = FadeMode::FadeIn;
+                }
+                if out_channels == 1 {
+                    frame_out[0] = (out_l + out_r) * 0.5;
+                } else {
+                    frame_out[0] = out_l;
+                    frame_out[1] = out_r;
+                    for ch_s in frame_out.iter_mut().skip(2) {
+                        *ch_s = 0.0;
+                    }
+                }
                 continue;
             };
 
-            // 2.5 ms anti-click crossfade at loop seam (both slice & full-track loops!)
-            let span_len = end_f - start_f;
-            let xfade_len = (src_sr * 0.0025).min(span_len * 0.25);
-            if self.looping && xfade_len >= 4.0 && self.playhead_frame >= end_f - xfade_len {
+            if matches!(self.fade_mode, FadeMode::FadeIn) {
+                self.fade_env = (self.fade_env + fade_step).min(1.0);
+                if self.fade_env >= 1.0 {
+                    self.fade_mode = FadeMode::Steady;
+                }
+            }
+
+            // 2.5 ms anti-click crossfade at loop seam (zero click & zero double transient!)
+            if self.looping && has_post_tail && self.loop_post_tail_active {
+                let elapsed = self.playhead_frame - start_f;
+                if elapsed >= 0.0 && elapsed < xfade_len {
+                    let alpha = (elapsed / xfade_len).clamp(0.0, 1.0) as f32;
+                    let tail_pos = end_f + elapsed;
+                    if let Some((tl, tr)) = Self::sample_with_aa(&reader, tail_pos, step) {
+                        l = tl * (1.0 - alpha) + l * alpha;
+                        r = tr * (1.0 - alpha) + r * alpha;
+                    }
+                } else {
+                    self.loop_post_tail_active = false;
+                }
+            } else if self.looping
+                && !has_post_tail
+                && xfade_len >= 4.0
+                && self.playhead_frame >= end_f - xfade_len
+            {
                 let alpha = ((self.playhead_frame - (end_f - xfade_len)) / xfade_len)
                     .clamp(0.0, 1.0) as f32;
                 let head_pos = start_f + (self.playhead_frame - (end_f - xfade_len));
                 if let Some((hl, hr)) = Self::sample_with_aa(&reader, head_pos, step) {
                     l = l * (1.0 - alpha) + hl * alpha;
                     r = r * (1.0 - alpha) + hr * alpha;
+                    self.did_head_xfade = true;
                 }
             } else if has_slice
                 && !self.looping
@@ -557,7 +683,6 @@ impl PlaybackDsp {
         }
 
         reader.advance_floor(self.playhead_frame.floor().max(0.0) as u64);
-        drop(reader);
         if let Some(seek_frame) = pending_rt_seek {
             if let Some(src) = self.source.as_ref() {
                 src.request_seek_nonblocking(seek_frame);
@@ -677,5 +802,38 @@ mod tests {
             "expected ~1.3s after 0.1s render, got {}",
             dsp.position_sec()
         );
+    }
+
+    #[test]
+    fn full_track_loop_crossfade_wraps_without_click_or_double_trigger() {
+        let sr = 48_000u32;
+        let frames = 4_800usize; // 0.1s track
+        // Constant DC +0.4 signal -> any crossfade jump/reset would visibly dip/spike
+        let samples = vec![0.4_f32; frames * 2];
+        let src = AudioSource::InMemory(Arc::new(DecodedTrack {
+            path_norm: "test/dc.wav".to_string(),
+            sample_rate: sr,
+            total_frames: frames as u64,
+            samples,
+            norm_gain: 1.0,
+            leading_silence_sec: 0.0,
+        }));
+        let mut dsp = PlaybackDsp::new(sr);
+        dsp.set_params(Some(1.0), Some(0.0), Some(true), Some(false), None);
+        dsp.load_source(src, true, 0.0, None, None);
+
+        // Render 0.25s (wraps across full-track EOF twice)
+        let mut buf = vec![0.0_f32; 12_000 * 2];
+        let ev = dsp.render_into(&mut buf, 2);
+        assert!(ev.looped);
+        assert!(!ev.ended);
+        // After the initial 4ms fade-in (200 frames), every sample must stay smoothly near +0.4
+        for frame in buf.as_chunks::<2>().0.iter().skip(300) {
+            assert!(
+                (frame[0] - 0.4).abs() < 0.02 && (frame[1] - 0.4).abs() < 0.02,
+                "Unexpected discontinuity during full-track loop: {:?}",
+                frame
+            );
+        }
     }
 }

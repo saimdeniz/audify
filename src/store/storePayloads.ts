@@ -15,10 +15,17 @@ export interface CreditToastPayload {
   seq: number;
 }
 
+export interface StatusNoticeAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface StatusNoticePayload {
   message: string;
   kind: "info" | "success" | "error";
   seq: number;
+  actionLabel?: string;
+  onAction?: () => void;
 }
 
 export type FileOpHistoryItem =

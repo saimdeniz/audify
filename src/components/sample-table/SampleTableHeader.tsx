@@ -30,15 +30,9 @@ const SortHeader: React.FC<{
   const sortDir = useSampleStore((s) => s.sortDir);
   const cycleSort = useSampleStore((s) => s.cycleSort);
   const active = sortKey === sortId;
-  const ariaSort = active
-    ? sortDir === "asc"
-      ? "ascending"
-      : "descending"
-    : "none";
   return (
     <button
       type="button"
-      aria-sort={ariaSort}
       onClick={() => cycleSort(sortId)}
       className={`group/hdr flex items-center justify-center tracking-wider uppercase font-semibold transition-colors active:scale-[0.98] ${
         active ? "text-accent-fg" : "text-fg-head hover:text-fg"
@@ -68,7 +62,7 @@ interface SampleTableHeaderProps {
   setShowColumnPicker: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
-export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
+export const SampleTableHeader: React.FC<SampleTableHeaderProps> = React.memo(({
   headerRef,
   columnsContentWidth,
   scrollbarGutterWidth = 0,
@@ -84,6 +78,16 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
   showColumnPicker,
   setShowColumnPicker,
 }) => {
+  const sortKey = useSampleStore((s) => s.sortKey);
+  const sortDir = useSampleStore((s) => s.sortDir);
+  const getAriaSort = (
+    colSortId?: SortKey
+  ): "ascending" | "descending" | "none" | undefined => {
+    if (!colSortId) return undefined;
+    if (sortKey !== colSortId) return "none";
+    return sortDir === "asc" ? "ascending" : "descending";
+  };
+
   const [draggedColId, setDraggedColId] = useState<ColumnId | null>(null);
   const [dropTarget, setDropTarget] = useState<{
     colId: ColumnId;
@@ -102,7 +106,27 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
     };
   }, []);
 
+  const resetSingleColWidth = (colKey: ResizableColKey, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const defW = COL_WIDTH_BOUNDS[colKey].def;
+    setColWidths((prev) => {
+      if (prev[colKey] === defW) return prev;
+      const updated = { ...prev, [colKey]: defW };
+      safeSetItem(
+        AUDIFY_STORAGE_KEYS.columnWidthsV3,
+        JSON.stringify(updated),
+        {
+          broadcast: false,
+          markEdited: false,
+        }
+      );
+      return updated;
+    });
+  };
+
   const startColResize = (colKey: ResizableColKey, e: React.MouseEvent) => {
+    if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
     activeDragCleanupRef.current?.();
@@ -110,17 +134,6 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
     const startX = e.clientX;
     const startW = colWidths[colKey];
     let latestWidths = colWidths;
-
-    const onMove = (moveEvt: MouseEvent) => {
-      const delta = moveEvt.clientX - startX;
-      const nextW = Math.max(minW, Math.min(maxW, Math.round(startW + delta)));
-      setColWidths((prev) => {
-        if (prev[colKey] === nextW) return prev;
-        const updated = { ...prev, [colKey]: nextW };
-        latestWidths = updated;
-        return updated;
-      });
-    };
 
     const cleanup = () => {
       window.removeEventListener("mousemove", onMove);
@@ -139,6 +152,21 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
           markEdited: false,
         }
       );
+    };
+
+    const onMove = (moveEvt: MouseEvent) => {
+      if ((moveEvt.buttons & 1) !== 1) {
+        onUp();
+        return;
+      }
+      const delta = moveEvt.clientX - startX;
+      const nextW = Math.max(minW, Math.min(maxW, Math.round(startW + delta)));
+      setColWidths((prev) => {
+        if (prev[colKey] === nextW) return prev;
+        const updated = { ...prev, [colKey]: nextW };
+        latestWidths = updated;
+        return updated;
+      });
     };
 
     activeDragCleanupRef.current = cleanup;
@@ -196,9 +224,12 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
           const rect = headerCell!.getBoundingClientRect();
           const side =
             moveEvt.clientX < rect.left + rect.width / 2 ? "left" : "right";
-          dropTargetRef.current = { colId: targetColId, side };
-          setDropTarget({ colId: targetColId, side });
-        } else {
+          const prev = dropTargetRef.current;
+          if (!prev || prev.colId !== targetColId || prev.side !== side) {
+            dropTargetRef.current = { colId: targetColId, side };
+            setDropTarget({ colId: targetColId, side });
+          }
+        } else if (dropTargetRef.current !== null) {
           dropTargetRef.current = null;
           setDropTarget(null);
         }
@@ -231,6 +262,7 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
       }, 40);
     };
 
+    activeDragCleanupRef.current = cleanup;
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   };
@@ -251,6 +283,7 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
         className="flex-1 h-full overflow-hidden flex items-center"
       >
         <div
+          role="row"
           style={{
             minWidth: `${columnsContentWidth + scrollbarGutterWidth}px`,
             width: "100%",
@@ -258,6 +291,8 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
           className="h-full flex items-center border-l-2 border-l-transparent"
         >
           <div
+            role="columnheader"
+            aria-label="Favorite"
             style={{ width: `${FIXED_FAV_COL_WIDTH}px` }}
             className="h-full flex items-center justify-center shrink-0 border-r border-line"
           >
@@ -266,6 +301,8 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
 
           {isSimilarityMode && (
             <div
+              role="columnheader"
+              aria-sort={getAriaSort("match")}
               style={{ width: `${FIXED_MATCH_COL_WIDTH}px` }}
               className="group/hdr h-full px-0.5 flex items-center justify-center border-r border-line bg-accent-soft shrink-0 select-none"
               title="Acoustic Cosine Similarity Match Score"
@@ -297,6 +334,8 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
                 return (
                   <div
                     key="class"
+                    role="columnheader"
+                    aria-sort={getAriaSort("class")}
                     data-col-header-id="class"
                     onMouseDown={(e) => startColHeaderReorderDrag("class", e)}
                     style={{ width: `${FIXED_CLASS_COL_WIDTH}px` }}
@@ -319,6 +358,8 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
                 return (
                   <div
                     key="name"
+                    role="columnheader"
+                    aria-sort={getAriaSort("name")}
                     data-col-header-id="name"
                     onMouseDown={(e) => startColHeaderReorderDrag("name", e)}
                     style={{ width: `${colWidths.name}px` }}
@@ -337,8 +378,9 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
                     <div
                       data-col-resize="true"
                       onMouseDown={(e) => startColResize("name", e)}
+                      onDoubleClick={(e) => resetSingleColWidth("name", e)}
                       className="absolute right-[-3px] top-0 bottom-0 w-[6px] cursor-col-resize hover:bg-accent/60 z-10 transition-colors"
-                      title="Resize"
+                      title="Drag to resize · Double-click to reset"
                     />
                   </div>
                 );
@@ -347,6 +389,7 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
                 return (
                   <div
                     key="waveform"
+                    role="columnheader"
                     data-col-header-id="waveform"
                     onMouseDown={(e) =>
                       startColHeaderReorderDrag("waveform", e)
@@ -401,6 +444,8 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
                 return (
                   <div
                     key={colId}
+                    role="columnheader"
+                    aria-sort={getAriaSort(resizableMeta.sortId)}
                     data-col-header-id={colId}
                     onMouseDown={(e) => startColHeaderReorderDrag(colId, e)}
                     style={{ width: `${colWidths[colId]}px` }}
@@ -429,8 +474,9 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
                     <div
                       data-col-resize="true"
                       onMouseDown={(e) => startColResize(colId, e)}
+                      onDoubleClick={(e) => resetSingleColWidth(colId, e)}
                       className="absolute right-[-3px] top-0 bottom-0 w-[6px] cursor-col-resize hover:bg-accent/60 z-10 transition-colors"
-                      title="Resize"
+                      title="Drag to resize · Double-click to reset"
                     />
                   </div>
                 );
@@ -478,6 +524,8 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
                 return (
                   <div
                     key={colId}
+                    role="columnheader"
+                    aria-sort={getAriaSort(fixedMeta.sortId)}
                     data-col-header-id={colId}
                     onMouseDown={(e) => startColHeaderReorderDrag(colId, e)}
                     style={{ width: fixedMeta.width }}
@@ -521,4 +569,4 @@ export const SampleTableHeader: React.FC<SampleTableHeaderProps> = ({
       />
     </div>
   );
-};
+});

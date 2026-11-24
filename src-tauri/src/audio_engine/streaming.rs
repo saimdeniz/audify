@@ -1,8 +1,9 @@
 use super::decoder::{push_interleaved_stereo, NormGainAccumulator};
 use crate::audio::{copy_packet_samples, open_audio_decoder, OpenedAudioDecoder};
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 use symphonia::core::audio::{SampleBuffer, SignalSpec};
@@ -47,7 +48,7 @@ impl StreamRing {
         self.generation = generation;
     }
 
-    fn free_frames(&self) -> usize {
+    pub(super) fn free_frames(&self) -> usize {
         self.capacity_frames().saturating_sub(self.len_frames)
     }
 
@@ -99,6 +100,8 @@ impl StreamRing {
     }
 }
 
+type StreamCmdQueue = Arc<(Mutex<(VecDeque<StreamCmd>, bool)>, Condvar)>;
+
 pub struct StreamingTrack {
     pub path_norm: String,
     pub sample_rate: u32,
@@ -108,7 +111,7 @@ pub struct StreamingTrack {
     generation: AtomicU64,
     pending_seek_frame: AtomicU64,
     ring: Mutex<StreamRing>,
-    cmd_tx: Mutex<Option<mpsc::Sender<StreamCmd>>>,
+    cmd_queue: StreamCmdQueue,
     closed_signal: Arc<(Mutex<bool>, Condvar)>,
 }
 
@@ -125,13 +128,15 @@ impl StreamingTrack {
         let est_frames = opened.n_frames.unwrap_or(prefix_frames).max(prefix_frames);
         let init_gain_val = initial_gain.current_gain();
 
-        let (cmd_tx, cmd_rx) = mpsc::channel::<StreamCmd>();
+        let cmd_queue = Arc::new((Mutex::new((VecDeque::<StreamCmd>::new(), false)), Condvar::new()));
         let closed_signal = Arc::new((Mutex::new(false), Condvar::new()));
 
         let mut ring = StreamRing::new(STREAM_RING_FRAMES);
         let mut leftover: Vec<f32> = Vec::new();
+        let mut ring_prefilled_frames: u64 = 0;
         if !prefix_stereo.is_empty() {
             let written = ring.push_stereo(&prefix_stereo);
+            ring_prefilled_frames = written as u64;
             if written * 2 < prefix_stereo.len() {
                 leftover.extend_from_slice(&prefix_stereo[written * 2..]);
             }
@@ -146,7 +151,7 @@ impl StreamingTrack {
             generation: AtomicU64::new(1),
             pending_seek_frame: AtomicU64::new(NO_PENDING_SEEK),
             ring: Mutex::new(ring),
-            cmd_tx: Mutex::new(Some(cmd_tx)),
+            cmd_queue: Arc::clone(&cmd_queue),
             closed_signal: Arc::clone(&closed_signal),
         });
 
@@ -158,9 +163,10 @@ impl StreamingTrack {
                     worker_track,
                     canon_path,
                     opened,
+                    ring_prefilled_frames,
                     leftover,
                     initial_gain,
-                    cmd_rx,
+                    cmd_queue,
                     closed_signal,
                 );
             });
@@ -180,11 +186,21 @@ impl StreamingTrack {
         self.eof.load(Ordering::Acquire)
     }
 
+    pub(super) fn has_pending_seek(&self) -> bool {
+        self.pending_seek_frame.load(Ordering::Acquire) != NO_PENDING_SEEK
+    }
+
     pub(super) fn try_lock_ring(&self) -> Option<MutexGuard<'_, StreamRing>> {
-        if self.pending_seek_frame.load(Ordering::Acquire) != NO_PENDING_SEEK {
+        if self.has_pending_seek() {
             return None;
         }
         self.ring.try_lock().ok()
+    }
+
+    pub(super) fn notify_producer(&self) {
+        // Non-blocking lock attempt avoids missed Condvar notifications when producer is entering wait
+        let _guard = self.cmd_queue.0.try_lock();
+        self.cmd_queue.1.notify_one();
     }
 
     pub fn read_frame_try(&self, frame: i64) -> Option<(f32, f32)> {
@@ -193,8 +209,15 @@ impl StreamingTrack {
     }
 
     pub fn advance_floor_try(&self, playhead_frame: u64) {
+        let mut should_wake = false;
         if let Ok(mut guard) = self.ring.try_lock() {
             guard.advance_read_floor(playhead_frame);
+            if !self.eof.load(Ordering::Relaxed) && guard.free_frames() >= 4096 {
+                should_wake = true;
+            }
+        }
+        if should_wake {
+            self.notify_producer();
         }
     }
 
@@ -203,6 +226,7 @@ impl StreamingTrack {
         self.eof.store(false, Ordering::Release);
         self.pending_seek_frame
             .store(target_frame.min(NO_PENDING_SEEK - 1), Ordering::Release);
+        self.notify_producer();
     }
 
     pub fn request_seek(&self, target_frame: u64) {
@@ -212,22 +236,33 @@ impl StreamingTrack {
         if let Ok(mut guard) = self.ring.lock() {
             guard.reset(target_frame, next_gen);
         }
-        if let Ok(tx_guard) = self.cmd_tx.lock() {
-            if let Some(tx) = tx_guard.as_ref() {
-                let _ = tx.send(StreamCmd::Seek {
+        let (lock, cvar) = &*self.cmd_queue;
+        if let Ok(mut state) = lock.lock() {
+            if !state.1 {
+                // Coalesce queued seeks so rapid waveform scrubbing only executes the latest target
+                state.0.retain(|cmd| !matches!(cmd, StreamCmd::Seek { .. }));
+                state.0.push_back(StreamCmd::Seek {
                     target_frame,
                     generation: next_gen,
                 });
+                cvar.notify_one();
+            }
+        }
+    }
+
+    fn signal_stop(&self) {
+        let (lock, cvar) = &*self.cmd_queue;
+        if let Ok(mut state) = lock.lock() {
+            if !state.1 {
+                state.1 = true;
+                state.0.push_back(StreamCmd::Stop);
+                cvar.notify_one();
             }
         }
     }
 
     pub fn close_and_wait(&self) {
-        if let Ok(mut tx_guard) = self.cmd_tx.lock() {
-            if let Some(tx) = tx_guard.take() {
-                let _ = tx.send(StreamCmd::Stop);
-            }
-        }
+        self.signal_stop();
         let (lock, cvar) = &*self.closed_signal;
         if let Ok(closed) = lock.lock() {
             if !*closed {
@@ -239,11 +274,7 @@ impl StreamingTrack {
 
 impl Drop for StreamingTrack {
     fn drop(&mut self) {
-        if let Ok(mut tx_guard) = self.cmd_tx.lock() {
-            if let Some(tx) = tx_guard.take() {
-                let _ = tx.send(StreamCmd::Stop);
-            }
-        }
+        self.signal_stop();
     }
 }
 
@@ -291,25 +322,44 @@ fn apply_stream_seek(
     skip_frames
 }
 
+fn release_pending_buffer(pending_stereo: &mut Vec<f32>) {
+    pending_stereo.clear();
+    if pending_stereo.capacity() > 65_536 {
+        pending_stereo.shrink_to_fit();
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_streaming_producer(
     track: Arc<StreamingTrack>,
     canon_path: PathBuf,
     mut opened: OpenedAudioDecoder,
+    ring_prefilled_frames: u64,
     mut pending_stereo: Vec<f32>,
     mut norm_acc: NormGainAccumulator,
-    cmd_rx: mpsc::Receiver<StreamCmd>,
+    cmd_queue: StreamCmdQueue,
     closed_signal: Arc<(Mutex<bool>, Condvar)>,
 ) {
     let mut sample_buf_slot: Option<(SignalSpec, usize, SampleBuffer<f32>)> = None;
     let mut active_gen: u64 = 1;
     let mut local_eof = false;
-    let mut decoded_pos: u64 = (pending_stereo.len() / 2) as u64;
+    let mut decoded_pos: u64 =
+        ring_prefilled_frames.saturating_add((pending_stereo.len() / 2) as u64);
     let mut pending_offset: usize = 0;
     let mut skip_frames_remaining: u64 = 0;
 
     loop {
         let mut should_stop = false;
-        while let Ok(cmd) = cmd_rx.try_recv() {
+        let drained: Vec<StreamCmd> = {
+            let (lock, _) = &*cmd_queue;
+            if let Ok(mut state) = lock.lock() {
+                state.0.drain(..).collect()
+            } else {
+                break;
+            }
+        };
+        let mut latest_seek: Option<(u64, u64)> = None;
+        for cmd in drained {
             match cmd {
                 StreamCmd::Stop => {
                     should_stop = true;
@@ -319,13 +369,7 @@ fn run_streaming_producer(
                     target_frame,
                     generation,
                 } => {
-                    active_gen = generation;
-                    pending_stereo.clear();
-                    pending_offset = 0;
-                    local_eof = false;
-                    skip_frames_remaining =
-                        apply_stream_seek(&track, &canon_path, &mut opened, target_frame);
-                    decoded_pos = target_frame;
+                    latest_seek = Some((target_frame, generation));
                 }
             }
         }
@@ -333,12 +377,13 @@ fn run_streaming_producer(
             break;
         }
 
-        // Service lock-free real-time seek requests posted by PlaybackDsp::render_into
+        // Service lock-free real-time seek requests posted by PlaybackDsp::render_into;
+        // if an RT seek arrived, it supersedes any queued Seek command.
         let rt_seek = track.pending_seek_frame.swap(NO_PENDING_SEEK, Ordering::AcqRel);
         if rt_seek != NO_PENDING_SEEK {
             let next_gen = track.generation.fetch_add(1, Ordering::AcqRel) + 1;
             active_gen = next_gen;
-            pending_stereo.clear();
+            release_pending_buffer(&mut pending_stereo);
             pending_offset = 0;
             local_eof = false;
             if let Ok(mut ring) = track.ring.lock() {
@@ -346,6 +391,14 @@ fn run_streaming_producer(
             }
             skip_frames_remaining = apply_stream_seek(&track, &canon_path, &mut opened, rt_seek);
             decoded_pos = rt_seek;
+        } else if let Some((target_frame, generation)) = latest_seek {
+            active_gen = generation;
+            release_pending_buffer(&mut pending_stereo);
+            pending_offset = 0;
+            local_eof = false;
+            skip_frames_remaining =
+                apply_stream_seek(&track, &canon_path, &mut opened, target_frame);
+            decoded_pos = target_frame;
         }
 
         if pending_offset < pending_stereo.len() {
@@ -353,7 +406,7 @@ fn run_streaming_producer(
                 if ring.generation == active_gen {
                     ring.push_stereo(&pending_stereo[pending_offset..])
                 } else {
-                    pending_stereo.clear();
+                    release_pending_buffer(&mut pending_stereo);
                     pending_offset = 0;
                     0
                 }
@@ -363,14 +416,14 @@ fn run_streaming_producer(
             if written > 0 {
                 pending_offset += written * 2;
                 if pending_offset >= pending_stereo.len() {
-                    pending_stereo.clear();
+                    release_pending_buffer(&mut pending_stereo);
                     pending_offset = 0;
                 }
                 continue;
             }
         }
 
-        let need_more = if local_eof {
+        let need_more = if local_eof || pending_offset < pending_stereo.len() {
             false
         } else if let Ok(ring) = track.ring.lock() {
             ring.generation == active_gen && ring.free_frames() >= 4096
@@ -379,21 +432,20 @@ fn run_streaming_producer(
         };
 
         if !need_more {
-            match cmd_rx.recv_timeout(Duration::from_millis(8)) {
-                Ok(StreamCmd::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                Ok(StreamCmd::Seek {
-                    target_frame,
-                    generation,
-                }) => {
-                    active_gen = generation;
-                    pending_stereo.clear();
-                    pending_offset = 0;
-                    local_eof = false;
-                    skip_frames_remaining =
-                        apply_stream_seek(&track, &canon_path, &mut opened, target_frame);
-                    decoded_pos = target_frame;
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
+            let (lock, cvar) = &*cmd_queue;
+            let Ok(guard) = lock.lock() else {
+                break;
+            };
+            if guard.0.is_empty()
+                && !guard.1
+                && track.pending_seek_frame.load(Ordering::Acquire) == NO_PENDING_SEEK
+            {
+                let wait_dur = if local_eof {
+                    Duration::from_millis(500)
+                } else {
+                    Duration::from_millis(250)
+                };
+                let _ = cvar.wait_timeout(guard, wait_dur);
             }
             continue;
         }
@@ -446,7 +498,7 @@ fn run_streaming_producer(
                         };
                         if written * 2 < usable.len() {
                             if pending_offset >= pending_stereo.len() {
-                                pending_stereo.clear();
+                                release_pending_buffer(&mut pending_stereo);
                                 pending_offset = 0;
                             }
                             pending_stereo.extend_from_slice(&usable[written * 2..]);

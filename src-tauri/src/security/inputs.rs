@@ -47,6 +47,7 @@ pub const ALLOWED_PROFILE_SETTINGS_KEYS: &[&str] = &[
     "audioOutputDeviceId",
     "sliceMicroFade",
     "exportAudioPreset",
+    "exportLoudnessMode",
     "skipLeadingSilence",
     "miniDockEdgePeek",
     "miniDockEdgeSide",
@@ -92,6 +93,9 @@ pub fn is_safe_existing_bg_image(bg: &str) -> bool {
         .map(|e| ALLOWED_BG_MEDIA_EXTS.contains(&e.to_ascii_lowercase().as_str()))
         .unwrap_or(false);
     if !ext_ok {
+        return false;
+    }
+    if super::reject_symlink_ancestors(p).is_err() {
         return false;
     }
     let Ok(sym) = fs::symlink_metadata(p) else {

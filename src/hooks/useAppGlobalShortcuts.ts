@@ -5,11 +5,16 @@ import { useSampleStore } from "../store/useSampleStore";
 import { resolveSamplesByIds } from "../utils/sampleLookup";
 import {
   isHardwareMediaKey,
+  isRangeSliderTarget,
   isSafeGlobalShortcutInTextEntry,
   isTextEntryTarget,
   matchesShortcut,
   shouldBlurSearchInputOnPointerDown,
 } from "../utils/shortcuts";
+import {
+  handleDawListNavigationShortcut,
+  handleDawTransportAndSliceShortcut,
+} from "./dawShortcutsHelper";
 import {
   handleF2RenameShortcut,
   handleMarkSliceInOutShortcut,
@@ -427,16 +432,49 @@ export function useAppGlobalShortcuts(): void {
         return;
       }
 
-      if (handleSliceModeKeyDown(e, state)) {
+      const isRangeSlider = isRangeSliderTarget(target);
+      const hasOpenFloatingMenu =
+        document.querySelector(
+          "[data-context-menu-portal='true'], [data-popover-portal='true'], [data-color-picker-portal='true'], [data-quick-create-portal='true']"
+        ) !== null;
+
+      if (
+        !hasOpenFloatingMenu &&
+        handleSliceModeKeyDown(e, state, isRangeSlider)
+      ) {
         return;
       }
 
-      if (e.key === "ArrowDown" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (
+        !isRangeSlider &&
+        !hasOpenFloatingMenu &&
+        handleDawListNavigationShortcut(e, state)
+      ) {
+        return;
+      }
+
+      if (
+        !isRangeSlider &&
+        !hasOpenFloatingMenu &&
+        e.key === "ArrowDown" &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !e.shiftKey
+      ) {
         e.preventDefault();
         state.selectRelativeSample(1);
         return;
       }
-      if (e.key === "ArrowUp" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (
+        !isRangeSlider &&
+        !hasOpenFloatingMenu &&
+        e.key === "ArrowUp" &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !e.shiftKey
+      ) {
         e.preventDefault();
         state.selectRelativeSample(-1);
         return;
@@ -451,6 +489,12 @@ export function useAppGlobalShortcuts(): void {
       } = state;
 
       if (handleTransportShortcuts(e, state, false)) {
+        return;
+      }
+      if (hasOpenFloatingMenu) {
+        return;
+      }
+      if (handleDawTransportAndSliceShortcut(e, state)) {
         return;
       }
       if (handleFileUtilityShortcuts(e, state, false)) {

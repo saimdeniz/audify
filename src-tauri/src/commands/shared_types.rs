@@ -54,7 +54,10 @@ pub struct SampleItem {
     pub musical_key: String,
     pub camelot_key: String,
     pub peaks_json: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<SampleTagBadge>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tag_ids: Vec<i64>,
     pub created_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_modified_at: Option<i64>,

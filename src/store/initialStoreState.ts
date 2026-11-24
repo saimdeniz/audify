@@ -138,6 +138,7 @@ export function createInitialStoreState(): SampleStoreDataState {
     audioOutputDeviceId: boot.audioOutputDeviceId,
     sliceMicroFade: boot.sliceMicroFade,
     exportAudioPreset: boot.exportAudioPreset,
+    exportLoudnessMode: boot.exportLoudnessMode,
     skipLeadingSilence: boot.skipLeadingSilence,
     normalizePreview: boot.normalizePreview,
     autoAnalyzeBpmKey: boot.autoAnalyzeBpmKey,
@@ -180,6 +181,7 @@ export function createInitialStoreState(): SampleStoreDataState {
 
     inAppDragSample: null,
     inAppDragSamples: [],
+    inAppDragOrigin: null,
 
     isScanning: false,
     scanProgress: null,
@@ -200,6 +202,7 @@ export function createInitialStoreState(): SampleStoreDataState {
     isAnalyzingAi: false,
     aiIndexProgress: null,
     similaritySession: null,
+    externalSimilarityPendingFile: null,
     aiSuggestionsBySampleId: {},
     pendingAiSuggestionsCount: 0,
   };

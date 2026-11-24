@@ -9,16 +9,19 @@ pub use trash::*;
 pub use trash_manage::*;
 
 use super::audio_ops::{
-    resolve_active_export_preset, resolve_slice_cache_dir, resolve_slice_export_dir,
+    resolve_active_export_loudness_mode, resolve_active_export_preset, resolve_slice_cache_dir,
+    resolve_slice_export_dir,
 };
 pub(super) use super::with_read_conn;
 use crate::audio::{
-    build_default_slice_file_name_with_preset, export_wav_slice_to_path_with_preset,
+    build_default_slice_file_name_with_params, export_wav_slice_to_path_with_params,
+    SliceExportParams,
 };
 use crate::db::{get_active_profile_id, AppState};
 use crate::security::{
     collect_profile_slice_dirs, display_leaf, has_ntfs_ads_colon, is_unc_or_network_path,
-    sanitize_err, strip_verbatim_prefix, validate_audio_path_in_scope, validate_safe_audio_stem,
+    reject_symlink_ancestors, sanitize_err, strip_verbatim_prefix, validate_audio_path_in_scope,
+    validate_safe_audio_stem,
 };
 use rusqlite::Connection;
 use serde::Serialize;
@@ -78,6 +81,7 @@ pub(crate) struct SliceExportInput {
     pub pitch_semitones: Option<f32>,
     pub apply_micro_fade: Option<bool>,
     pub export_preset: Option<String>,
+    pub export_loudness_mode: Option<String>,
     pub cached_slice_path: Option<String>,
     pub custom_name: Option<String>,
 }
@@ -132,12 +136,16 @@ pub(crate) fn ensure_slice_not_in_readonly_library(
     slice_pb: &Path,
 ) -> Result<(), String> {
     let target_norm = crate::security::normalize_clean_path(&slice_pb.to_string_lossy());
+    let target_lower = target_norm.to_lowercase();
     if let Ok(mut stmt) = conn.prepare(
         "SELECT path, name FROM libraries WHERE COALESCE(is_read_only, 0) = 1",
     ) {
         if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
             for (lib_path, lib_name) in rows.flatten() {
-                if crate::commands::strip_lib_prefix(&target_norm, lib_path.trim()).is_some() {
+                let lib_norm = crate::security::normalize_clean_path(lib_path.trim());
+                if target_lower == lib_norm.to_lowercase()
+                    || crate::commands::strip_lib_prefix(&target_norm, &lib_norm).is_some()
+                {
                     return Err(format!(
                         "Library '{}' is locked as a Protected Read-Only Vault. Unlock it before modifying or trashing files inside it.",
                         lib_name
@@ -169,6 +177,7 @@ fn is_valid_wav_inside_dir(raw_path: &str, dir: &Path) -> Option<PathBuf> {
         return None;
     }
     let pb = PathBuf::from(trimmed);
+    reject_symlink_ancestors(&pb).ok()?;
     let sym = fs::symlink_metadata(&pb).ok()?;
     if sym.file_type().is_symlink() || !sym.file_type().is_file() || sym.len() <= 44 {
         return None;
@@ -201,27 +210,96 @@ pub(super) fn collect_authorized_slice_dirs(conn: &Connection, user_dir: &Path) 
     dirs
 }
 
-pub(super) fn ensure_existing_slice_in_scope(
+#[derive(Debug, Clone)]
+pub(super) enum SliceScopeError {
+    NotFound(String),
+    Denied(String),
+}
+
+impl SliceScopeError {
+    pub(super) fn into_message(self) -> String {
+        match self {
+            Self::NotFound(m) | Self::Denied(m) => m,
+        }
+    }
+}
+
+fn missing_slice_has_online_authorized_ancestor(
+    conn: &Connection,
+    user_dir: &Path,
+    pb: &Path,
+) -> bool {
+    let auth_canons: Vec<PathBuf> = collect_authorized_slice_dirs(conn, user_dir)
+        .into_iter()
+        .filter_map(|d| d.canonicalize().ok())
+        .collect();
+    if auth_canons.is_empty() {
+        return false;
+    }
+    let mut cursor = pb.parent();
+    while let Some(dir) = cursor {
+        match fs::symlink_metadata(dir) {
+            Ok(sym) => {
+                if sym.file_type().is_symlink() || !sym.file_type().is_dir() {
+                    return false;
+                }
+                let Ok(canon) = dir.canonicalize() else {
+                    return false;
+                };
+                return auth_canons.iter().any(|base| canon.starts_with(base));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                cursor = dir.parent();
+            }
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
+pub(super) fn ensure_existing_slice_in_scope_detailed(
     conn: &Connection,
     user_dir: &Path,
     raw_path: &str,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, SliceScopeError> {
     let trimmed = raw_path.trim();
     if trimmed.is_empty() {
-        return Err("Slice path cannot be empty".to_string());
+        return Err(SliceScopeError::Denied(
+            "Slice path cannot be empty".to_string(),
+        ));
     }
     if is_unc_or_network_path(trimmed) || has_ntfs_ads_colon(trimmed) {
-        return Err("Network/UNC paths and alternate data streams are not allowed".to_string());
+        return Err(SliceScopeError::Denied(
+            "Network/UNC paths and alternate data streams are not allowed".to_string(),
+        ));
     }
     let pb = PathBuf::from(trimmed);
-    let sym = fs::symlink_metadata(&pb).map_err(|_| {
-        format!(
-            "Slice file does not exist or cannot be accessed: {}",
-            display_leaf(&pb)
-        )
-    })?;
+    reject_symlink_ancestors(&pb).map_err(SliceScopeError::Denied)?;
+    let sym = match fs::symlink_metadata(&pb) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if missing_slice_has_online_authorized_ancestor(conn, user_dir, &pb) {
+                return Err(SliceScopeError::NotFound(format!(
+                    "Slice file no longer exists on disk: {}",
+                    display_leaf(&pb)
+                )));
+            }
+            return Err(SliceScopeError::Denied(format!(
+                "Slice directory is offline or outside registered slice export directories: {}",
+                display_leaf(&pb)
+            )));
+        }
+        Err(_) => {
+            return Err(SliceScopeError::Denied(format!(
+                "Slice file cannot be accessed: {}",
+                display_leaf(&pb)
+            )));
+        }
+    };
     if sym.file_type().is_symlink() || !sym.file_type().is_file() {
-        return Err("Symbolic links and non-file slice paths are not allowed".to_string());
+        return Err(SliceScopeError::Denied(
+            "Symbolic links and non-file slice paths are not allowed".to_string(),
+        ));
     }
     let is_wav = pb
         .extension()
@@ -229,14 +307,18 @@ pub(super) fn ensure_existing_slice_in_scope(
         .map(|e| e.eq_ignore_ascii_case("wav"))
         .unwrap_or(false);
     if !is_wav {
-        return Err("Only WAV slice files are supported".to_string());
+        return Err(SliceScopeError::Denied(
+            "Only WAV slice files are supported".to_string(),
+        ));
     }
 
-    let target_canon = pb
-        .canonicalize()
-        .map_err(|_| format!("Slice file cannot be resolved: {}", display_leaf(&pb)))?;
+    let target_canon = pb.canonicalize().map_err(|_| {
+        SliceScopeError::Denied(format!("Slice file cannot be resolved: {}", display_leaf(&pb)))
+    })?;
     if is_unc_or_network_path(&target_canon.to_string_lossy()) {
-        return Err("Symbolic links pointing to network/UNC paths are not allowed".to_string());
+        return Err(SliceScopeError::Denied(
+            "Symbolic links pointing to network/UNC paths are not allowed".to_string(),
+        ));
     }
 
     for dir in collect_authorized_slice_dirs(conn, user_dir) {
@@ -247,7 +329,18 @@ pub(super) fn ensure_existing_slice_in_scope(
         }
     }
 
-    Err("Access denied: slice path is outside registered slice export directories".to_string())
+    Err(SliceScopeError::Denied(
+        "Access denied: slice path is outside registered slice export directories".to_string(),
+    ))
+}
+
+pub(super) fn ensure_existing_slice_in_scope(
+    conn: &Connection,
+    user_dir: &Path,
+    raw_path: &str,
+) -> Result<PathBuf, String> {
+    ensure_existing_slice_in_scope_detailed(conn, user_dir, raw_path)
+        .map_err(SliceScopeError::into_message)
 }
 
 fn copy_cached_wav_atomically(cached: &Path, dest: &Path) -> Result<(), String> {
@@ -301,14 +394,16 @@ pub(crate) fn promote_or_export_slice_sync(
         let clean_stem = sanitize_custom_slice_stem(raw_custom)?;
         pick_collision_safe_wav_path(&input.export_dir, &clean_stem)
     } else {
-        let default_name = build_default_slice_file_name_with_preset(
-            &input.source_path,
-            input.start_sec,
-            input.end_sec,
-            input.pitch_semitones,
-            input.apply_micro_fade,
-            input.export_preset.as_deref(),
-        );
+        let export_params = SliceExportParams {
+            start_sec: input.start_sec,
+            end_sec: input.end_sec,
+            pitch_semitones: input.pitch_semitones,
+            apply_micro_fade: input.apply_micro_fade,
+            export_preset: input.export_preset.as_deref(),
+            loudness_mode: input.export_loudness_mode.as_deref(),
+        };
+        let default_name =
+            build_default_slice_file_name_with_params(&input.source_path, &export_params);
         input.export_dir.join(default_name)
     };
 
@@ -344,14 +439,17 @@ pub(crate) fn promote_or_export_slice_sync(
         });
     }
 
-    let written = export_wav_slice_to_path_with_preset(
+    let written = export_wav_slice_to_path_with_params(
         &input.source_path,
         &out_path,
-        input.start_sec,
-        input.end_sec,
-        input.pitch_semitones,
-        input.apply_micro_fade,
-        input.export_preset.as_deref(),
+        &SliceExportParams {
+            start_sec: input.start_sec,
+            end_sec: input.end_sec,
+            pitch_semitones: input.pitch_semitones,
+            apply_micro_fade: input.apply_micro_fade,
+            export_preset: input.export_preset.as_deref(),
+            loudness_mode: input.export_loudness_mode.as_deref(),
+        },
     )?;
 
     Ok(PromotedSliceResult {
@@ -386,20 +484,24 @@ pub async fn promote_slice_to_export(
     apply_micro_fade: Option<bool>,
     custom_name: Option<String>,
     export_preset: Option<String>,
+    export_loudness_mode: Option<String>,
 ) -> Result<PromotedSliceResult, String> {
     let state_owned = state.inner().clone();
     let app_clone = app.clone();
     let user_dir_err = state.user_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let (source_path, export_dir, resolved_preset) = with_read_conn(&state_owned, |conn| {
-            let src = validate_audio_path_in_scope(conn, &state_owned.user_dir, &file_path)
-                .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
-            ensure_source_not_a_slice(conn, &src)?;
-            let dir =
-                resolve_slice_export_dir(conn, &state_owned.user_dir, custom_dir.as_deref())?;
-            let preset = resolve_active_export_preset(conn, export_preset.as_deref());
-            Ok((src, dir, preset))
-        })?;
+        let (source_path, export_dir, resolved_preset, resolved_loudness) =
+            with_read_conn(&state_owned, |conn| {
+                let src = validate_audio_path_in_scope(conn, &state_owned.user_dir, &file_path)
+                    .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
+                ensure_source_not_a_slice(conn, &src)?;
+                let dir =
+                    resolve_slice_export_dir(conn, &state_owned.user_dir, custom_dir.as_deref())?;
+                let preset = resolve_active_export_preset(conn, export_preset.as_deref());
+                let loudness =
+                    resolve_active_export_loudness_mode(conn, export_loudness_mode.as_deref());
+                Ok((src, dir, preset, loudness))
+            })?;
         fs::create_dir_all(&export_dir).map_err(|e| {
             format!(
                 "Failed to create slice export directory: {}",
@@ -422,6 +524,7 @@ pub async fn promote_slice_to_export(
                 pitch_semitones,
                 apply_micro_fade,
                 export_preset: resolved_preset,
+                export_loudness_mode: resolved_loudness,
                 cached_slice_path,
                 custom_name,
             },
@@ -502,12 +605,13 @@ pub async fn save_slice_to_export(
     apply_micro_fade: Option<bool>,
     custom_name: Option<String>,
     export_preset: Option<String>,
+    export_loudness_mode: Option<String>,
 ) -> Result<SliceHistoryRecord, String> {
     let state_owned = state.inner().clone();
     let app_clone = app.clone();
     let user_dir_err = state.user_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let (source_path, export_dir, profile_id, resolved_preset) =
+        let (source_path, export_dir, profile_id, resolved_preset, resolved_loudness) =
             with_read_conn(&state_owned, |conn| {
                 let src = validate_audio_path_in_scope(conn, &state_owned.user_dir, &file_path)
                     .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
@@ -516,7 +620,9 @@ pub async fn save_slice_to_export(
                     resolve_slice_export_dir(conn, &state_owned.user_dir, custom_dir.as_deref())?;
                 let pid = get_active_profile_id(conn);
                 let preset = resolve_active_export_preset(conn, export_preset.as_deref());
-                Ok((src, dir, pid, preset))
+                let loudness =
+                    resolve_active_export_loudness_mode(conn, export_loudness_mode.as_deref());
+                Ok((src, dir, pid, preset, loudness))
             })?;
         fs::create_dir_all(&export_dir).map_err(|e| {
             format!(
@@ -540,6 +646,7 @@ pub async fn save_slice_to_export(
                 pitch_semitones,
                 apply_micro_fade,
                 export_preset: resolved_preset,
+                export_loudness_mode: resolved_loudness,
                 cached_slice_path,
                 custom_name,
             },
@@ -628,6 +735,7 @@ mod tests {
                 pitch_semitones: Some(2.0),
                 apply_micro_fade: Some(true),
                 export_preset: None,
+                export_loudness_mode: None,
                 cached_slice_path: Some(cached_wav.to_string_lossy().to_string()),
                 custom_name: Some("Wolf Bark".to_string()),
             },
@@ -646,6 +754,7 @@ mod tests {
                 pitch_semitones: None,
                 apply_micro_fade: None,
                 export_preset: None,
+                export_loudness_mode: None,
                 cached_slice_path: Some(cached_wav.to_string_lossy().to_string()),
                 custom_name: Some("Wolf Bark".to_string()),
             },

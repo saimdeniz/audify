@@ -356,8 +356,10 @@ fn finalize_restored_snapshot_conn(
     restored_images: usize,
     restored_slices: usize,
 ) -> Result<FullSnapshotRestoreResult, String> {
+    let _ = conn.execute_batch("BEGIN IMMEDIATE;");
     relink_restored_custom_bg_paths(conn, user_dir);
     relink_restored_slice_paths(conn, user_dir);
+    let _ = conn.execute_batch("COMMIT;");
 
     let active_id = crate::db::get_active_profile_id(conn);
     let active_profile = query_profile_by_id(conn, active_id)?;
@@ -389,19 +391,29 @@ fn finalize_restored_snapshot_conn(
     })
 }
 
-/// Restores a snapshot with `lock_db()` held ONLY during SQLite backup/relink, keeping heavy
-/// ZIP decompression, integrity checks, and streaming image/slice extraction off the DB lock.
-pub(crate) fn restore_full_snapshot_with_state(
+/// Restores a snapshot atomically: stages/validates the ZIP & SQLite integrity off-lock, then
+/// holds `lock_db()` continuously from `drain_read_pool()` through DB restore, media extraction,
+/// path relinking, and AI cache invalidation so no reader/writer ever observes a partial state.
+pub(crate) fn restore_full_snapshot_with_state<F>(
     state: &crate::db::AppState,
     archive_path: &Path,
-) -> Result<FullSnapshotRestoreResult, String> {
+    on_db_swapped: F,
+) -> Result<FullSnapshotRestoreResult, String>
+where
+    F: FnOnce(),
+{
     let mut prepared = prepare_snapshot_archive_for_restore(&state.user_dir, archive_path)?;
-    let (restored_images, restored_slices) =
-        extract_snapshot_media_assets(&mut prepared.archive, &state.user_dir)?;
     let mut conn = state.lock_db();
+    state.drain_read_pool();
     apply_staged_db_backup(&mut conn, &prepared.staging_conn)?;
     drop(prepared.staging_conn);
-    finalize_restored_snapshot_conn(&conn, &state.user_dir, restored_images, restored_slices)
+    let (restored_images, restored_slices) =
+        extract_snapshot_media_assets(&mut prepared.archive, &state.user_dir)?;
+    let res =
+        finalize_restored_snapshot_conn(&conn, &state.user_dir, restored_images, restored_slices);
+    state.drain_read_pool();
+    on_db_swapped();
+    res
 }
 
 /// Validates a `.audify-backup.zip` archive and atomically restores SQLite + wallpaper images + slices

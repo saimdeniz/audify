@@ -211,15 +211,33 @@ pub(crate) fn rename_sample_file_with_conn(
 }
 
 #[tauri::command]
-pub fn rename_sample_file(
+pub async fn rename_sample_file(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     sample_id: i64,
     new_stem: String,
 ) -> Result<SampleItem, String> {
+    use tauri::Manager;
     crate::library_watcher::suppress_watcher_if_managed(&app, 2500);
-    let mut conn = state.lock_db();
-    rename_sample_file_with_conn(&mut conn, &state.user_dir, sample_id, &new_stem)
+    let state_owned = state.inner().clone();
+    let app_clone = app.clone();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = state_owned.lock_db();
+        rename_sample_file_with_conn(&mut conn, &state_owned.user_dir, sample_id, &new_stem)
+    })
+    .await
+    .map_err(|e| format!("Rename sample task failed: {}", e))?;
+    crate::library_watcher::suppress_watcher_if_managed(&app_clone, 1500);
+    if let Ok(ref updated) = res {
+        if let Some(ai_state) = app_clone.try_state::<crate::ai_tagger::AiTaggerState>() {
+            ai_state.update_vector_locations(&[(
+                updated.id,
+                updated.library_id,
+                updated.file_path.as_str(),
+            )]);
+        }
+    }
+    res
 }
 
 pub(crate) fn undo_rename_sample_file_with_conn(
@@ -286,7 +304,7 @@ pub(crate) fn undo_rename_sample_file_with_conn(
     let norm_new_path = normalize_clean_path(&target_pb.to_string_lossy());
     let norm_old_path = normalize_clean_path(&resolved_src.to_string_lossy());
 
-    let is_case_only = norm_new_path.eq_ignore_ascii_case(&norm_old_path);
+    let is_case_only = norm_new_path.to_lowercase() == norm_old_path.to_lowercase();
     if !is_case_only && fs::symlink_metadata(&target_pb).is_ok() {
         return Err(format!(
             "Cannot restore previous name because '{}' already exists in this folder",
@@ -367,12 +385,30 @@ pub(crate) fn undo_rename_sample_file_with_conn(
 }
 
 #[tauri::command]
-pub fn undo_rename_sample_file(
+pub async fn undo_rename_sample_file(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     sample_id: i64,
 ) -> Result<SampleItem, String> {
+    use tauri::Manager;
     crate::library_watcher::suppress_watcher_if_managed(&app, 2500);
-    let mut conn = state.lock_db();
-    undo_rename_sample_file_with_conn(&mut conn, &state.user_dir, sample_id)
+    let state_owned = state.inner().clone();
+    let app_clone = app.clone();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = state_owned.lock_db();
+        undo_rename_sample_file_with_conn(&mut conn, &state_owned.user_dir, sample_id)
+    })
+    .await
+    .map_err(|e| format!("Undo rename sample task failed: {}", e))?;
+    crate::library_watcher::suppress_watcher_if_managed(&app_clone, 1500);
+    if let Ok(ref updated) = res {
+        if let Some(ai_state) = app_clone.try_state::<crate::ai_tagger::AiTaggerState>() {
+            ai_state.update_vector_locations(&[(
+                updated.id,
+                updated.library_id,
+                updated.file_path.as_str(),
+            )]);
+        }
+    }
+    res
 }

@@ -148,19 +148,51 @@ export async function replayFileOpHistoryItem(
     releaseMatchingAudioHandle: (
       targetSampleIds: number[]
     ) => Promise<AudioHandleReleaseSnapshot>;
+    popFromSourceStack?: boolean;
   }
 ): Promise<boolean> {
-  const { set, get, emitNotice, getProfileEpoch, releaseMatchingAudioHandle } =
-    deps;
+  const {
+    set,
+    get,
+    emitNotice,
+    getProfileEpoch,
+    releaseMatchingAudioHandle,
+    popFromSourceStack = false,
+  } = deps;
   const startEpoch = getProfileEpoch();
   const isUndo = direction === "undo";
-  const pushOppositeStack = (
+  const commitStackTransition = (
     state: SampleStoreState
   ): Partial<SampleStoreState> => {
     if (startEpoch !== getProfileEpoch()) return {};
-    return isUndo
-      ? { fileOpRedoStack: pushBoundedHistory(state.fileOpRedoStack, item) }
-      : { fileOpUndoStack: pushBoundedHistory(state.fileOpUndoStack, item) };
+    if (isUndo) {
+      const patch: Partial<SampleStoreState> = {
+        fileOpRedoStack: pushBoundedHistory(state.fileOpRedoStack, item),
+      };
+      if (popFromSourceStack) {
+        const idx = state.fileOpUndoStack.lastIndexOf(item);
+        if (idx >= 0) {
+          patch.fileOpUndoStack = [
+            ...state.fileOpUndoStack.slice(0, idx),
+            ...state.fileOpUndoStack.slice(idx + 1),
+          ];
+        }
+      }
+      return patch;
+    }
+    const patch: Partial<SampleStoreState> = {
+      fileOpUndoStack: pushBoundedHistory(state.fileOpUndoStack, item),
+    };
+    if (popFromSourceStack) {
+      const idx = state.fileOpRedoStack.lastIndexOf(item);
+      if (idx >= 0) {
+        patch.fileOpRedoStack = [
+          ...state.fileOpRedoStack.slice(0, idx),
+          ...state.fileOpRedoStack.slice(idx + 1),
+        ];
+      }
+    }
+    return patch;
   };
 
   if (item.kind === "rename") {
@@ -169,7 +201,7 @@ export async function replayFileOpHistoryItem(
       isHistoryReplay: true,
     });
     if (!updated) return false;
-    set(pushOppositeStack);
+    set(commitStackTransition);
     emitNotice(
       isUndo
         ? `Undo Rename: "${item.newFileName}" → "${item.oldFileName}"`
@@ -188,7 +220,7 @@ export async function replayFileOpHistoryItem(
       isHistoryReplay: true,
     });
     if (records.length === 0) return false;
-    set(pushOppositeStack);
+    set(commitStackTransition);
     emitNotice(
       isUndo
         ? `Undo Batch Rename: Restored ${records.length} filename(s)`
@@ -207,7 +239,7 @@ export async function replayFileOpHistoryItem(
           isHistoryReplay: true,
         });
     if (!summary || summary.affected_count === 0) return false;
-    set(pushOppositeStack);
+    set(commitStackTransition);
     emitNotice(
       isUndo
         ? `Undo Delete: Restored ${item.label}`
@@ -226,7 +258,7 @@ export async function replayFileOpHistoryItem(
           isHistoryReplay: true,
         });
     if (!summary || summary.affected_count === 0) return false;
-    set(pushOppositeStack);
+    set(commitStackTransition);
     emitNotice(
       isUndo
         ? `Undo Restore: Moved ${item.label} back to Trash`
@@ -267,7 +299,7 @@ export async function replayFileOpHistoryItem(
             refreshErr
           );
         }
-        set(pushOppositeStack);
+        set(commitStackTransition);
         emitNotice(
           isUndo
             ? `Undo Move: Returned ${relocated.length} file(s) to previous folder`

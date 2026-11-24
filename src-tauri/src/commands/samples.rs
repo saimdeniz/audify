@@ -38,9 +38,8 @@ pub async fn analyze_library_bpm_and_key(
         has_key: bool,
     }
 
-    let candidates: Vec<CandidateRow> = {
-        let conn = state.lock_db();
-        let active_id = get_active_profile_id(&conn);
+    let candidates: Vec<CandidateRow> = crate::db::run_read_query(&state, move |conn| {
+        let active_id = get_active_profile_id(conn);
 
         let mut sql = String::from(
             "SELECT s.id, s.file_path, s.file_name, s.duration_ms,
@@ -84,8 +83,9 @@ pub async fn analyze_library_bpm_and_key(
                 })
             })
             .map_err(|e| e.to_string())?;
-        rows.flatten().collect()
-    };
+        Ok(rows.flatten().collect())
+    })
+    .await?;
 
     let total = candidates.len();
     if total == 0 {

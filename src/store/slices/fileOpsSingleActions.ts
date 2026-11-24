@@ -3,13 +3,14 @@ import type { AudioHandleReleaseSnapshot } from "../../services/audioPlaybackSer
 import { SampleItem } from "../../types";
 import { clearSlicePathCache } from "../../utils/drag";
 import { splitFileNameAndExt } from "../../utils/format";
+import { internSamplePool } from "../../utils/sampleInterning";
 import { clearSmartSearchCache } from "../../utils/smartSearch";
 import {
   LAST_SELECTED_SAMPLE_PATH_KEY,
   postCrossWindowSync,
   safeSetItem,
 } from "../storageHelpers";
-import type { FileOpHistoryItem, StoreGet, StoreSet } from "../types";
+import type { StoreGet, StoreSet } from "../types";
 import {
   applySampleRenameState,
   journalEntryToHistoryItem,
@@ -33,18 +34,6 @@ export function createFileOpsSingleActions(deps: FileOpsSingleDeps) {
   const { set, get, emitNotice, getProfileEpoch, releaseMatchingAudioHandle } =
     deps;
 
-  const replayFileOpItem = (
-    item: FileOpHistoryItem,
-    direction: "undo" | "redo"
-  ): Promise<boolean> =>
-    replayFileOpHistoryItem(item, direction, {
-      set,
-      get,
-      emitNotice,
-      getProfileEpoch,
-      releaseMatchingAudioHandle,
-    });
-
   return {
     renameSampleFile: async (
       sampleId: number,
@@ -62,6 +51,7 @@ export function createFileOpsSingleActions(deps: FileOpsSingleDeps) {
           sampleId,
           newStem,
         });
+        internSamplePool([updated], get().tags);
         clearSmartSearchCache();
         clearSlicePathCache();
         const updatedStem = splitFileNameAndExt(updated.file_name).stem;
@@ -149,6 +139,7 @@ export function createFileOpsSingleActions(deps: FileOpsSingleDeps) {
         const updated = await invoke<SampleItem>("undo_rename_sample_file", {
           sampleId,
         });
+        internSamplePool([updated], get().tags);
         clearSmartSearchCache();
         clearSlicePathCache();
         applySampleRenameState(set, sampleId, updated, releaseSnap);
@@ -170,42 +161,45 @@ export function createFileOpsSingleActions(deps: FileOpsSingleDeps) {
       const stack = get().fileOpUndoStack;
       if (stack.length > 0) {
         const item = stack[stack.length - 1];
-        const epoch = getProfileEpoch();
         isReplayingHistory = true;
         try {
-          if (await replayFileOpItem(item, "undo")) {
-            if (epoch !== getProfileEpoch()) return true;
-            set((state) => {
-              const idx = state.fileOpUndoStack.lastIndexOf(item);
-              if (idx < 0) return state;
-              return {
-                fileOpUndoStack: [
-                  ...state.fileOpUndoStack.slice(0, idx),
-                  ...state.fileOpUndoStack.slice(idx + 1),
-                ],
-              };
-            });
-            return true;
-          }
-          return false;
+          return await replayFileOpHistoryItem(item, "undo", {
+            set,
+            get,
+            emitNotice,
+            getProfileEpoch,
+            releaseMatchingAudioHandle,
+            popFromSourceStack: true,
+          });
         } finally {
           isReplayingHistory = false;
         }
       }
 
-      const fallbackEntry = get().fileOpJournal.find((e) => e.can_undo);
-      if (fallbackEntry) {
+      // Iterate through all undoable journal entries so one unconvertible/deleted record
+      // never blocks older valid entries behind it.
+      for (const fallbackEntry of get().fileOpJournal) {
+        if (!fallbackEntry.can_undo) continue;
         const fallbackItem = journalEntryToHistoryItem(fallbackEntry, get);
-        if (fallbackItem) {
-          isReplayingHistory = true;
-          try {
-            if (await replayFileOpItem(fallbackItem, "undo")) {
-              return true;
-            }
-          } finally {
-            isReplayingHistory = false;
+        if (!fallbackItem) continue;
+        isReplayingHistory = true;
+        try {
+          if (
+            await replayFileOpHistoryItem(fallbackItem, "undo", {
+              set,
+              get,
+              emitNotice,
+              getProfileEpoch,
+              releaseMatchingAudioHandle,
+              popFromSourceStack: false,
+            })
+          ) {
+            return true;
           }
+        } finally {
+          isReplayingHistory = false;
         }
+        return false;
       }
 
       emitNotice("Nothing to undo", "info");
@@ -220,23 +214,16 @@ export function createFileOpsSingleActions(deps: FileOpsSingleDeps) {
         return false;
       }
       const item = redoStack[redoStack.length - 1];
-      const epoch = getProfileEpoch();
       isReplayingHistory = true;
       try {
-        const ok = await replayFileOpItem(item, "redo");
-        if (ok && epoch === getProfileEpoch()) {
-          set((state) => {
-            const idx = state.fileOpRedoStack.lastIndexOf(item);
-            if (idx < 0) return state;
-            return {
-              fileOpRedoStack: [
-                ...state.fileOpRedoStack.slice(0, idx),
-                ...state.fileOpRedoStack.slice(idx + 1),
-              ],
-            };
-          });
-        }
-        return ok;
+        return await replayFileOpHistoryItem(item, "redo", {
+          set,
+          get,
+          emitNotice,
+          getProfileEpoch,
+          releaseMatchingAudioHandle,
+          popFromSourceStack: true,
+        });
       } finally {
         isReplayingHistory = false;
       }

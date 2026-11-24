@@ -1,7 +1,7 @@
 import React, { Suspense, lazy, useEffect, useState } from "react";
 import { useSampleStore } from "../store/useSampleStore";
 import {
-  isAppWindowActive,
+  isViewportRenderActive,
   subscribeAppActivity,
 } from "../utils/appFocusMonitor";
 import {
@@ -54,14 +54,14 @@ export const AppAtmosphereViewport: React.FC = React.memo(() => {
   const isVideoBg = needsMediaUrl && isVideoWallpaperPath(customBgImage);
   const isGifBg = needsMediaUrl && !isVideoBg && isGifWallpaperPath(customBgImage);
   const [gifPlaybackActive, setGifPlaybackActive] = useState<boolean>(() =>
-    isAppWindowActive()
+    isViewportRenderActive()
   );
 
   useEffect(() => {
     if (!isGifBg) return;
-    setGifPlaybackActive(isAppWindowActive());
+    setGifPlaybackActive(isViewportRenderActive());
     return subscribeAppActivity(() => {
-      setGifPlaybackActive(isAppWindowActive());
+      setGifPlaybackActive(isViewportRenderActive());
     });
   }, [isGifBg]);
 

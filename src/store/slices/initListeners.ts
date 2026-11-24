@@ -94,6 +94,7 @@ function applyRemoteSettingsFromStorage(get: StoreGet, set: StoreSet): void {
     volume: snap.volume,
     sliceMicroFade: snap.sliceMicroFade,
     exportAudioPreset: snap.exportAudioPreset,
+    exportLoudnessMode: snap.exportLoudnessMode,
     skipLeadingSilence: snap.skipLeadingSilence,
     miniDockEdgePeek: snap.miniDockEdgePeek,
     miniDockEdgeSide: snap.miniDockEdgeSide,
@@ -305,8 +306,14 @@ export function registerStoreListenersOnce({
 
   let isHandlingRemoteSync = false;
   let queuedRemoteSyncKind: string | null = null;
+  const seenSyncMsgIds = new Map<string, number>();
   const lastHandledSyncByKind = new Map<string, number>();
   const pruneSyncTimestamps = (now: number) => {
+    for (const [id, ts] of seenSyncMsgIds) {
+      if (now - ts > 8000) {
+        seenSyncMsgIds.delete(id);
+      }
+    }
     for (const [k, ts] of lastHandledSyncByKind) {
       if (now - ts > 5000) {
         lastHandledSyncByKind.delete(k);
@@ -314,13 +321,21 @@ export function registerStoreListenersOnce({
     }
   };
 
-  const handleRemoteCatalogOrProfileSync = (kind: string) => {
+  const handleRemoteCatalogOrProfileSync = (kind: string, msgId?: string) => {
     const now = Date.now();
     pruneSyncTimestamps(now);
-    if (kind === "backgrounds") {
+    // Deduplicate dual transport (BroadcastChannel + Tauri IPC) by unique message ID
+    // so rapid distinct user edits within <180ms are never dropped while twin echoes are skipped.
+    if (msgId) {
+      if (seenSyncMsgIds.has(msgId)) return;
+      seenSyncMsgIds.set(msgId, now);
+    } else {
       const prevTs = lastHandledSyncByKind.get(kind);
-      if (prevTs !== undefined && now - prevTs < 120) return;
+      if (prevTs !== undefined && now - prevTs < 180) return;
       lastHandledSyncByKind.set(kind, now);
+    }
+
+    if (kind === "backgrounds") {
       void get().loadCustomBgGallery();
       return;
     }
@@ -330,9 +345,6 @@ export function registerStoreListenersOnce({
       }
       return;
     }
-    const prevTs = lastHandledSyncByKind.get(kind);
-    if (prevTs !== undefined && now - prevTs < 120) return;
-    lastHandledSyncByKind.set(kind, now);
     isHandlingRemoteSync = true;
     const startEpoch = getProfileEpoch();
     void invoke<Profile[]>("get_profiles")
@@ -368,7 +380,7 @@ export function registerStoreListenersOnce({
           );
         }
         if (kind === "catalog" || didSwitchProfile) {
-          await get().refreshAfterCatalogMutation();
+          await get().refreshAfterCatalogMutation({ syncCatalog: false });
         }
       })
       .catch(() => {})
@@ -383,12 +395,6 @@ export function registerStoreListenersOnce({
       });
   };
 
-  if (typeof window !== "undefined") {
-    (
-      window as unknown as { __audifyIsRemoteSync?: () => boolean }
-    ).__audifyIsRemoteSync = () => isHandlingRemoteSync;
-  }
-
   subscribeCrossWindowSync((msg) => {
     if (msg.kind === "settings") {
       scheduleRemoteSettingsApply();
@@ -399,7 +405,7 @@ export function registerStoreListenersOnce({
       msg.kind === "profile" ||
       msg.kind === "backgrounds"
     ) {
-      handleRemoteCatalogOrProfileSync(msg.kind);
+      handleRemoteCatalogOrProfileSync(msg.kind, msg.msgId);
     }
   });
 
@@ -437,12 +443,15 @@ export function registerStoreListenersOnce({
     }).catch(() => {});
   }
 
-  listen<{ source: string; kind: string }>(
+  listen<{ source: string; kind: string; msgId?: string | null }>(
     "audify:cross-window-sync",
     (event) => {
       const selfLabel = isStandaloneSettingsWindow() ? "settings" : "main";
       if (event.payload && event.payload.source !== selfLabel) {
-        handleRemoteCatalogOrProfileSync(event.payload.kind);
+        handleRemoteCatalogOrProfileSync(
+          event.payload.kind,
+          event.payload.msgId ?? undefined
+        );
       }
     }
   ).catch(() => {});
@@ -504,6 +513,30 @@ export function registerStoreListenersOnce({
         processWatcherRefresh(event.payload);
       }
     }).catch(onError("audify:library-fs-changed listener"));
+
+    // Progressive UI refresh during large incremental batch scans (throttled ~2.5s, non-overlapping)
+    let scanBatchRefreshInFlight = false;
+    let lastScanBatchRefreshAt = 0;
+    listen<{ library_id: number; committed: number }>(
+      "scan-batch-committed",
+      () => {
+        if (!get().isScanning || scanBatchRefreshInFlight) return;
+        const now = Date.now();
+        if (now - lastScanBatchRefreshAt < 2500) return;
+        const startEpoch = getProfileEpoch();
+        scanBatchRefreshInFlight = true;
+        lastScanBatchRefreshAt = now;
+        void get()
+          .refreshAfterCatalogMutation({ syncCatalog: false })
+          .catch(() => {})
+          .finally(() => {
+            scanBatchRefreshInFlight = false;
+            if (startEpoch !== getProfileEpoch()) {
+              lastScanBatchRefreshAt = 0;
+            }
+          });
+      }
+    ).catch(onError("scan-batch-committed listener"));
   }
 
   listen<ScanProgressPayload>("scan-progress", (event) => {

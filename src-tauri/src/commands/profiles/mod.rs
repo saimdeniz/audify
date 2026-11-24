@@ -59,64 +59,68 @@ pub async fn get_profiles(state: State<'_, AppState>) -> Result<Vec<Profile>, St
 }
 
 #[tauri::command]
-pub fn create_profile(
+pub async fn create_profile(
     app: AppHandle,
     state: State<'_, AppState>,
     name: String,
     color: String,
     settings_json: String,
 ) -> Result<Profile, String> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return Err("Profile name cannot be empty".to_string());
-    }
-    let clean_color = if color.trim().is_empty() {
-        "#3B82F6".to_string()
-    } else {
-        validate_hex_color(&color)?
-    };
-    let clean_settings = if settings_json.trim().is_empty() {
-        "{}".to_string()
-    } else {
-        sanitize_profile_settings_json(&settings_json)?
-    };
+    let state_owned = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err("Profile name cannot be empty".to_string());
+        }
+        let clean_color = if color.trim().is_empty() {
+            "#3B82F6".to_string()
+        } else {
+            validate_hex_color(&color)?
+        };
+        let clean_settings = if settings_json.trim().is_empty() {
+            "{}".to_string()
+        } else {
+            sanitize_profile_settings_json(&settings_json)?
+        };
 
-    let mut conn = state.lock_db();
-    let old_active_id = get_active_profile_id(&conn);
-    let old_slice = query_profile_by_id(&conn, old_active_id)
-        .ok()
-        .and_then(|p| extract_custom_slice_path(&p.settings_json));
-    let new_slice = extract_custom_slice_path(&clean_settings);
+        let mut conn = state_owned.lock_db();
+        let old_active_id = get_active_profile_id(&conn);
+        let old_slice = query_profile_by_id(&conn, old_active_id)
+            .ok()
+            .and_then(|p| extract_custom_slice_path(&p.settings_json));
+        let new_slice = extract_custom_slice_path(&clean_settings);
 
-    let tx = conn
-        .transaction()
-        .map_err(|e| format!("Failed to start profile transaction: {}", e))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Failed to start profile transaction: {}", e))?;
 
-    tx.execute("UPDATE profiles SET is_active = 0", [])
-        .map_err(|e| format!("Failed to clear active profile flag: {}", e))?;
-    tx.execute(
-        "INSERT INTO profiles (name, color, settings_json, is_active, created_at)
-         VALUES (?1, ?2, ?3, 1, datetime('now'))",
-        params![trimmed, clean_color, clean_settings],
-    )
-    .map_err(|e| format!("Failed to create profile (name may already exist): {}", e))?;
+        tx.execute("UPDATE profiles SET is_active = 0", [])
+            .map_err(|e| format!("Failed to clear active profile flag: {}", e))?;
+        tx.execute(
+            "INSERT INTO profiles (name, color, settings_json, is_active, created_at)
+             VALUES (?1, ?2, ?3, 1, datetime('now'))",
+            params![trimmed, clean_color, clean_settings],
+        )
+        .map_err(|e| format!("Failed to create profile (name may already exist): {}", e))?;
 
-    let new_id = tx.last_insert_rowid();
-    tx.execute(
-        "INSERT OR IGNORE INTO profile_libraries (profile_id, library_id)
-         SELECT ?1, id FROM libraries WHERE is_global = 1",
-        params![new_id],
-    )
-    .map_err(|e| format!("Failed to link global libraries: {}", e))?;
+        let new_id = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT OR IGNORE INTO profile_libraries (profile_id, library_id)
+             SELECT ?1, id FROM libraries WHERE is_global = 1",
+            params![new_id],
+        )
+        .map_err(|e| format!("Failed to link global libraries: {}", e))?;
 
-    tx.commit()
-        .map_err(|e| format!("Failed to commit created profile: {}", e))?;
+        tx.commit()
+            .map_err(|e| format!("Failed to commit created profile: {}", e))?;
 
-    invalidate_ai_cache_if_present(&app);
-    if old_slice != new_slice {
-        crate::reconcile_library_asset_scopes(&app, &conn, old_slice.as_deref());
-    }
-    query_profile_by_id(&conn, new_id)
+        invalidate_ai_cache_if_present(&app);
+        let _ = (old_slice, new_slice);
+        crate::reconcile_library_asset_scopes(&app, &conn, None);
+        query_profile_by_id(&conn, new_id)
+    })
+    .await
+    .map_err(|e| format!("Create profile task failed: {}", e))?
 }
 
 pub(crate) fn duplicate_profile_with_conn(
@@ -244,63 +248,70 @@ pub(crate) fn duplicate_profile_with_conn(
 }
 
 #[tauri::command]
-pub fn duplicate_profile(
+pub async fn duplicate_profile(
     app: AppHandle,
     state: State<'_, AppState>,
     source_profile_id: i64,
     new_name: String,
 ) -> Result<Profile, String> {
-    let mut conn = state.lock_db();
-    let profile = duplicate_profile_with_conn(&mut conn, source_profile_id, &new_name)?;
-    invalidate_ai_cache_if_present(&app);
-    crate::reconcile_library_asset_scopes(&app, &conn, None);
-    Ok(profile)
+    let state_owned = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = state_owned.lock_db();
+        let profile = duplicate_profile_with_conn(&mut conn, source_profile_id, &new_name)?;
+        invalidate_ai_cache_if_present(&app);
+        crate::reconcile_library_asset_scopes(&app, &conn, None);
+        Ok(profile)
+    })
+    .await
+    .map_err(|e| format!("Duplicate profile task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn switch_profile(
+pub async fn switch_profile(
     app: AppHandle,
     state: State<'_, AppState>,
     profile_id: i64,
 ) -> Result<Profile, String> {
-    let mut conn = state.lock_db();
-    let old_active_id = get_active_profile_id(&conn);
-    let old_slice = query_profile_by_id(&conn, old_active_id)
-        .ok()
-        .and_then(|p| extract_custom_slice_path(&p.settings_json));
-    let old_libs = collect_profile_library_ids(&conn, old_active_id);
+    let state_owned = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = state_owned.lock_db();
+        let old_active_id = get_active_profile_id(&conn);
+        let old_slice = query_profile_by_id(&conn, old_active_id)
+            .ok()
+            .and_then(|p| extract_custom_slice_path(&p.settings_json));
+        let old_libs = collect_profile_library_ids(&conn, old_active_id);
 
-    let tx = conn
-        .transaction()
-        .map_err(|e| format!("Failed to start profile switch transaction: {}", e))?;
-    // Verify target exists BEFORE unsetting active flag so invalid IDs never leave zero active profiles.
-    let target = query_profile_by_id(&tx, profile_id)?;
-    tx.execute("UPDATE profiles SET is_active = 0", [])
-        .map_err(|e| format!("Failed to clear active profile flag: {}", e))?;
-    let updated = tx
-        .execute(
-            "UPDATE profiles SET is_active = 1 WHERE id = ?1",
-            params![profile_id],
-        )
-        .map_err(|e| format!("Failed to update profile: {}", e))?;
-    if updated == 0 {
-        return Err("Profile not found".to_string());
-    }
-    tx.commit()
-        .map_err(|e| format!("Failed to commit profile switch: {}", e))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Failed to start profile switch transaction: {}", e))?;
+        let target = query_profile_by_id(&tx, profile_id)?;
+        tx.execute("UPDATE profiles SET is_active = 0", [])
+            .map_err(|e| format!("Failed to clear active profile flag: {}", e))?;
+        let updated = tx
+            .execute(
+                "UPDATE profiles SET is_active = 1 WHERE id = ?1",
+                params![profile_id],
+            )
+            .map_err(|e| format!("Failed to update profile: {}", e))?;
+        if updated == 0 {
+            return Err("Profile not found".to_string());
+        }
+        tx.commit()
+            .map_err(|e| format!("Failed to commit profile switch: {}", e))?;
 
-    let new_slice = extract_custom_slice_path(&target.settings_json);
-    let new_libs = collect_profile_library_ids(&conn, profile_id);
-    invalidate_ai_cache_if_present(&app);
-    if old_slice != new_slice || old_libs != new_libs {
-        let removed = old_slice.as_deref().filter(|old_s| new_slice.as_deref() != Some(*old_s));
-        crate::reconcile_library_asset_scopes(&app, &conn, removed);
-    }
-    query_profile_by_id(&conn, profile_id)
+        let new_slice = extract_custom_slice_path(&target.settings_json);
+        let new_libs = collect_profile_library_ids(&conn, profile_id);
+        invalidate_ai_cache_if_present(&app);
+        let _ = (old_slice, new_slice, old_libs, new_libs);
+        crate::reconcile_library_asset_scopes(&app, &conn, None);
+        query_profile_by_id(&conn, profile_id)
+    })
+    .await
+    .map_err(|e| format!("Switch profile task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn update_profile(
+pub async fn update_profile(
     app: AppHandle,
     state: State<'_, AppState>,
     profile_id: i64,
@@ -308,146 +319,163 @@ pub fn update_profile(
     color: Option<String>,
     settings_json: Option<String>,
 ) -> Result<Profile, String> {
-    let conn = state.lock_db();
-    let current = query_profile_by_id(&conn, profile_id)?;
-    let old_slice = extract_custom_slice_path(&current.settings_json);
+    let state_owned = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = state_owned.lock_db();
+        let current = query_profile_by_id(&conn, profile_id)?;
+        let old_slice = extract_custom_slice_path(&current.settings_json);
 
-    let next_name = name
-        .map(|n| n.trim().to_string())
-        .filter(|n| !n.is_empty())
-        .unwrap_or(current.name);
-    let next_color = match color {
-        Some(c) if !c.trim().is_empty() => validate_hex_color(&c)?,
-        Some(_) => return Err("Profile color cannot be empty".to_string()),
-        None => current.color,
-    };
-    let has_new_settings = settings_json.is_some();
-    let next_settings = match settings_json {
-        Some(raw) if raw.trim().is_empty() => "{}".to_string(),
-        Some(raw) => sanitize_profile_settings_json(&raw)?,
-        None => current.settings_json,
-    };
-    let new_slice = extract_custom_slice_path(&next_settings);
+        let next_name = name
+            .map(|n| n.trim().to_string())
+            .filter(|n| !n.is_empty())
+            .unwrap_or(current.name);
+        let next_color = match color {
+            Some(c) if !c.trim().is_empty() => validate_hex_color(&c)?,
+            Some(_) => return Err("Profile color cannot be empty".to_string()),
+            None => current.color,
+        };
+        let has_new_settings = settings_json.is_some();
+        let next_settings = match settings_json {
+            Some(raw) if raw.trim().is_empty() => "{}".to_string(),
+            Some(raw) => sanitize_profile_settings_json(&raw)?,
+            None => current.settings_json,
+        };
+        let new_slice = extract_custom_slice_path(&next_settings);
 
-    conn.execute(
-        "UPDATE profiles SET name = ?1, color = ?2, settings_json = ?3 WHERE id = ?4",
-        params![next_name, next_color, next_settings, profile_id],
-    )
-    .map_err(|e| format!("Failed to update profile: {}", e))?;
+        conn.execute(
+            "UPDATE profiles SET name = ?1, color = ?2, settings_json = ?3 WHERE id = ?4",
+            params![next_name, next_color, next_settings, profile_id],
+        )
+        .map_err(|e| format!("Failed to update profile: {}", e))?;
 
-    if has_new_settings {
-        if old_slice != new_slice {
-            crate::reconcile_library_asset_scopes(&app, &conn, old_slice.as_deref());
-        } else {
-            crate::library_watcher::reconcile_watcher_if_managed(&app, &conn);
+        if has_new_settings && current.is_active {
+            if old_slice != new_slice {
+                crate::reconcile_library_asset_scopes(&app, &conn, None);
+            } else {
+                crate::library_watcher::reconcile_watcher_if_managed(&app, &conn);
+            }
         }
-    }
 
-    query_profile_by_id(&conn, profile_id)
+        query_profile_by_id(&conn, profile_id)
+    })
+    .await
+    .map_err(|e| format!("Update profile task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn delete_profile(
+pub async fn delete_profile(
     app: AppHandle,
     state: State<'_, AppState>,
     profile_id: i64,
 ) -> Result<Profile, String> {
-    let mut conn = state.lock_db();
-    let target = query_profile_by_id(&conn, profile_id)?;
-    let old_slice = if target.is_active {
-        extract_custom_slice_path(&target.settings_json)
-    } else {
-        None
-    };
+    let state_owned = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = state_owned.lock_db();
+        let target = query_profile_by_id(&conn, profile_id)?;
+        let old_slice = if target.is_active {
+            extract_custom_slice_path(&target.settings_json)
+        } else {
+            None
+        };
 
-    let tx = conn
-        .transaction()
-        .map_err(|e| format!("Failed to start profile delete transaction: {}", e))?;
-    let count: i64 = tx
-        .query_row("SELECT COUNT(*) FROM profiles", [], |r| r.get(0))
-        .unwrap_or(0);
-    if count <= 1 {
-        return Err("Cannot delete the only remaining workspace profile".to_string());
-    }
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Failed to start profile delete transaction: {}", e))?;
+        let count: i64 = tx
+            .query_row("SELECT COUNT(*) FROM profiles", [], |r| r.get(0))
+            .unwrap_or(0);
+        if count <= 1 {
+            return Err("Cannot delete the only remaining workspace profile".to_string());
+        }
 
-    let trashed_slice_paths: Vec<String> = tx
-        .prepare(
-            "SELECT COALESCE(trash_file_path, '') FROM sample_slices
-             WHERE profile_id = ?1 AND COALESCE(is_trashed, 0) = 1",
-        )
-        .ok()
-        .and_then(|mut stmt| {
-            stmt.query_map(params![profile_id], |r| r.get::<_, String>(0))
-                .ok()
-                .map(|rows| rows.flatten().collect())
-        })
-        .unwrap_or_default();
+        let trashed_slice_paths: Vec<String> = tx
+            .prepare(
+                "SELECT COALESCE(trash_file_path, '') FROM sample_slices
+                 WHERE profile_id = ?1 AND COALESCE(is_trashed, 0) = 1",
+            )
+            .ok()
+            .and_then(|mut stmt| {
+                stmt.query_map(params![profile_id], |r| r.get::<_, String>(0))
+                    .ok()
+                    .map(|rows| rows.flatten().collect())
+            })
+            .unwrap_or_default();
 
-    let deleted = tx
-        .execute("DELETE FROM profiles WHERE id = ?1", params![profile_id])
-        .map_err(|e| format!("Failed to delete profile: {}", e))?;
-    if deleted == 0 {
-        return Err("Profile not found".to_string());
-    }
+        let deleted = tx
+            .execute("DELETE FROM profiles WHERE id = ?1", params![profile_id])
+            .map_err(|e| format!("Failed to delete profile: {}", e))?;
+        if deleted == 0 {
+            return Err("Profile not found".to_string());
+        }
 
-    let has_active: bool = tx
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM profiles WHERE is_active = 1)",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap_or(false);
+        let has_active: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM profiles WHERE is_active = 1)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
 
-    if !has_active {
-        tx.execute(
-            "UPDATE profiles SET is_active = 1 WHERE id = (SELECT id FROM profiles ORDER BY id ASC LIMIT 1)",
-            [],
-        )
-        .map_err(|e| format!("Failed to activate fallback profile: {}", e))?;
-    }
-    tx.commit()
-        .map_err(|e| format!("Failed to commit profile deletion: {}", e))?;
+        if !has_active {
+            tx.execute(
+                "UPDATE profiles SET is_active = 1 WHERE id = (SELECT id FROM profiles ORDER BY id ASC LIMIT 1)",
+                [],
+            )
+            .map_err(|e| format!("Failed to activate fallback profile: {}", e))?;
+        }
+        tx.commit()
+            .map_err(|e| format!("Failed to commit profile deletion: {}", e))?;
 
-    let slice_trash_dir = state.user_dir.join("cache").join("slice_trash");
-    if let Ok(canon_trash) = slice_trash_dir.canonicalize() {
-        for raw_tp in trashed_slice_paths {
-            let tp = raw_tp.trim();
-            if tp.is_empty()
-                || crate::security::is_unc_or_network_path(tp)
-                || crate::security::has_ntfs_ads_colon(tp)
-            {
-                continue;
-            }
-            if let Ok(meta) = fs::symlink_metadata(tp) {
-                if !meta.file_type().is_symlink() && meta.is_file() {
-                    if let Ok(canon) = fs::canonicalize(tp) {
-                        if canon.starts_with(&canon_trash) {
-                            let _ = fs::remove_file(tp);
+        let slice_trash_dir = state_owned.user_dir.join("cache").join("slice_trash");
+        if let Ok(canon_trash) = slice_trash_dir.canonicalize() {
+            for raw_tp in trashed_slice_paths {
+                let tp = raw_tp.trim();
+                if tp.is_empty()
+                    || crate::security::is_unc_or_network_path(tp)
+                    || crate::security::has_ntfs_ads_colon(tp)
+                {
+                    continue;
+                }
+                if let Ok(meta) = fs::symlink_metadata(tp) {
+                    if !meta.file_type().is_symlink() && meta.is_file() {
+                        if let Ok(canon) = fs::canonicalize(tp) {
+                            if canon.starts_with(&canon_trash) {
+                                let _ = fs::remove_file(tp);
+                            }
                         }
                     }
                 }
             }
         }
-    }
 
-    let active_id = get_active_profile_id(&conn);
-    invalidate_ai_cache_if_present(&app);
-    crate::reconcile_library_asset_scopes(&app, &conn, old_slice.as_deref());
-    query_profile_by_id(&conn, active_id)
+        let active_id = get_active_profile_id(&conn);
+        invalidate_ai_cache_if_present(&app);
+        crate::reconcile_library_asset_scopes(&app, &conn, old_slice.as_deref());
+        query_profile_by_id(&conn, active_id)
+    })
+    .await
+    .map_err(|e| format!("Delete profile task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn export_settings_to_file(file_path: String, settings_json: String) -> Result<(), String> {
-    let target_path = validate_json_export_path(&file_path)?;
-    let parsed: serde_json::Value = serde_json::from_str(&settings_json)
-        .map_err(|e| format!("Invalid JSON in settings file: {}", e))?;
+pub async fn export_settings_to_file(
+    file_path: String,
+    settings_json: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let target_path = validate_json_export_path(&file_path)?;
+        let parsed: serde_json::Value = serde_json::from_str(&settings_json)
+            .map_err(|e| format!("Invalid JSON in settings file: {}", e))?;
 
-    let sanitized = whitelist_and_sanitize_settings(&parsed, false, false)?;
+        let sanitized = whitelist_and_sanitize_settings(&parsed, false, false)?;
 
-    let pretty = serde_json::to_string_pretty(&sanitized)
-        .map_err(|e| format!("Failed to serialize settings JSON: {}", e))?;
-    fs::write(&target_path, pretty)
-        .map_err(|_| format!("Failed to write settings file {}", display_leaf(&target_path)))
+        let pretty = serde_json::to_string_pretty(&sanitized)
+            .map_err(|e| format!("Failed to serialize settings JSON: {}", e))?;
+        fs::write(&target_path, pretty)
+            .map_err(|_| format!("Failed to write settings file {}", display_leaf(&target_path)))
+    })
+    .await
+    .map_err(|e| format!("Export settings task failed: {}", e))?
 }
 
 pub(crate) fn import_settings_from_file_with_conn(
@@ -481,50 +509,70 @@ pub(crate) fn import_settings_from_file_with_conn(
 }
 
 #[tauri::command]
-pub fn import_settings_from_file(
+pub async fn import_settings_from_file(
     app: AppHandle,
     state: State<'_, AppState>,
     file_path: String,
 ) -> Result<Profile, String> {
-    let conn = state.lock_db();
-    let profile = import_settings_from_file_with_conn(&conn, &file_path)?;
-    crate::reconcile_library_asset_scopes(&app, &conn, None);
-    Ok(profile)
+    let state_owned = state.inner().clone();
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = state_owned.lock_db();
+        let profile = import_settings_from_file_with_conn(&conn, &file_path)?;
+        crate::reconcile_library_asset_scopes(&app_clone, &conn, None);
+        Ok(profile)
+    })
+    .await
+    .map_err(|e| format!("Settings import task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn export_profile_to_file(
+pub async fn export_profile_to_file(
     state: State<'_, AppState>,
     profile_id: i64,
     file_path: String,
     share_safe: Option<bool>,
     include_ai_tags: Option<bool>,
 ) -> Result<(), String> {
-    let target_path = validate_archive_export_path(
-        &file_path,
-        PROFILE_ARCHIVE_SUFFIXES,
-        "Export file path must end with .audify-profile or .json",
-    )?;
-    let mut pkg = {
-        let conn = state.lock_db();
-        let (_, pkg) = build_profile_export_package_with_options(
-            &conn,
-            profile_id,
-            include_ai_tags.unwrap_or(false),
+    let state_owned = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let target_path = validate_archive_export_path(
+            &file_path,
+            PROFILE_ARCHIVE_SUFFIXES,
+            "Export file path must end with .audify-profile or .json",
         )?;
-        pkg
-    };
-    if share_safe.unwrap_or(false) {
-        apply_share_safe(&mut pkg);
-    }
-    write_profile_package_to_path(&pkg, &target_path).map_err(|e| {
-        format!(
-            "Failed to write profile export {}: {}",
-            display_leaf(&target_path),
-            e
-        )
-    })?;
-    Ok(())
+        let mut pkg = {
+            if let Ok(read_conn) = state_owned.acquire_read_conn() {
+                let (_, pkg) = build_profile_export_package_with_options(
+                    &read_conn,
+                    profile_id,
+                    include_ai_tags.unwrap_or(false),
+                )?;
+                pkg
+            } else {
+                let conn = state_owned.lock_db();
+                let (_, pkg) = build_profile_export_package_with_options(
+                    &conn,
+                    profile_id,
+                    include_ai_tags.unwrap_or(false),
+                )?;
+                pkg
+            }
+        };
+        if share_safe.unwrap_or(false) {
+            apply_share_safe(&mut pkg);
+        }
+        write_profile_package_to_path(&pkg, &target_path).map_err(|e| {
+            format!(
+                "Failed to write profile export {}: {}",
+                display_leaf(&target_path),
+                e
+            )
+        })?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Profile export task failed: {}", e))?
 }
 
 #[tauri::command]

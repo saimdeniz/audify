@@ -265,7 +265,7 @@ export const TagRuleEditorPanel: React.FC<TagRuleEditorPanelProps> = ({
                     left: categoryMenuPos.left,
                     zIndex: Z_INDEX.floatingMenu,
                   }}
-                  className="fixed w-36 max-h-[240px] overflow-y-auto bg-surface-2 border border-line rounded-md shadow-2xl py-1 font-mono text-[10px] backdrop-blur-md"
+                  className="fixed w-36 max-h-[240px] overflow-y-auto bg-surface-2 border border-line rounded-md shadow-2xl py-1 font-mono text-[10px] audify-overlay-surface"
                 >
                   {allAvailableCategories.map((c) => {
                     const isCurrent =

@@ -26,9 +26,12 @@ use std::path::PathBuf;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, Ordering};
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, SIZE};
-use windows::Win32::Graphics::Gdi::{CreateBitmap, DeleteObject, GetObjectW, BITMAP, HBITMAP};
+use windows::Win32::Graphics::Gdi::{
+    CreateDIBSection, DeleteObject, GetObjectW, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+    DIB_RGB_COLORS, HBITMAP,
+};
 use windows::Win32::Graphics::Imaging::{
-    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory,
+    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppBGRA, IWICImagingFactory,
     WICConvertBitmapSource, WICDecodeMetadataCacheOnDemand,
 };
 use windows::Win32::System::Com::{
@@ -82,7 +85,7 @@ unsafe extern "system" fn cancel_mode_child_proc(hwnd: HWND, _lparam: isize) -> 
 /// `Chrome_RenderWidgetHostHWND` & `Chrome_WidgetWin_*`) and local STA thread capture right before
 /// `DoDragDrop`, even if fast mouse movement has already moved the cursor over an external NLE.
 unsafe fn release_webview_and_local_capture(owner_hwnd: HWND) {
-    if owner_hwnd.0 != 0 {
+    if !owner_hwnd.is_invalid() {
         let _ = EnumChildWindows(owner_hwnd, cancel_mode_child_proc, 0);
         let mut dummy_res: usize = 0;
         let _ = SendMessageTimeoutW(
@@ -98,9 +101,13 @@ unsafe fn release_webview_and_local_capture(owner_hwnd: HWND) {
         let mut pt = POINT { x: 0, y: 0 };
         if GetCursorPos(&mut pt) != 0 {
             let hit_hwnd = WindowFromPoint(pt);
-            if hit_hwnd.0 != 0 {
+            if !hit_hwnd.is_invalid() {
                 let root_hwnd = GetAncestor(hit_hwnd, GA_ROOT_FLAG);
-                let check_root = if root_hwnd.0 != 0 { root_hwnd } else { hit_hwnd };
+                let check_root = if !root_hwnd.is_invalid() {
+                    root_hwnd
+                } else {
+                    hit_hwnd
+                };
                 let mut pid: u32 = 0;
                 GetWindowThreadProcessId(check_root, &mut pid);
                 if pid != 0 && pid == GetCurrentProcessId() {
@@ -127,12 +134,16 @@ unsafe fn is_cursor_over_external_window(owner_hwnd: HWND) -> bool {
         return false;
     }
     let hit_hwnd = WindowFromPoint(pt);
-    if hit_hwnd.0 == 0 {
+    if hit_hwnd.is_invalid() {
         return false;
     }
     let root_hwnd = GetAncestor(hit_hwnd, GA_ROOT_FLAG);
-    let check_hwnd = if root_hwnd.0 != 0 { root_hwnd } else { hit_hwnd };
-    if owner_hwnd.0 != 0 && check_hwnd == owner_hwnd {
+    let check_hwnd = if !root_hwnd.is_invalid() {
+        root_hwnd
+    } else {
+        hit_hwnd
+    };
+    if !owner_hwnd.is_invalid() && check_hwnd == owner_hwnd {
         return false;
     }
     let mut root_pid: u32 = 0;
@@ -144,10 +155,10 @@ unsafe fn is_cursor_over_external_window(owner_hwnd: HWND) -> bool {
 fn ensure_ole_initialized() {
     OLE_INITIALIZED.with(|flag| {
         if !flag.get() {
-            unsafe {
-                let _ = OleInitialize(Some(null_mut()));
+            let hr = unsafe { OleInitialize(None) };
+            if hr.is_ok() {
+                flag.set(true);
             }
-            flag.set(true);
         }
     });
 }
@@ -171,8 +182,10 @@ unsafe fn decode_png_to_hbitmap(png_bytes: &[u8]) -> Option<HBITMAP> {
 
     let mut pixel_buf: Vec<u8> = vec![0; (width * height * 4) as usize];
     let pixel_format = frame.GetPixelFormat().ok()?;
-    if pixel_format != GUID_WICPixelFormat32bppPBGRA {
-        let converted = WICConvertBitmapSource(&GUID_WICPixelFormat32bppPBGRA, &frame).ok()?;
+    // Per MSDN `IDragSourceHelper::InitializeFromBitmap`, the Shell expects non-premultiplied
+    // 32bpp BGRA in a 32-bit DIB section and premultiplies alpha internally during compositing.
+    if pixel_format != GUID_WICPixelFormat32bppBGRA {
+        let converted = WICConvertBitmapSource(&GUID_WICPixelFormat32bppBGRA, &frame).ok()?;
         converted
             .CopyPixels(std::ptr::null(), width * 4, &mut pixel_buf)
             .ok()?;
@@ -182,18 +195,28 @@ unsafe fn decode_png_to_hbitmap(png_bytes: &[u8]) -> Option<HBITMAP> {
             .ok()?;
     }
 
-    let hbmp = CreateBitmap(
-        width as i32,
-        height as i32,
-        1,
-        32,
-        Some(pixel_buf.as_ptr() as *const c_void),
-    );
-    if hbmp.is_invalid() {
-        None
-    } else {
-        Some(hbmp)
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width as i32,
+            biHeight: -(height as i32), // top-down DIB
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut bits_ptr: *mut c_void = null_mut();
+    let hbmp = CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut bits_ptr, None, 0).ok()?;
+    if hbmp.is_invalid() || bits_ptr.is_null() {
+        if !hbmp.is_invalid() {
+            let _ = DeleteObject(hbmp.into());
+        }
+        return None;
     }
+    std::ptr::copy_nonoverlapping(pixel_buf.as_ptr(), bits_ptr as *mut u8, pixel_buf.len());
+    Some(hbmp)
 }
 
 unsafe fn attach_drag_badge(data_object: &IDataObject, png_bytes: &[u8]) {
@@ -203,21 +226,22 @@ unsafe fn attach_drag_badge(data_object: &IDataObject, png_bytes: &[u8]) {
 
     let mut bmp: BITMAP = BITMAP::default();
     let got_obj = GetObjectW(
-        hbmp,
+        hbmp.into(),
         std::mem::size_of::<BITMAP>() as i32,
         Some(&mut bmp as *mut BITMAP as *mut c_void),
     );
     let (cx, cy) = if got_obj == 0 {
         (128, 36)
     } else {
-        (bmp.bmWidth, bmp.bmHeight)
+        (bmp.bmWidth, bmp.bmHeight.abs())
     };
 
     let drag_img = SHDRAGIMAGE {
         sizeDragImage: SIZE { cx, cy },
         ptOffset: POINT { x: 0, y: 0 },
         hbmpDragImage: hbmp,
-        crColorKey: COLORREF(0x00000000),
+        // Sentinel magenta key never collides with pure #000000 pixels in Contrast theme.
+        crColorKey: COLORREF(0x00FE01FE),
     };
 
     let attached = CoCreateInstance::<_, IDragSourceHelper>(&CLSID_DragDropHelper, None, CLSCTX_ALL)
@@ -225,7 +249,7 @@ unsafe fn attach_drag_badge(data_object: &IDataObject, png_bytes: &[u8]) {
         .is_ok();
 
     if !attached {
-        let _ = DeleteObject(hbmp);
+        let _ = DeleteObject(hbmp.into());
     }
 }
 
@@ -255,8 +279,8 @@ pub fn start_explorer_file_drag(
         let owner_hwnd = window
             .hwnd()
             .ok()
-            .map(|h| HWND(h.0 as isize))
-            .unwrap_or(HWND(0));
+            .map(|h| HWND(h.0))
+            .unwrap_or_default();
 
         // Release WebView2 cross-process capture unconditionally BEFORE creating drag image or
         // entering OLE's modal drag loop so fast drags across window boundaries never leave

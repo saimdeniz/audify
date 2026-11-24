@@ -1,6 +1,15 @@
 use std::fs::File;
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
+
+#[inline]
+fn sanitize_float_sample(raw: f32) -> f32 {
+    if raw.is_finite() {
+        raw
+    } else {
+        0.0
+    }
+}
 
 #[inline]
 fn sanitize_audio_sample(raw: f32) -> f32 {
@@ -23,12 +32,13 @@ fn float_to_pcm_i24(raw: f32) -> i32 {
         .clamp(-8_388_608.0, 8_388_607.0) as i32
 }
 
-/// Downmixes an interleaved multichannel frame (`ch >= 1`) into `out_channels` (`1` or `2`)
-/// while preserving full 32-bit float dynamic range.
-pub(super) fn push_frame_downmixed_f32(frame: &[f32], out_channels: usize, dst: &mut Vec<f32>) {
+/// Downmixes an interleaved multichannel frame (`ch >= 1`) into a stack-allocated `[f32; 2]` buffer
+/// with valid length `1` or `2` (zero per-frame heap allocation).
+#[inline]
+fn downmix_frame_to_f32(frame: &[f32], out_channels: usize) -> ([f32; 2], usize) {
     let ch = frame.len();
     if ch == 0 {
-        return;
+        return ([0.0, 0.0], 0);
     }
     if out_channels == 1 {
         let mut sum = 0.0_f32;
@@ -37,20 +47,18 @@ pub(super) fn push_frame_downmixed_f32(frame: &[f32], out_channels: usize, dst: 
                 sum += v;
             }
         }
-        dst.push(sanitize_audio_sample(sum / (ch as f32)));
-        return;
+        return ([sanitize_float_sample(sum / (ch as f32)), 0.0], 1);
     }
 
     match ch {
         1 => {
-            let s = sanitize_audio_sample(frame[0]);
-            dst.push(s);
-            dst.push(s);
+            let s = sanitize_float_sample(frame[0]);
+            ([s, s], 2)
         }
-        2 => {
-            dst.push(sanitize_audio_sample(frame[0]));
-            dst.push(sanitize_audio_sample(frame[1]));
-        }
+        2 => (
+            [sanitize_float_sample(frame[0]), sanitize_float_sample(frame[1])],
+            2,
+        ),
         6 => {
             // Standard 5.1 layout: FL(0), FR(1), FC(2), LFE(3), BL/SL(4), BR/SR(5)
             let s0 = if frame[0].is_finite() { frame[0] } else { 0.0 };
@@ -61,8 +69,10 @@ pub(super) fn push_frame_downmixed_f32(frame: &[f32], out_channels: usize, dst: 
             let k = std::f32::consts::FRAC_1_SQRT_2;
             let left = (s0 + k * s2 + k * s4) * k;
             let right = (s1 + k * s2 + k * s5) * k;
-            dst.push(sanitize_audio_sample(left));
-            dst.push(sanitize_audio_sample(right));
+            (
+                [sanitize_float_sample(left), sanitize_float_sample(right)],
+                2,
+            )
         }
         _ => {
             // General multichannel (>2ch) field recording: even channels -> L, odd channels -> R
@@ -90,18 +100,126 @@ pub(super) fn push_frame_downmixed_f32(frame: &[f32], out_channels: usize, dst: 
             } else {
                 1.0
             };
-            dst.push(sanitize_audio_sample(l_sum * l_scale));
-            dst.push(sanitize_audio_sample(r_sum * r_scale));
+            (
+                [
+                    sanitize_float_sample(l_sum * l_scale),
+                    sanitize_float_sample(r_sum * r_scale),
+                ],
+                2,
+            )
         }
     }
 }
 
-/// Downmixes an interleaved multichannel frame (`ch >= 1`) into `out_channels` (`1` or `2`) as `i16`.
-pub(super) fn push_frame_downmixed(frame: &[f32], out_channels: usize, dst: &mut Vec<i16>) {
-    let mut tmp = Vec::with_capacity(out_channels);
-    push_frame_downmixed_f32(frame, out_channels, &mut tmp);
-    for s in tmp {
-        dst.push(float_to_pcm_i16(s));
+/// Downmixes an interleaved multichannel frame (`ch >= 1`) into `out_channels` (`1` or `2`)
+/// while preserving full 32-bit float dynamic range.
+pub(super) fn push_frame_downmixed_f32(frame: &[f32], out_channels: usize, dst: &mut Vec<f32>) {
+    let (buf, count) = downmix_frame_to_f32(frame, out_channels);
+    dst.extend_from_slice(&buf[..count]);
+}
+
+/// Streaming PCM WAV writer (16-bit or 24-bit) using constant ~64 KiB memory regardless of
+/// audio duration, patching the 44-byte RIFF/WAVE header on `finish()` and failing explicitly
+/// instead of silently truncating if the 4 GiB RIFF payload limit is exceeded.
+pub(super) struct StreamingWavWriter {
+    writer: BufWriter<File>,
+    sample_rate: u32,
+    channels: u16,
+    bits_per_sample: u16,
+    sample_count: u64,
+    max_samples: u64,
+}
+
+impl StreamingWavWriter {
+    pub(super) fn create(
+        path: &Path,
+        sample_rate: u32,
+        channels: u16,
+        bits_per_sample: u16,
+    ) -> io::Result<Self> {
+        if sample_rate == 0 || channels == 0 || (bits_per_sample != 16 && bits_per_sample != 24) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid WAV header parameters",
+            ));
+        }
+        let file = File::create(path)?;
+        let mut writer = BufWriter::with_capacity(64 * 1024, file);
+        writer.write_all(&[0u8; 44])?;
+        let bytes_per_sample = (bits_per_sample / 8) as u64;
+        let max_samples = (u32::MAX as u64).saturating_sub(44) / bytes_per_sample;
+        Ok(Self {
+            writer,
+            sample_rate,
+            channels,
+            bits_per_sample,
+            sample_count: 0,
+            max_samples,
+        })
+    }
+
+    pub(super) fn write_f32_samples(&mut self, samples: &[f32]) -> io::Result<()> {
+        if samples.is_empty() {
+            return Ok(());
+        }
+        let next_total = self.sample_count.saturating_add(samples.len() as u64);
+        if next_total > self.max_samples {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "WAV payload exceeds 4GB RIFF limit",
+            ));
+        }
+        if self.bits_per_sample == 24 {
+            let mut chunk_buf = [0u8; 9216]; // divisible by 3
+            for sample_chunk in samples.chunks(chunk_buf.len() / 3) {
+                let byte_len = sample_chunk.len() * 3;
+                for (idx, &s) in sample_chunk.iter().enumerate() {
+                    let le = float_to_pcm_i24(s).to_le_bytes();
+                    chunk_buf[idx * 3] = le[0];
+                    chunk_buf[idx * 3 + 1] = le[1];
+                    chunk_buf[idx * 3 + 2] = le[2];
+                }
+                self.writer.write_all(&chunk_buf[..byte_len])?;
+            }
+        } else {
+            let mut chunk_buf = [0u8; 8192];
+            for sample_chunk in samples.chunks(chunk_buf.len() / 2) {
+                let byte_len = sample_chunk.len() * 2;
+                for (idx, &s) in sample_chunk.iter().enumerate() {
+                    let le = float_to_pcm_i16(s).to_le_bytes();
+                    chunk_buf[idx * 2] = le[0];
+                    chunk_buf[idx * 2 + 1] = le[1];
+                }
+                self.writer.write_all(&chunk_buf[..byte_len])?;
+            }
+        }
+        self.sample_count = next_total;
+        Ok(())
+    }
+
+    pub(super) fn sample_count(&self) -> u64 {
+        self.sample_count
+    }
+
+    pub(super) fn finish(mut self) -> io::Result<()> {
+        self.writer.flush()?;
+        let mut file = self.writer.into_inner().map_err(|e| e.into_error())?;
+        file.seek(SeekFrom::Start(0))?;
+        let count_usize = usize::try_from(self.sample_count).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "WAV payload exceeds 4GB RIFF limit",
+            )
+        })?;
+        write_wav_header(
+            &mut file,
+            self.sample_rate,
+            self.channels,
+            self.bits_per_sample,
+            count_usize,
+        )?;
+        file.flush()?;
+        Ok(())
     }
 }
 
@@ -113,32 +231,60 @@ pub(super) fn resample_interleaved_f32(
     channels: usize,
     speed_ratio: f64,
     max_total_samples: usize,
-) -> Vec<f32> {
+) -> Result<Vec<f32>, String> {
     if !speed_ratio.is_finite()
         || speed_ratio <= 0.0
         || (speed_ratio - 1.0).abs() < 1e-5
         || channels == 0
     {
-        return samples.to_vec();
+        return Ok(samples.to_vec());
     }
     let in_frames = samples.len() / channels;
     if in_frames <= 1 {
-        return samples.to_vec();
+        return Ok(samples.to_vec());
     }
 
     let max_out_frames = (max_total_samples / channels).max(1);
-    let out_frames = (((in_frames as f64) / speed_ratio).round() as usize)
-        .max(1)
-        .min(max_out_frames);
+    let requested_out_frames = (((in_frames as f64) / speed_ratio).round() as usize).max(1);
+    if requested_out_frames > max_out_frames {
+        return Err(
+            "Resampled slice exceeds maximum 256 MiB WAV buffer size (shorten range or reduce pitch-down)"
+                .to_string(),
+        );
+    }
+    let out_frames = requested_out_frames;
 
     let mut out = Vec::with_capacity(out_frames * channels);
     let last_frame = (in_frames - 1) as isize;
     let use_aa_sinc = speed_ratio > 1.02;
     let aa_cutoff = (0.92 / speed_ratio).min(1.0);
     let aa_radius = if use_aa_sinc {
-        ((2.5 * speed_ratio).ceil() as isize).clamp(4, 16)
+        ((2.5 * speed_ratio).ceil() as isize).clamp(4, 64)
     } else {
         0
+    };
+
+    // Precompute symmetric Hann-windowed sinc LUT (64 subdivisions per tap) to eliminate
+    // per-tap `sin`/`cos` transcendental math in the inner resampling loop.
+    const SINC_LUT_SUBDIV: usize = 64;
+    let sinc_lut: Vec<f64> = if use_aa_sinc {
+        let r_f64 = aa_radius as f64;
+        let entries = (aa_radius as usize) * SINC_LUT_SUBDIV + 2;
+        let mut table = Vec::with_capacity(entries);
+        for i in 0..entries {
+            let d = (i as f64) / (SINC_LUT_SUBDIV as f64);
+            if d >= r_f64 {
+                table.push(0.0);
+            } else {
+                let x = std::f64::consts::PI * d * aa_cutoff;
+                let sinc = if x.abs() < 1e-9 { 1.0 } else { x.sin() / x };
+                let win = 0.5 * (1.0 + (std::f64::consts::PI * d / r_f64).cos());
+                table.push(sinc * win);
+            }
+        }
+        table
+    } else {
+        Vec::new()
     };
 
     for out_f in 0..out_frames {
@@ -154,14 +300,14 @@ pub(super) fn resample_interleaved_f32(
 
             for k in -aa_radius..=aa_radius {
                 let sample_idx = (idx + k).clamp(0, last_frame) as usize;
-                let dx = (idx + k) as f64 - src_pos;
-                if dx.abs() >= r_f64 {
+                let d_abs = ((idx + k) as f64 - src_pos).abs();
+                if d_abs >= r_f64 {
                     continue;
                 }
-                let x = std::f64::consts::PI * dx * aa_cutoff;
-                let sinc = if x.abs() < 1e-9 { 1.0 } else { x.sin() / x };
-                let win = 0.5 * (1.0 + (std::f64::consts::PI * dx / r_f64).cos());
-                let w = sinc * win;
+                let lut_pos = d_abs * (SINC_LUT_SUBDIV as f64);
+                let lut_i = lut_pos as usize;
+                let lut_t = lut_pos - (lut_i as f64);
+                let w = sinc_lut[lut_i] + (sinc_lut[lut_i + 1] - sinc_lut[lut_i]) * lut_t;
                 weight_sum += w;
                 let base = sample_idx * channels;
                 for (c, slot) in ch_acc.iter_mut().enumerate().take(ch_capped) {
@@ -179,7 +325,7 @@ pub(super) fn resample_interleaved_f32(
                 } else {
                     samples[(idx.clamp(0, last_frame) as usize) * channels + ch]
                 };
-                out.push(sanitize_audio_sample(val));
+                out.push(sanitize_float_sample(val));
             }
         } else {
             let f0 = (idx - 1).clamp(0, last_frame) as usize;
@@ -198,11 +344,11 @@ pub(super) fn resample_interleaved_f32(
                 let c2 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;
                 let c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);
                 let val = ((c3 * frac + c2) * frac + c1) * frac + c0;
-                out.push(sanitize_audio_sample(val));
+                out.push(sanitize_float_sample(val));
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// Applies a smooth `3ms` half-cosine anti-click fade-in and fade-out at slice boundaries.
@@ -349,4 +495,33 @@ pub fn write_wav_i16(
     }
     writer.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn downmix_and_resample_preserve_float32_headroom_and_reject_oversize() {
+        let mut out = Vec::new();
+        push_frame_downmixed_f32(&[2.5, -3.0], 2, &mut out);
+        assert_eq!(out, vec![2.5, -3.0]);
+
+        let mut sanitized = Vec::new();
+        push_frame_downmixed_f32(&[f32::NAN, f32::INFINITY], 2, &mut sanitized);
+        assert_eq!(sanitized, vec![0.0, 0.0]);
+
+        let hot_buf = vec![2.2_f32; 200];
+        let resampled = resample_interleaved_f32(&hot_buf, 1, 0.5, 1000).unwrap();
+        assert_eq!(resampled.len(), 400);
+        assert!(
+            resampled[100] > 2.0,
+            "Expected >0 dBFS float headroom preserved through resample, got {}",
+            resampled[100]
+        );
+
+        // Oversized output must return Err instead of silently truncating
+        let err = resample_interleaved_f32(&hot_buf, 1, 0.25, 300);
+        assert!(err.is_err());
+    }
 }

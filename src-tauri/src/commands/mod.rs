@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod ai_external;
 pub mod ascii_magic;
 pub mod audio_ops;
 pub mod audio_playback;
@@ -15,6 +16,7 @@ pub mod system;
 pub mod taxonomy;
 
 pub use ai::*;
+pub use ai_external::*;
 pub use ascii_magic::*;
 pub use audio_ops::*;
 pub use audio_playback::*;
@@ -38,7 +40,7 @@ pub(crate) fn with_read_conn<T, F>(state: &crate::db::AppState, op: F) -> Result
 where
     F: FnOnce(&Connection) -> Result<T, String>,
 {
-    if let Ok(read_conn) = crate::db::open_read_conn(&state.user_dir) {
+    if let Ok(read_conn) = state.acquire_read_conn() {
         op(&read_conn)
     } else {
         let conn = state.lock_db();
@@ -110,21 +112,44 @@ pub(crate) fn normalize_path_str(p: &str) -> String {
     }
 }
 
+/// Char-by-char Unicode case-insensitive prefix matcher (safe when UTF-8 byte lengths
+/// differ under case-folding, e.g. Turkish `İ` vs `i\u{0307}` or `ß` vs `ss`).
+/// `prefix_lower` must already be lowercased.
+pub(crate) fn strip_unicode_prefix_ci<'a>(value: &'a str, prefix_lower: &str) -> Option<&'a str> {
+    let mut val_chars = value.char_indices();
+    let mut target_chars = prefix_lower.chars().peekable();
+    while let Some(expected_ch) = target_chars.peek().copied() {
+        let (_byte_idx, actual_ch) = val_chars.next()?;
+        let mut lower_iter = actual_ch.to_lowercase();
+        let first_lower = lower_iter.next()?;
+        if first_lower != expected_ch {
+            return None;
+        }
+        target_chars.next();
+        for extra_lower in lower_iter {
+            if target_chars.next() != Some(extra_lower) {
+                return None;
+            }
+        }
+    }
+    let rest_start = val_chars
+        .next()
+        .map(|(idx, _)| idx)
+        .unwrap_or(value.len());
+    value.get(rest_start..)
+}
+
 /// Returns the part of `file_path` that lies below `lib_path` (original casing, no leading slash).
 /// - Requires a folder boundary, so `C:/Sounds` does NOT match `C:/SoundsOld/x.wav`.
-/// - Uses checked slicing, so case-folding differences (e.g. Turkish `İ`) can never cause a
-///   char-boundary panic; a non-matching prefix simply yields `None`.
+/// - Uses char-by-char Unicode case-folding so Turkish `İ`/`ı` byte-length differences never
+///   cause false mismatches or char-boundary panics.
 pub(crate) fn strip_lib_prefix(file_path: &str, lib_path: &str) -> Option<String> {
     let norm_file = normalize_path_str(file_path);
     let norm_lib = normalize_path_str(lib_path);
     if norm_lib.is_empty() {
         return None;
     }
-    let head = norm_file.get(..norm_lib.len())?;
-    if head.to_lowercase() != norm_lib.to_lowercase() {
-        return None;
-    }
-    let rest = norm_file.get(norm_lib.len()..)?;
+    let rest = strip_unicode_prefix_ci(&norm_file, &norm_lib.to_lowercase())?;
     if !norm_lib.ends_with('/') && !rest.starts_with('/') {
         return None;
     }
@@ -355,6 +380,15 @@ mod audit_tests {
         let _ = strip_lib_prefix("C:/İstanbul/x.wav", "C:/istanbul");
         let _ = strip_lib_prefix("C:/istanbul/x.wav", "C:/İstanbul");
         let _ = strip_lib_prefix("İ", "İİİİİİ");
+        // Exact Unicode case-folding equivalence where UTF-8 byte lengths differ (`İ` 2B vs `i\u{0307}` 3B)
+        assert_eq!(
+            strip_lib_prefix("C:/i\u{0307}stanbul/sfx/hit.wav", "C:/İstanbul"),
+            Some("sfx/hit.wav".to_string())
+        );
+        assert_eq!(
+            strip_lib_prefix("C:/İstanbul/sfx/hit.wav", "C:/i\u{0307}stanbul"),
+            Some("sfx/hit.wav".to_string())
+        );
     }
 
     #[test]
@@ -594,11 +628,19 @@ mod audit_tests {
 
         // 5. export_settings_to_file refuses non-JSON destinations and existing non-JSON binary files
         let bad_dest = tmp.path().join("evil.exe");
-        assert!(export_settings_to_file(bad_dest.to_string_lossy().into(), "{}".into()).is_err());
+        assert!(tauri::async_runtime::block_on(export_settings_to_file(
+            bad_dest.to_string_lossy().into(),
+            "{}".into()
+        ))
+        .is_err());
 
         let fake_json = tmp.path().join("not_really_json.json");
         fs::write(&fake_json, b"MZ\x90\x00binary_executable_payload").unwrap();
-        assert!(export_settings_to_file(fake_json.to_string_lossy().into(), "{}".into()).is_err());
+        assert!(tauri::async_runtime::block_on(export_settings_to_file(
+            fake_json.to_string_lossy().into(),
+            "{}".into()
+        ))
+        .is_err());
     }
 
     #[test]

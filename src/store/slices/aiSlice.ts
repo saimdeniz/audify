@@ -12,7 +12,6 @@ import type {
   AiTagSuggestionItem,
   AiTaggingMode,
   SampleItem,
-  SimilaritySession,
 } from "../../types";
 import { invokeCommand } from "../../utils/tauriCommands";
 import {
@@ -22,6 +21,11 @@ import {
 } from "../storageHelpers";
 import type { StoreSliceContext } from "../types";
 import type { AiModelLifecycleActions } from "./aiModelLifecycle";
+import type {
+  ExternalAudioSimilarityInput,
+  SimilaritySearchOverrides,
+  SimilaritySeqTracker,
+} from "./aiSimilarityActions";
 
 export interface AiSliceActions {
   fetchAiModelStatus: () => Promise<AiModelStatus | null>;
@@ -57,12 +61,11 @@ export interface AiSliceActions {
   fetchAiTagSuggestions: (sampleIds?: number[]) => Promise<void>;
   findSimilarSamples: (
     anchor: SampleItem,
-    overrides?: {
-      minScore?: number;
-      topK?: number;
-      scope?: AiSimilarityScope;
-      durationMatchOnly?: boolean;
-    }
+    overrides?: SimilaritySearchOverrides
+  ) => Promise<void>;
+  findSimilarSamplesByExternalAudio: (
+    input: ExternalAudioSimilarityInput,
+    overrides?: Omit<SimilaritySearchOverrides, "scope">
   ) => Promise<void>;
   clearSimilaritySearch: () => void;
   resolveAiTagSuggestion: (
@@ -78,13 +81,22 @@ let similarityRefetchTimer: ReturnType<typeof setTimeout> | null = null;
 let similaritySearchSeq = 0;
 let aiSuggestionsSeq = 0;
 
-export function invalidateAiSliceAsyncState(): void {
+const similaritySeqTracker: SimilaritySeqTracker = {
+  bump: () => ++similaritySearchSeq,
+  current: () => similaritySearchSeq,
+};
+
+export function cancelPendingSimilaritySearch(): void {
   similaritySearchSeq += 1;
-  aiSuggestionsSeq += 1;
   if (similarityRefetchTimer !== null) {
     clearTimeout(similarityRefetchTimer);
     similarityRefetchTimer = null;
   }
+}
+
+export function invalidateAiSliceAsyncState(): void {
+  cancelPendingSimilaritySearch();
+  aiSuggestionsSeq += 1;
 }
 
 function groupSuggestionsBySample(
@@ -108,9 +120,20 @@ export function createAiSlice(ctx: StoreSliceContext): AiSliceActions {
   const loadLifecycle = async (): Promise<AiModelLifecycleActions> => {
     if (!cachedLifecycle) {
       const mod = await import("./aiModelLifecycle");
-      cachedLifecycle = mod.createAiModelLifecycleActions(ctx);
+      cachedLifecycle = mod.createAiModelLifecycleActions(
+        ctx,
+        cancelPendingSimilaritySearch
+      );
     }
     return cachedLifecycle;
+  };
+
+  let cachedSimilarityMod: typeof import("./aiSimilarityActions") | null = null;
+  const loadSimilarityMod = async () => {
+    if (!cachedSimilarityMod) {
+      cachedSimilarityMod = await import("./aiSimilarityActions");
+    }
+    return cachedSimilarityMod;
   };
 
   return {
@@ -173,9 +196,20 @@ export function createAiSlice(ctx: StoreSliceContext): AiSliceActions {
           void get().persistActiveProfileSettings();
           const live = get().similaritySession;
           if (live) {
-            void get().findSimilarSamples(live.anchorSample, {
-              minScore: clamped,
-            });
+            if (live.externalSource) {
+              void get().findSimilarSamplesByExternalAudio(
+                {
+                  probeId: live.externalSource.probeId,
+                  filePath: live.externalSource.filePath,
+                  fileName: live.externalSource.fileName,
+                },
+                { minScore: clamped }
+              );
+            } else {
+              void get().findSimilarSamples(live.anchorSample, {
+                minScore: clamped,
+              });
+            }
           }
         }, 120);
       } else {
@@ -196,7 +230,7 @@ export function createAiSlice(ctx: StoreSliceContext): AiSliceActions {
       const activeSession = get().similaritySession;
       set({ aiSimilarityScope: clean });
       void get().persistActiveProfileSettings();
-      if (reRunActiveSearch && activeSession) {
+      if (reRunActiveSearch && activeSession && !activeSession.externalSource) {
         void get().findSimilarSamples(activeSession.anchorSample, {
           scope: clean,
         });
@@ -210,9 +244,20 @@ export function createAiSlice(ctx: StoreSliceContext): AiSliceActions {
       set({ aiSimilarityDurationMatch: clean });
       void get().persistActiveProfileSettings();
       if (reRunActiveSearch && activeSession) {
-        void get().findSimilarSamples(activeSession.anchorSample, {
-          durationMatchOnly: clean,
-        });
+        if (activeSession.externalSource) {
+          void get().findSimilarSamplesByExternalAudio(
+            {
+              probeId: activeSession.externalSource.probeId,
+              filePath: activeSession.externalSource.filePath,
+              fileName: activeSession.externalSource.fileName,
+            },
+            { durationMatchOnly: clean }
+          );
+        } else {
+          void get().findSimilarSamples(activeSession.anchorSample, {
+            durationMatchOnly: clean,
+          });
+        }
       }
     },
 
@@ -373,78 +418,23 @@ export function createAiSlice(ctx: StoreSliceContext): AiSliceActions {
     },
 
     findSimilarSamples: async (anchor, overrides) => {
-      const reqSeq = ++similaritySearchSeq;
-      const epoch = ctx.getProfileEpoch();
-      const minScore = clampAiSimilarityScore(
-        overrides?.minScore ?? get().aiSimilarityMinScore
+      const mod = cachedSimilarityMod ?? (await loadSimilarityMod());
+      await mod.runFindSimilarSamples(
+        ctx,
+        similaritySeqTracker,
+        anchor,
+        overrides
       );
-      const topK = clampAiSimilarityTopK(
-        overrides?.topK ?? get().aiSimilarityTopK
+    },
+
+    findSimilarSamplesByExternalAudio: async (input, overrides) => {
+      const mod = cachedSimilarityMod ?? (await loadSimilarityMod());
+      await mod.runFindSimilarByExternalAudio(
+        ctx,
+        similaritySeqTracker,
+        input,
+        overrides
       );
-      const scope = normalizeAiSimilarityScope(
-        overrides?.scope ?? get().aiSimilarityScope
-      );
-      const durationMatchOnly =
-        overrides?.durationMatchOnly ?? get().aiSimilarityDurationMatch;
-      const scopeFolderPath = scope === "folder" ? anchor.folder_path : null;
-
-      try {
-        const res = await invokeCommand("find_similar_samples", {
-          sampleId: anchor.id,
-          minScore,
-          topK,
-          scopeFolderPath,
-          matchSimilarDuration: durationMatchOnly,
-        });
-        if (reqSeq !== similaritySearchSeq || epoch !== ctx.getProfileEpoch()) {
-          return;
-        }
-
-        const scoresById = new Map<number, number>();
-        scoresById.set(anchor.id, 1);
-        for (const m of res.matches) {
-          scoresById.set(m.sample_id, m.score);
-        }
-
-        const existing = get().similaritySession;
-        const prevSortKey = existing ? existing.prevSortKey : get().sortKey;
-        const prevSortDir = existing ? existing.prevSortDir : get().sortDir;
-        const liveMinScore = clampAiSimilarityScore(
-          overrides?.minScore ?? existing?.minScore ?? minScore
-        );
-
-        const nextSession: SimilaritySession = {
-          anchorSample: anchor,
-          scoresById,
-          minScore: liveMinScore,
-          topK,
-          scope,
-          scopeFolderPath,
-          durationMatchOnly,
-          elapsedMs: res.elapsed_ms,
-          scannedVectors: res.scanned_vectors,
-          prevSortKey,
-          prevSortDir,
-        };
-
-        set({
-          similaritySession: nextSession,
-          trashFilterActive: false,
-          sortKey: "match",
-          sortDir: "desc",
-          statusMessage: `Found ${res.matches.length} similar sounds (${res.elapsed_ms.toFixed(1)} ms)`,
-        });
-
-        if (!applyInstantMemoryFilter({ preserveMultiSelect: false })) {
-          await get().fetchSamples({ preserveMultiSelect: false });
-        }
-        void get().fetchAiModelStatus();
-      } catch (err) {
-        if (reqSeq !== similaritySearchSeq || epoch !== ctx.getProfileEpoch()) {
-          return;
-        }
-        emitNotice(`Similarity search failed: ${String(err)}`, "error");
-      }
     },
 
     clearSimilaritySearch: () => {

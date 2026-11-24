@@ -13,6 +13,10 @@ import {
 import { onError } from "../../utils/errors";
 import { isSampleInLicenseGroup } from "../../utils/format";
 import { seedPeaksCache } from "../../utils/peaksStore";
+import {
+  internSamplePool,
+  internSamplePoolWithStatus,
+} from "../../utils/sampleInterning";
 import { invokeCommand } from "../../utils/tauriCommands";
 import { applyClientFacetFilters } from "../filterEngine";
 import {
@@ -148,8 +152,10 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
         ]);
 
         if (directSavedSample) {
+          internSamplePool([directSavedSample]);
           seedPeaksCache([directSavedSample]);
         }
+        internSamplePool(initialSamplesRaw);
         seedPeaksCache(initialSamplesRaw);
 
         const activeProfile =
@@ -188,7 +194,10 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
           : null;
         const licFilteredInitial = activeLicGroup
           ? initialSamplesRaw.filter((s) =>
-              isSampleInLicenseGroup(s.file_path, activeLicGroup)
+              isSampleInLicenseGroup(
+                s.folder_path || s.file_path,
+                activeLicGroup
+              )
             )
           : initialSamplesRaw;
 
@@ -338,13 +347,7 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
           }
         }
 
-        const isRemote =
-          typeof window !== "undefined" &&
-          Boolean(
-            (window as unknown as { __audifyIsRemoteSync?: () => boolean })
-              .__audifyIsRemoteSync?.()
-          );
-        if (!isRemote && opts?.broadcastCatalog !== false) {
+        if (opts?.broadcastCatalog !== false) {
           postCrossWindowSync("catalog");
         }
       } catch (err) {
@@ -435,6 +438,7 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
       const epoch = getProfileEpoch();
       const reqSeq = ++reloadProfileSeq;
       try {
+        const useCompactTags = get().tags.length > 0;
         const allSamples = await invoke<SampleItem[]>("query_samples", {
           searchQuery: null,
           folderFilter: null,
@@ -444,14 +448,32 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
           limit: SAMPLE_QUERY_LIMIT,
           offset: 0,
           includePeaks: false,
+          ...(useCompactTags ? { compactTags: true } : {}),
         });
 
         // Abort if profile switched or a newer reload request superseded this one
         if (epoch !== getProfileEpoch() || reqSeq !== reloadProfileSeq) return;
 
+        const internRes = internSamplePoolWithStatus(allSamples, get().tags);
+        if (internRes.hadMissingTagIds) {
+          const freshTags = await invoke<Tag[]>("get_tags").catch(() => null);
+          if (epoch !== getProfileEpoch() || reqSeq !== reloadProfileSeq) return;
+          if (freshTags && freshTags.length > 0) {
+            set({ tags: freshTags });
+            internSamplePoolWithStatus(allSamples, freshTags, {
+              onlyUnresolvedTagIds: true,
+            });
+          }
+        }
+
         // Drop Bin entries that no longer exist (including when last library is removed!)
-        const { knownIds, favCount } = summarizeSamplePool(allSamples);
+        // Track only recent + bin IDs in `knownSampleIds` instead of allocating a 50k+ V8 Set.
         const currentBin = get().binSampleIds;
+        const trackedIds = new Set<number>([
+          ...get().recentSampleIds,
+          ...currentBin,
+        ]);
+        const { knownIds, favCount } = summarizeSamplePool(allSamples, trackedIds);
         const prunedBin = currentBin.filter((id) => knownIds.has(id));
         const binChanged = prunedBin.length !== currentBin.length;
         if (binChanged) {

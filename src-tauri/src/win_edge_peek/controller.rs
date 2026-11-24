@@ -8,7 +8,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
-use windows::Win32::Foundation::{BOOL, COLORREF, HWND, POINT, RECT};
+use windows::core::BOOL;
+use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
 use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_CLOAK, DWMWA_EXTENDED_FRAME_BOUNDS,
 };
@@ -18,13 +19,38 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, GetWindowLongPtrW, GetWindowRect, IsIconic, IsWindow,
     SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST,
-    LWA_ALPHA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    WS_EX_LAYERED, WS_EX_TRANSPARENT,
+    LWA_ALPHA, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, WS_EX_LAYERED, WS_EX_TRANSPARENT,
 };
 
 #[link(name = "user32")]
 extern "system" {
     fn GetAsyncKeyState(vkey: i32) -> i16;
+    fn GetDpiForWindow(hwnd: HWND) -> u32;
+}
+
+fn live_window_scale(hwnd: HWND, fallback: f64) -> f64 {
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    if (48..=480).contains(&dpi) {
+        (dpi as f64 / 96.0).clamp(0.75, 4.0)
+    } else {
+        fallback.clamp(0.75, 4.0)
+    }
+}
+
+struct EdgePeekRestoreGuard {
+    app: AppHandle,
+    hwnd_raw: isize,
+    gen: u64,
+    gen_arc: Arc<AtomicU64>,
+}
+
+impl Drop for EdgePeekRestoreGuard {
+    fn drop(&mut self) {
+        if std::thread::panicking() || self.gen_arc.load(Ordering::Acquire) == self.gen {
+            dispatch_restore_window_normal(&self.app, self.hwnd_raw);
+        }
+    }
 }
 
 const VK_LBUTTON: i32 = 0x01;
@@ -88,6 +114,9 @@ fn set_dwm_cloak(hwnd: HWND, cloaked: bool) -> bool {
 
 fn set_layered_state(hwnd: HWND, alpha: u8, click_through: bool) {
     unsafe {
+        if !IsWindow(Some(hwnd)).as_bool() {
+            return;
+        }
         let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         let mut next = ex | (WS_EX_LAYERED.0 as isize);
         if click_through {
@@ -102,13 +131,42 @@ fn set_layered_state(hwnd: HWND, alpha: u8, click_through: bool) {
     }
 }
 
+/// Dispatches `SetWindowLongPtrW` / `SetLayeredWindowAttributes` onto the Win32 main UI thread
+/// so background Edge-Peek workers never synchronously send `WM_STYLECHANGING` across threads.
+fn dispatch_layered_state(
+    app: &AppHandle,
+    hwnd_raw: isize,
+    alpha: u8,
+    click_through: bool,
+    gen: u64,
+    gen_arc: &Arc<AtomicU64>,
+) {
+    let gen_check = Arc::clone(gen_arc);
+    let _ = app.run_on_main_thread(move || {
+        if gen_check.load(Ordering::Acquire) != gen {
+            return;
+        }
+        set_layered_state(HWND(hwnd_raw as *mut c_void), alpha, click_through);
+    });
+}
+
+/// Dispatches `restore_window_normal` onto the Win32 main UI thread (safe from any worker thread).
+pub(super) fn dispatch_restore_window_normal(app: &AppHandle, hwnd_raw: isize) {
+    if hwnd_raw == 0 {
+        return;
+    }
+    let _ = app.run_on_main_thread(move || {
+        restore_window_normal(hwnd_raw);
+    });
+}
+
 pub(super) fn restore_window_normal(hwnd_raw: isize) {
     if hwnd_raw == 0 {
         return;
     }
     unsafe {
-        let hwnd = HWND(hwnd_raw);
-        if !IsWindow(hwnd).as_bool() {
+        let hwnd = HWND(hwnd_raw as *mut c_void);
+        if !IsWindow(Some(hwnd)).as_bool() {
             return;
         }
         let _ = set_dwm_cloak(hwnd, false);
@@ -121,12 +179,17 @@ pub(super) fn restore_window_normal(hwnd_raw: isize) {
             let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, cleaned);
             let _ = SetWindowPos(
                 hwnd,
-                HWND(0),
+                None,
                 0,
                 0,
                 0,
                 0,
-                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+                SWP_ASYNCWINDOWPOS
+                    | SWP_NOACTIVATE
+                    | SWP_NOMOVE
+                    | SWP_NOSIZE
+                    | SWP_NOZORDER
+                    | SWP_FRAMECHANGED,
             );
         }
     }
@@ -137,8 +200,8 @@ pub(super) fn snap_window_to_edge(hwnd_raw: isize, side: EdgeSide, scale: f64) -
         return None;
     }
     unsafe {
-        let hwnd = HWND(hwnd_raw);
-        if !IsWindow(hwnd).as_bool() {
+        let hwnd = HWND(hwnd_raw as *mut c_void);
+        if !IsWindow(Some(hwnd)).as_bool() {
             return None;
         }
         let (vis_rect, insets) = measure_visible_rect_and_insets(hwnd)?;
@@ -172,12 +235,12 @@ pub(super) fn snap_window_to_edge(hwnd_raw: isize, side: EdgeSide, scale: f64) -
 
         let _ = SetWindowPos(
             hwnd,
-            HWND_TOPMOST,
+            Some(HWND_TOPMOST),
             hwnd_x,
             hwnd_y,
             hwnd_w,
             hwnd_h,
-            SWP_NOACTIVATE,
+            SWP_ASYNCWINDOWPOS | SWP_NOACTIVATE,
         );
         Some(RECT {
             left: vis_left,
@@ -189,11 +252,14 @@ pub(super) fn snap_window_to_edge(hwnd_raw: isize, side: EdgeSide, scale: f64) -
 }
 
 fn compute_pill_rect(vis_rect: RECT, work: RECT, scale: f64, side: EdgeSide) -> (i32, i32, i32, i32) {
-    let work_h = (work.bottom - work.top).max(64);
-    let (pill_w, pill_h) = compute_pill_dimensions(work_h, scale);
-    let center_y = ((vis_rect.top + vis_rect.bottom) / 2)
-        .clamp(work.top + pill_h / 2, work.bottom - pill_h / 2);
-    let pill_y = (center_y - pill_h / 2).clamp(work.top, (work.bottom - pill_h).max(work.top));
+    let raw_work_h = (work.bottom - work.top).max(1);
+    let (pill_w, raw_pill_h) = compute_pill_dimensions(raw_work_h, scale);
+    let pill_h = raw_pill_h.min(raw_work_h).max(1);
+    let min_center = work.top.saturating_add(pill_h / 2);
+    let max_center = work.bottom.saturating_sub(pill_h / 2).max(min_center);
+    let center_y = ((vis_rect.top.saturating_add(vis_rect.bottom)) / 2).clamp(min_center, max_center);
+    let max_top = work.bottom.saturating_sub(pill_h).max(work.top);
+    let pill_y = (center_y - pill_h / 2).clamp(work.top, max_top);
     let pill_x = match side {
         EdgeSide::Right => work.right - pill_w,
         EdgeSide::Left => work.left,
@@ -202,10 +268,11 @@ fn compute_pill_rect(vis_rect: RECT, work: RECT, scale: f64, side: EdgeSide) -> 
 }
 
 fn fade_window(
-    hwnd: HWND,
+    app: &AppHandle,
+    hwnd_raw: isize,
     expanding: bool,
     gen: u64,
-    gen_arc: &AtomicU64,
+    gen_arc: &Arc<AtomicU64>,
     pill: Option<&NativeEdgePill>,
 ) {
     let steps = 6i32;
@@ -220,7 +287,7 @@ fn fade_window(
             (1.0 - linear).powi(2)
         };
         let alpha = (ease * 255.0).round().clamp(0.0, 255.0) as u8;
-        set_layered_state(hwnd, alpha, !expanding);
+        dispatch_layered_state(app, hwnd_raw, alpha, !expanding, gen, gen_arc);
         if let Some(p) = pill {
             p.pump_messages();
         }
@@ -259,20 +326,30 @@ pub(super) fn run_edge_peek_loop(
     wake_requested: Arc<AtomicBool>,
     gen_arc: Arc<AtomicU64>,
 ) {
-    let hwnd = HWND(hwnd_raw);
+    let hwnd = HWND(hwnd_raw as *mut c_void);
+    let _restore_guard = EdgePeekRestoreGuard {
+        app: app.clone(),
+        hwnd_raw,
+        gen,
+        gen_arc: Arc::clone(&gen_arc),
+    };
     let mut pill = NativeEdgePill::new();
     let mut collapsed = false;
+    let mut collapsed_since: Option<Instant> = None;
+    let mut low_mem_applied = false;
     let mut outside_since: Option<Instant> = None;
     let mut trigger_since: Option<Instant> = None;
     let mut cached_vis_rect = measure_visible_rect_and_insets(hwnd)
         .map(|(r, _)| r)
         .unwrap_or_default();
+    let fallback_scale = scale;
 
     while gen_arc.load(Ordering::Acquire) == gen {
+        let scale = live_window_scale(hwnd, fallback_scale);
         if let Some(ref p) = pill {
             p.pump_messages();
         }
-        if !unsafe { IsWindow(hwnd).as_bool() } {
+        if !unsafe { IsWindow(Some(hwnd)).as_bool() } {
             break;
         }
         if unsafe { IsIconic(hwnd).as_bool() } {
@@ -281,10 +358,13 @@ pub(super) fn run_edge_peek_loop(
             }
             if collapsed {
                 collapsed = false;
-                restore_window_normal(hwnd_raw);
+                collapsed_since = None;
+                low_mem_applied = false;
+                dispatch_restore_window_normal(&app, hwnd_raw);
                 if let Ok(mut guard) = inner.lock() {
                     guard.collapsed = false;
                 }
+                // Window is still minimized (IsIconic) — keep LOW memory intact!
                 let _ = app.emit(
                     EDGE_PEEK_STATE_EVENT,
                     EdgePeekStatePayload {
@@ -348,12 +428,28 @@ pub(super) fn run_edge_peek_loop(
                 false
             };
 
+            // Only enter LOW memory after staying collapsed continuously for 20s so rapid
+            // NLE drag-out-and-back workflows never thrash V8/SQLite hot caches.
+            if !low_mem_applied
+                && collapsed_since
+                    .map(|t| t.elapsed() >= Duration::from_secs(20))
+                    .unwrap_or(false)
+            {
+                low_mem_applied = true;
+                crate::win_memory::set_webview_low_memory(&app, "main", true);
+            }
+
             if clicked || woke_by_focus || hover_ready {
                 trigger_since = None;
                 outside_since = None;
                 collapsed = false;
+                collapsed_since = None;
                 if let Ok(mut guard) = inner.lock() {
                     guard.collapsed = false;
+                }
+                if low_mem_applied {
+                    low_mem_applied = false;
+                    crate::win_memory::set_webview_low_memory(&app, "main", false);
                 }
                 let _ = app.emit(
                     EDGE_PEEK_STATE_EVENT,
@@ -366,22 +462,22 @@ pub(super) fn run_edge_peek_loop(
                 if let Some(ref mut p) = pill {
                     p.hide();
                 }
-                set_layered_state(hwnd, 0, false);
+                dispatch_layered_state(&app, hwnd_raw, 0, false, gen, &gen_arc);
                 let _ = set_dwm_cloak(hwnd, false);
                 unsafe {
                     let _ = SetWindowPos(
                         hwnd,
-                        HWND_TOPMOST,
+                        Some(HWND_TOPMOST),
                         0,
                         0,
                         0,
                         0,
-                        SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+                        SWP_ASYNCWINDOWPOS | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
                     );
                 }
-                fade_window(hwnd, true, gen, &gen_arc, pill.as_ref());
+                fade_window(&app, hwnd_raw, true, gen, &gen_arc, pill.as_ref());
                 if gen_arc.load(Ordering::Acquire) == gen {
-                    restore_window_normal(hwnd_raw);
+                    dispatch_restore_window_normal(&app, hwnd_raw);
                 }
             }
         } else {
@@ -426,15 +522,24 @@ pub(super) fn run_edge_peek_loop(
                 if let Some(ref mut p) = pill {
                     p.show_or_update(pill_x, pill_y, pill_w, pill_h, scale, side, theme, false);
                 }
-                fade_window(hwnd, false, gen, &gen_arc, pill.as_ref());
+                fade_window(&app, hwnd_raw, false, gen, &gen_arc, pill.as_ref());
                 if gen_arc.load(Ordering::Acquire) != gen {
                     break;
                 }
                 let cloaked = set_dwm_cloak(hwnd, true);
                 // Keep alpha at 255 while DWM-cloaked so taskbar thumbnail stays clean & intact,
                 // while WS_EX_LAYERED | WS_EX_TRANSPARENT ensures 100% click-through.
-                set_layered_state(hwnd, if cloaked { 255 } else { 0 }, true);
+                dispatch_layered_state(
+                    &app,
+                    hwnd_raw,
+                    if cloaked { 255 } else { 0 },
+                    true,
+                    gen,
+                    &gen_arc,
+                );
                 collapsed = true;
+                collapsed_since = Some(Instant::now());
+                low_mem_applied = false;
                 if let Ok(mut guard) = inner.lock() {
                     guard.collapsed = true;
                 }
@@ -449,14 +554,63 @@ pub(super) fn run_edge_peek_loop(
             }
         }
 
-        std::thread::sleep(Duration::from_millis(20));
+        let sleep_ms = if collapsed {
+            let edge_dist = match side {
+                EdgeSide::Right => (work.right - pt.x).abs(),
+                EdgeSide::Left => (pt.x - work.left).abs(),
+            };
+            if edge_dist > 140 {
+                60
+            } else {
+                20
+            }
+        } else {
+            20
+        };
+        std::thread::sleep(Duration::from_millis(sleep_ms));
     }
 
     if let Some(ref mut p) = pill {
         p.hide();
     }
     drop(pill);
-    if gen_arc.load(Ordering::Acquire) == gen {
-        restore_window_normal(hwnd_raw);
+    if low_mem_applied && !unsafe { IsIconic(hwnd).as_bool() } {
+        crate::win_memory::set_webview_low_memory(&app, "main", false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compute_pill_rect_never_panics_on_tiny_or_inverted_work_area() {
+        let vis = RECT {
+            left: 100,
+            top: 0,
+            right: 540,
+            bottom: 40,
+        };
+        let tiny_work = RECT {
+            left: 0,
+            top: 10,
+            right: 1920,
+            bottom: 30,
+        };
+        let (x, y, w, h) = compute_pill_rect(vis, tiny_work, 1.5, EdgeSide::Right);
+        assert!(w > 0);
+        assert!((1..=20).contains(&h));
+        assert!((tiny_work.top..=tiny_work.bottom).contains(&y));
+        assert_eq!(x, tiny_work.right - w);
+
+        let inverted_work = RECT {
+            left: 0,
+            top: 100,
+            right: 1920,
+            bottom: 100,
+        };
+        let (_, y2, _, h2) = compute_pill_rect(vis, inverted_work, 1.0, EdgeSide::Left);
+        assert_eq!(h2, 1);
+        assert_eq!(y2, inverted_work.top);
     }
 }

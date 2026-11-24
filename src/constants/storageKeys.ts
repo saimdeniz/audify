@@ -36,6 +36,7 @@ export const AUDIFY_STORAGE_KEYS = {
   volume: "audify_volume",
   sliceMicroFade: "audify_slice_micro_fade",
   exportAudioPreset: "audify_export_audio_preset",
+  exportLoudnessMode: "audify_export_loudness_mode",
   skipLeadingSilence: "audify_skip_leading_silence",
   normalizePreview: "audify_normalize_preview",
   autoAnalyzeBpmKey: "audify_auto_analyze_bpm_key",

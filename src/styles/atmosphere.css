@@ -157,7 +157,6 @@ html[data-theme="dark"] [data-settings-dropdown-open="true"] {
   --c-fg-2: #DADAE4;
   --c-fg-3: #B4B4C4;
   --c-fg-head: #C8C8D6;
-  backdrop-filter: blur(28px) saturate(120%);
 }
 
 html[data-theme="light"] [role="dialog"][aria-label="Settings"],
@@ -181,6 +180,16 @@ html[data-theme="light"] [data-settings-dropdown-open="true"] {
   --c-fg-2: #363640;
   --c-fg-3: #525260;
   --c-fg-head: #42424E;
+}
+
+/* Only allocate GPU backdrop-filter blur surfaces on floating overlays when Mica glass is enabled */
+html[data-mica="true"]:not([data-theme="contrast"]) [role="dialog"][aria-label="Settings"],
+html[data-mica="true"]:not([data-theme="contrast"]) [data-mica-overlay="true"],
+html[data-mica="true"]:not([data-theme="contrast"]) [data-context-menu-portal="true"],
+html[data-mica="true"]:not([data-theme="contrast"]) [data-modal-portal="true"]:not(.audify-modal-backdrop),
+html[data-mica="true"]:not([data-theme="contrast"]) [data-popover-portal="true"],
+html[data-mica="true"]:not([data-theme="contrast"]) [data-settings-dropdown-open="true"],
+html[data-mica="true"]:not([data-theme="contrast"]) .audify-overlay-surface {
   backdrop-filter: blur(28px) saturate(120%);
 }
 
@@ -210,6 +219,9 @@ html[data-theme="contrast"] [data-settings-dropdown-open="true"] {
 /* Shared modal scrim that adapts to dark / light / high-contrast themes */
 .audify-modal-backdrop {
   background-color: rgba(6, 8, 12, 0.68);
+}
+
+html[data-mica="true"]:not([data-theme="contrast"]) .audify-modal-backdrop {
   backdrop-filter: blur(2px);
 }
 
@@ -224,7 +236,6 @@ html[data-theme="contrast"] .audify-modal-backdrop {
 /* Sononym-style Drag & Drop Overlay Backdrop (High-contrast in both Dark and Light themes) */
 .audify-drop-overlay-backdrop {
   background-color: rgba(9, 11, 15, 0.82);
-  backdrop-filter: blur(5px);
   --c-surface-2: #19191E;
   --c-surface-3: #222229;
   --c-line: #2E2E38;
@@ -234,9 +245,12 @@ html[data-theme="contrast"] .audify-modal-backdrop {
   --c-fg-3: #B4B4C4;
 }
 
+html[data-mica="true"]:not([data-theme="contrast"]) .audify-drop-overlay-backdrop {
+  backdrop-filter: blur(5px);
+}
+
 html[data-theme="light"] .audify-drop-overlay-backdrop {
   background-color: rgba(240, 240, 245, 0.86);
-  backdrop-filter: blur(5px);
   --c-surface-2: #FFFFFF;
   --c-surface-3: #F2F2F7;
   --c-line: #CFCFD8;

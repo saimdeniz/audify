@@ -1,8 +1,10 @@
 import {
   applyClientFacetFilters,
+  clearCatalogSortCaches,
   filterBaseSamplesInMemory,
 } from "../utils/catalogFilterCore";
 import { SampleItem, SimilaritySession } from "../types";
+import { internSamplePool } from "../utils/sampleInterning";
 import { pruneSmartSearchCache } from "../utils/search/sampleIndex";
 import { computeSmartCollectionCounts } from "../utils/smartCollectionCounts";
 import { clearSmartSearchCache, executeSmartSearch } from "../utils/smartSearch";
@@ -12,12 +14,41 @@ import type {
   CatalogWorkerSimilarityFilter,
 } from "./catalogWorkerProtocol";
 
+function createVirtualExternalAnchor(anchorSampleId: number): SampleItem {
+  return {
+    id: anchorSampleId,
+    library_id: 0,
+    file_path: "",
+    file_name: "",
+    folder_path: "",
+    extension: "",
+    duration_ms: 0,
+    sample_rate: 0,
+    channels: 0,
+    bit_depth: 0,
+    file_size: 0,
+    is_favorite: false,
+    is_loop: false,
+    genre: "",
+    artist: "",
+    album: "",
+    year: "",
+    peaks_json: "[]",
+    created_at: "",
+    tags: [],
+  };
+}
+
 function buildSimilaritySession(
   samplesById: Map<number, SampleItem>,
   sim: CatalogWorkerSimilarityFilter | null
 ): SimilaritySession | null {
   if (!sim) return null;
-  const anchorSample = samplesById.get(sim.anchorSampleId);
+  const anchorSample =
+    samplesById.get(sim.anchorSampleId) ??
+    (sim.anchorSampleId <= 0
+      ? createVirtualExternalAnchor(sim.anchorSampleId)
+      : undefined);
   if (!anchorSample) return null;
   return {
     anchorSample,
@@ -59,6 +90,7 @@ export function createCatalogWorkerKernel(): CatalogWorkerKernel {
   let poolEpoch = 0;
   let pool: SampleItem[] = [];
   let samplesById = new Map<number, SampleItem>();
+  let hasActiveSearchQuery = false;
 
   return {
     getPoolSize: () => pool.length,
@@ -66,12 +98,14 @@ export function createCatalogWorkerKernel(): CatalogWorkerKernel {
     handleMessage: (msg: CatalogWorkerRequest) => {
       if (msg.type === "set_pool") {
         poolEpoch = msg.poolEpoch;
-        pool = msg.samples;
+        clearCatalogSortCaches();
+        pool = internSamplePool(msg.samples);
         samplesById = new Map<number, SampleItem>();
         for (let i = 0; i < pool.length; i++) {
           samplesById.set(pool[i].id, pool[i]);
         }
         if (pool.length === 0) {
+          hasActiveSearchQuery = false;
           clearSmartSearchCache();
         } else {
           pruneSmartSearchCache(samplesById);
@@ -101,7 +135,58 @@ export function createCatalogWorkerKernel(): CatalogWorkerKernel {
         };
       }
 
+      if (msg.type === "patch_mtimes") {
+        poolEpoch = msg.poolEpoch;
+        const count = Math.min(msg.ids.length, msg.mtimes.length);
+        if (count > 0 && pool.length > 0) {
+          const patchMap = new Map<number, number>();
+          for (let i = 0; i < count; i++) {
+            patchMap.set(msg.ids[i], msg.mtimes[i]);
+          }
+          for (let i = 0; i < pool.length; i++) {
+            const item = pool[i];
+            const mtime = patchMap.get(item.id);
+            if (mtime !== undefined && item.file_modified_at !== mtime) {
+              const patched = { ...item, file_modified_at: mtime };
+              pool[i] = patched;
+              samplesById.set(item.id, patched);
+            }
+          }
+        }
+        return {
+          response: { type: "pool_ack", poolEpoch },
+          transfer: [],
+        };
+      }
+
+      if (msg.type === "remove_ids") {
+        poolEpoch = msg.poolEpoch;
+        if (msg.ids.length > 0 && pool.length > 0) {
+          const removedSet = new Set<number>(msg.ids);
+          for (const id of removedSet) {
+            samplesById.delete(id);
+          }
+          const nextPool: SampleItem[] = [];
+          for (let i = 0; i < pool.length; i++) {
+            const item = pool[i];
+            if (!removedSet.has(item.id)) {
+              nextPool.push(item);
+            }
+          }
+          pool = nextPool;
+          if (pool.length === 0) {
+            hasActiveSearchQuery = false;
+            clearSmartSearchCache();
+          }
+        }
+        return {
+          response: { type: "pool_ack", poolEpoch },
+          transfer: [],
+        };
+      }
+
       if (msg.type === "clear_search_cache") {
+        hasActiveSearchQuery = false;
         clearSmartSearchCache();
         return {
           response: { type: "pool_ack", poolEpoch },
@@ -153,8 +238,15 @@ export function createCatalogWorkerKernel(): CatalogWorkerKernel {
         const searchedResult = trimmedSearch
           ? executeSmartSearch(smartBaseResult, p.searchQuery, p.smartSearchSynonyms)
           : smartBaseResult;
+        hasActiveSearchQuery = Boolean(p.smartQuery || trimmedSearch);
+        if (!hasActiveSearchQuery) {
+          clearSmartSearchCache();
+        }
 
         const simSession = buildSimilaritySession(samplesById, p.similarity);
+        if (!p.sortKey) {
+          clearCatalogSortCaches();
+        }
         const filtered = applyClientFacetFilters(
           searchedResult,
           p.typeFilter,
@@ -199,6 +291,9 @@ export function createCatalogWorkerKernel(): CatalogWorkerKernel {
         msg.collections,
         msg.enableSynonyms
       );
+      if (!hasActiveSearchQuery) {
+        clearSmartSearchCache();
+      }
       return {
         response: {
           type: "smart_counts_result",

@@ -146,6 +146,7 @@ pub(super) fn sanitize_top_level_enums(map: &mut Map<String, Value>) {
         ("waveformSensitivity", &["logarithmic", "high_boost", "linear"]),
         ("waveformStyle", &["solid_baseline", "symmetric"]),
         ("exportAudioPreset", &["original", "wav_24", "nle_48k_24"]),
+        ("exportLoudnessMode", &["off", "peak_m1", "lufs_m14", "lufs_m24"]),
         ("miniDockEdgeSide", &["right", "left"]),
         ("wallpaperKind", &["none", "image", "ascii_preset", "ascii_magic", "ascii_custom"]),
         ("asciiMagicFit", &["contain", "cover"]),

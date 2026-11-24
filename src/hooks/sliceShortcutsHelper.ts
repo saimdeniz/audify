@@ -86,7 +86,8 @@ export function handleSliceTextEntryUtility(
 
 export function handleSliceModeKeyDown(
   e: KeyboardEvent,
-  state: SampleStoreState
+  state: SampleStoreState,
+  isRangeSlider = false
 ): boolean {
   if (!isSliceTableShowing(state)) return false;
   const inTrash = isSliceTrashActive(state);
@@ -101,12 +102,24 @@ export function handleSliceModeKeyDown(
     return true;
   }
 
-  if (e.key === "ArrowDown" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+  if (
+    !isRangeSlider &&
+    e.key === "ArrowDown" &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey
+  ) {
     e.preventDefault();
     state.selectRelativeSlice(1);
     return true;
   }
-  if (e.key === "ArrowUp" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+  if (
+    !isRangeSlider &&
+    e.key === "ArrowUp" &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey
+  ) {
     e.preventDefault();
     state.selectRelativeSlice(-1);
     return true;

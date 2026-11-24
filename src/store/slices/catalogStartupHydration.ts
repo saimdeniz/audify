@@ -26,7 +26,10 @@ import {
 } from "../storageHelpers";
 import type { SampleStoreState, StoreSliceContext } from "../types";
 
-export function summarizeSamplePool(list: SampleItem[]): {
+export function summarizeSamplePool(
+  list: SampleItem[],
+  trackedIds?: ReadonlySet<number>
+): {
   knownIds: Set<number>;
   favCount: number;
 } {
@@ -34,7 +37,9 @@ export function summarizeSamplePool(list: SampleItem[]): {
   let favCount = 0;
   for (let i = 0; i < list.length; i++) {
     const s = list[i];
-    knownIds.add(s.id);
+    if (!trackedIds || trackedIds.has(s.id)) {
+      knownIds.add(s.id);
+    }
     if (s.is_favorite) favCount++;
   }
   return { knownIds, favCount };

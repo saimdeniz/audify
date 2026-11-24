@@ -1,5 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { SampleItem } from "../types";
+import {
+  patchCatalogWorkerMtimes,
+  shouldUseCatalogWorker,
+} from "../workers/catalogWorkerClient";
 import type { StoreSliceContext } from "./types";
 
 interface MtimeBackfillBatchResult {
@@ -12,7 +16,8 @@ let mtimeBackfillInFlight = false;
 
 function patchSampleMtimes(
   list: SampleItem[],
-  patchMap: ReadonlyMap<number, number>
+  patchMap: ReadonlyMap<number, number>,
+  sharedById: Map<number, SampleItem>
 ): SampleItem[] {
   let changed = false;
   const next = list.map((item) => {
@@ -21,7 +26,13 @@ function patchSampleMtimes(
       return item;
     }
     changed = true;
-    return { ...item, file_modified_at: mtime };
+    const existing = sharedById.get(item.id);
+    if (existing) {
+      return existing;
+    }
+    const patched = { ...item, file_modified_at: mtime };
+    sharedById.set(item.id, patched);
+    return patched;
   });
   return changed ? next : list;
 }
@@ -54,15 +65,21 @@ const MTIME_FLUSH_THRESHOLD = 12000;
       const patchMap = new Map(pendingPatches);
       pendingPatches.clear();
       ctx.set((st) => {
-        const nextAll = patchSampleMtimes(st.allProfileSamples, patchMap);
-        const nextRaw = patchSampleMtimes(st.rawSamples, patchMap);
-        const nextSamples = patchSampleMtimes(st.samples, patchMap);
+        // Share a single patched SampleItem reference across all 3 arrays + selectedSample
+        // to avoid duplicating 50k+ objects (+27 MB heap spike) during startup backfill.
+        const sharedById = new Map<number, SampleItem>();
+        const nextAll = patchSampleMtimes(st.allProfileSamples, patchMap, sharedById);
+        const nextRaw = patchSampleMtimes(st.rawSamples, patchMap, sharedById);
+        const nextSamples = patchSampleMtimes(st.samples, patchMap, sharedById);
         const selMtime = st.selectedSample
           ? patchMap.get(st.selectedSample.id)
           : undefined;
         const nextSelected =
           st.selectedSample && selMtime !== undefined
-            ? { ...st.selectedSample, file_modified_at: selMtime }
+            ? sharedById.get(st.selectedSample.id) ?? {
+                ...st.selectedSample,
+                file_modified_at: selMtime,
+              }
             : st.selectedSample;
         if (
           nextAll === st.allProfileSamples &&
@@ -71,6 +88,12 @@ const MTIME_FLUSH_THRESHOLD = 12000;
           nextSelected === st.selectedSample
         ) {
           return {};
+        }
+        if (
+          nextAll !== st.allProfileSamples &&
+          shouldUseCatalogWorker(nextAll.length)
+        ) {
+          patchCatalogWorkerMtimes(nextAll, patchMap);
         }
         return {
           allProfileSamples: nextAll,

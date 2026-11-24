@@ -20,33 +20,44 @@ import { createBackdropWallpaperActions } from "./backdropWallpaperActions";
 
 export function createAppearanceAndModalActions(
   ctx: StoreSliceContext,
-  registerFlushPendingTint: (fn: () => void) => void
+  registerTintTimers: (timers: {
+    flushPendingTint: () => void;
+    cancelPendingTint: () => void;
+  }) => void
 ) {
   const { set, get } = ctx;
   let tintPersistTimer: ReturnType<typeof setTimeout> | null = null;
   let autoAccentSeq = 0;
 
-  registerFlushPendingTint(() => {
-    if (tintPersistTimer !== null) {
-      clearTimeout(tintPersistTimer);
-      tintPersistTimer = null;
-      safeSetItem(
-        AUDIFY_STORAGE_KEYS.themeTintIntensity,
-        String(get().themeTintIntensity),
-        { broadcast: false }
-      );
-      safeSetItem(
-        AUDIFY_STORAGE_KEYS.customBgBlur,
-        String(get().customBgBlur),
-        { broadcast: false }
-      );
-      safeSetItem(
-        AUDIFY_STORAGE_KEYS.customBgOpacity,
-        String(get().customBgOpacity),
-        { broadcast: false }
-      );
-      void get().persistActiveProfileSettings(true);
-    }
+  registerTintTimers({
+    flushPendingTint: () => {
+      if (tintPersistTimer !== null) {
+        clearTimeout(tintPersistTimer);
+        tintPersistTimer = null;
+        safeSetItem(
+          AUDIFY_STORAGE_KEYS.themeTintIntensity,
+          String(get().themeTintIntensity),
+          { broadcast: false }
+        );
+        safeSetItem(
+          AUDIFY_STORAGE_KEYS.customBgBlur,
+          String(get().customBgBlur),
+          { broadcast: false }
+        );
+        safeSetItem(
+          AUDIFY_STORAGE_KEYS.customBgOpacity,
+          String(get().customBgOpacity),
+          { broadcast: false }
+        );
+        void get().persistActiveProfileSettings(true);
+      }
+    },
+    cancelPendingTint: () => {
+      if (tintPersistTimer !== null) {
+        clearTimeout(tintPersistTimer);
+        tintPersistTimer = null;
+      }
+    },
   });
 
   const scheduleVisualPersist = () => {

@@ -1,0 +1,393 @@
+import { CAMELOT_KEYS } from "../../constants/camelotKeys";
+import type { FolderStat, Genre, Tag } from "../../types";
+import { foldSearchText, folderNameFromPath } from "../format";
+
+export interface SearchAutocompleteItem {
+  id: string;
+  insertToken: string;
+  label: string;
+  meta?: string;
+  color?: string;
+  kind: "tag" | "genre" | "key" | "folder" | "operator";
+}
+
+export interface SearchAutocompleteContext {
+  tokenStart: number;
+  tokenEnd: number;
+  rawToken: string;
+  headerLabel: string;
+  items: SearchAutocompleteItem[];
+}
+
+const MAX_SUGGESTIONS = 10;
+
+const AUDIO_FORMAT_VALUES = [
+  { value: "wav", meta: "PCM WAV" },
+  { value: "mp3", meta: "MP3" },
+  { value: "flac", meta: "Lossless FLAC" },
+  { value: "ogg", meta: "Ogg Vorbis" },
+  { value: "opus", meta: "Opus Audio" },
+  { value: "aiff", meta: "AIFF" },
+  { value: "aif", meta: "AIFF (.aif)" },
+  { value: "m4a", meta: "AAC / M4A" },
+  { value: "aac", meta: "AAC Audio" },
+] as const;
+
+const SAMPLE_CLASS_VALUES = [
+  { value: "loop", meta: "Loopable tracks" },
+  { value: "oneshot", meta: "One-shot SFX / hits" },
+  { value: "fav", meta: "Starred favorites" },
+] as const;
+
+const STATIC_OPERATOR_OPTIONS: Record<
+  string,
+  { header: string; values: ReadonlyArray<{ value: string; meta: string }> }
+> = {
+  ext: {
+    header: "AUDIO FORMAT (ext:)",
+    values: AUDIO_FORMAT_VALUES,
+  },
+  format: {
+    header: "AUDIO FORMAT (format:)",
+    values: AUDIO_FORMAT_VALUES,
+  },
+  type: {
+    header: "SAMPLE TYPE (type:)",
+    values: SAMPLE_CLASS_VALUES,
+  },
+  is: {
+    header: "SAMPLE TYPE (is:)",
+    values: SAMPLE_CLASS_VALUES,
+  },
+  channels: {
+    header: "CHANNELS (channels:)",
+    values: [
+      { value: "mono", meta: "1ch Mono" },
+      { value: "stereo", meta: "2ch Stereo" },
+      { value: "multi", meta: "Surround / 3ch+" },
+    ],
+  },
+  ch: {
+    header: "CHANNELS (ch:)",
+    values: [
+      { value: "mono", meta: "1ch Mono" },
+      { value: "stereo", meta: "2ch Stereo" },
+      { value: "multi", meta: "Surround / 3ch+" },
+    ],
+  },
+  sr: {
+    header: "SAMPLE RATE (sr:)",
+    values: [
+      { value: "48k", meta: "48 kHz (Video/NLE)" },
+      { value: "44.1k", meta: "44.1 kHz (CD/Music)" },
+      { value: "96k", meta: "96 kHz (Hi-Res SFX)" },
+      { value: ">=48k", meta: "48 kHz or higher" },
+    ],
+  },
+  bit: {
+    header: "BIT DEPTH (bit:)",
+    values: [
+      { value: "24", meta: "24-bit" },
+      { value: "16", meta: "16-bit" },
+      { value: "32", meta: "32-bit float" },
+      { value: ">=24", meta: "24-bit or higher" },
+    ],
+  },
+  dur: {
+    header: "DURATION (dur:)",
+    values: [
+      { value: "<1s", meta: "One-shots (< 1s)" },
+      { value: "<3s", meta: "Short SFX (< 3s)" },
+      { value: "1-5s", meta: "1s to 5s" },
+      { value: ">10s", meta: "Loops / Ambiences (> 10s)" },
+    ],
+  },
+  size: {
+    header: "FILE SIZE (size:)",
+    values: [
+      { value: "<500kb", meta: "Compact (< 500 KB)" },
+      { value: "<2mb", meta: "Small (< 2 MB)" },
+      { value: "1-10mb", meta: "1 MB to 10 MB" },
+      { value: ">10mb", meta: "Large (> 10 MB)" },
+    ],
+  },
+  bpm: {
+    header: "TEMPO (bpm:)",
+    values: [
+      { value: "90", meta: "±2 BPM" },
+      { value: "110", meta: "±2 BPM" },
+      { value: "120", meta: "±2 BPM" },
+      { value: "128", meta: "±2 BPM" },
+      { value: "140", meta: "±2 BPM" },
+      { value: "120-130", meta: "BPM range" },
+    ],
+  },
+};
+
+function formatTokenValue(value: string): string {
+  return /\s/.test(value) ? `"${value}"` : value;
+}
+
+function finalizeAutocompleteContext(
+  ctx: SearchAutocompleteContext
+): SearchAutocompleteContext | null {
+  if (ctx.items.length === 0) return null;
+  if (
+    ctx.items.length === 1 &&
+    ctx.items[0].insertToken.toLowerCase() === ctx.rawToken.toLowerCase()
+  ) {
+    return null;
+  }
+  return ctx;
+}
+
+function extractActiveToken(
+  query: string,
+  cursorPos: number
+): { start: number; end: number; token: string } | null {
+  const safeCursor = Math.max(0, Math.min(query.length, cursorPos));
+  // Quote-aware scan so `tag:"Sci Fi"` remains a single editable token across spaces
+  let i = 0;
+  while (i < query.length) {
+    while (i < query.length && /\s/.test(query[i])) i += 1;
+    if (i >= query.length) break;
+    const tokStart = i;
+    let inQuotes = false;
+    while (i < query.length) {
+      const ch = query[i];
+      if (ch === '"') {
+        inQuotes = !inQuotes;
+        i += 1;
+      } else if (!inQuotes && /\s/.test(ch)) {
+        break;
+      } else {
+        i += 1;
+      }
+    }
+    const tokEnd = i;
+    if (safeCursor >= tokStart && safeCursor <= tokEnd) {
+      const token = query.slice(tokStart, tokEnd);
+      return token ? { start: tokStart, end: tokEnd, token } : null;
+    }
+  }
+  return null;
+}
+
+function rankTextMatches<T extends { name: string; sample_count: number }>(
+  list: readonly T[],
+  needleFolded: string
+): T[] {
+  const prefix: T[] = [];
+  const contains: T[] = [];
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i];
+    const folded = foldSearchText(item.name);
+    if (!needleFolded || folded.startsWith(needleFolded)) {
+      prefix.push(item);
+    } else if (folded.includes(needleFolded)) {
+      contains.push(item);
+    }
+  }
+  const byPopularity = (a: T, b: T) =>
+    b.sample_count - a.sample_count || a.name.localeCompare(b.name);
+  prefix.sort(byPopularity);
+  contains.sort(byPopularity);
+  return [...prefix, ...contains].slice(0, MAX_SUGGESTIONS);
+}
+
+function buildUniqueFolderEntries(
+  folderStats: readonly FolderStat[]
+): Array<{ name: string; sample_count: number }> {
+  if (folderStats.length === 0) return [];
+  const byFolded = new Map<string, { name: string; sample_count: number }>();
+  for (let i = 0; i < folderStats.length; i++) {
+    const stat = folderStats[i];
+    const leaf = folderNameFromPath(stat.folder_path, "").trim();
+    if (!leaf) continue;
+    const key = foldSearchText(leaf);
+    if (!key) continue;
+    const existing = byFolded.get(key);
+    if (existing) {
+      existing.sample_count += stat.count;
+    } else {
+      byFolded.set(key, { name: leaf, sample_count: stat.count });
+    }
+  }
+  return Array.from(byFolded.values());
+}
+
+/**
+ * Computes Smart Search inline autocomplete suggestions for the operator token
+ * under `cursorPos` (`tag:`, `#`, `genre:`, `folder:`, `path:`, `key:`, `key:~`, `ext:`, `format:`, `type:`, `is:`, `ch:`, `sr:`, `bit:`, `dur:`, `size:`, `bpm:`).
+ * Returns `null` for plain keyword tokens so normal searching is never interrupted.
+ */
+export function getSearchAutocompleteSuggestions(
+  query: string,
+  cursorPos: number,
+  tags: readonly Tag[],
+  genres: readonly Genre[],
+  folderStats: readonly FolderStat[] = []
+): SearchAutocompleteContext | null {
+  const active = extractActiveToken(query, cursorPos);
+  if (!active) return null;
+
+  const { start, end, token } = active;
+  const negPrefix = token.startsWith("-") ? "-" : "";
+  const body = negPrefix ? token.slice(1) : token;
+
+  // Shorthand `#tag` syntax
+  if (body.startsWith("#")) {
+    const needle = foldSearchText(body.slice(1).replace(/^"|"$/g, ""));
+    const matched = rankTextMatches(tags, needle);
+    if (matched.length === 0) return null;
+    return finalizeAutocompleteContext({
+      tokenStart: start,
+      tokenEnd: end,
+      rawToken: token,
+      headerLabel: negPrefix ? "EXCLUDE TAG" : "FILTER BY TAG",
+      items: matched.map((t) => ({
+        id: `tag:${t.id}`,
+        insertToken: `${negPrefix}tag:${formatTokenValue(t.name)}`,
+        label: t.name,
+        meta: t.sample_count.toLocaleString(),
+        color: t.color,
+        kind: "tag",
+      })),
+    });
+  }
+
+  const colonIdx = body.indexOf(":");
+  if (colonIdx <= 0) return null;
+
+  const op = body.slice(0, colonIdx).toLowerCase();
+  const rawVal = body.slice(colonIdx + 1);
+
+  if (op === "tag") {
+    const needle = foldSearchText(rawVal.replace(/^"|"$/g, ""));
+    const matched = rankTextMatches(tags, needle);
+    if (matched.length === 0) return null;
+    return finalizeAutocompleteContext({
+      tokenStart: start,
+      tokenEnd: end,
+      rawToken: token,
+      headerLabel: negPrefix ? "EXCLUDE TAG (-tag:)" : "TAGS (tag:)",
+      items: matched.map((t) => ({
+        id: `tag:${t.id}`,
+        insertToken: `${negPrefix}tag:${formatTokenValue(t.name)}`,
+        label: t.name,
+        meta: t.sample_count.toLocaleString(),
+        color: t.color,
+        kind: "tag",
+      })),
+    });
+  }
+
+  if (op === "genre") {
+    const needle = foldSearchText(rawVal.replace(/^"|"$/g, ""));
+    const matched = rankTextMatches(genres, needle);
+    if (matched.length === 0) return null;
+    return finalizeAutocompleteContext({
+      tokenStart: start,
+      tokenEnd: end,
+      rawToken: token,
+      headerLabel: negPrefix ? "EXCLUDE GENRE (-genre:)" : "GENRES (genre:)",
+      items: matched.map((g) => ({
+        id: `genre:${g.id}`,
+        insertToken: `${negPrefix}genre:${formatTokenValue(g.name)}`,
+        label: g.name,
+        meta: g.sample_count.toLocaleString(),
+        color: g.color,
+        kind: "genre",
+      })),
+    });
+  }
+
+  if (op === "folder" || op === "path") {
+    const needle = foldSearchText(rawVal.replace(/^"|"$/g, ""));
+    const uniqueFolders = buildUniqueFolderEntries(folderStats);
+    const matched = rankTextMatches(uniqueFolders, needle);
+    if (matched.length === 0) return null;
+    return finalizeAutocompleteContext({
+      tokenStart: start,
+      tokenEnd: end,
+      rawToken: token,
+      headerLabel: negPrefix
+        ? `EXCLUDE FOLDER (-${op}:)`
+        : `FOLDERS (${op}:)`,
+      items: matched.map((f) => ({
+        id: `folder:${foldSearchText(f.name)}`,
+        insertToken: `${negPrefix}${op}:${formatTokenValue(f.name)}`,
+        label: f.name,
+        meta: f.sample_count.toLocaleString(),
+        kind: "folder",
+      })),
+    });
+  }
+
+  if (op === "key") {
+    const harmonic = rawVal.startsWith("~") ? "~" : "";
+    const needle = (harmonic ? rawVal.slice(1) : rawVal).trim().toLowerCase();
+    const matched = CAMELOT_KEYS.filter((k) => {
+      if (!needle) return true;
+      return (
+        k.key.toLowerCase().startsWith(needle) ||
+        k.camelot.toLowerCase().startsWith(needle)
+      );
+    }).slice(0, MAX_SUGGESTIONS);
+    if (matched.length === 0) return null;
+    return finalizeAutocompleteContext({
+      tokenStart: start,
+      tokenEnd: end,
+      rawToken: token,
+      headerLabel: harmonic
+        ? "HARMONIC MIX KEY (key:~)"
+        : "MUSICAL / CAMELOT KEY (key:)",
+      items: matched.map((k) => ({
+        id: `key:${k.camelot}`,
+        insertToken: `${negPrefix}key:${harmonic}${k.key}`,
+        label: k.key,
+        meta: k.camelot,
+        kind: "key",
+      })),
+    });
+  }
+
+  const staticDef = STATIC_OPERATOR_OPTIONS[op];
+  if (staticDef) {
+    const needle = rawVal.trim().toLowerCase();
+    const matched = staticDef.values
+      .filter((v) => !needle || v.value.toLowerCase().includes(needle))
+      .slice(0, MAX_SUGGESTIONS);
+    if (matched.length === 0) return null;
+    return finalizeAutocompleteContext({
+      tokenStart: start,
+      tokenEnd: end,
+      rawToken: token,
+      headerLabel: staticDef.header,
+      items: matched.map((v) => ({
+        id: `${op}:${v.value}`,
+        insertToken: `${negPrefix}${op}:${v.value}`,
+        label: `${op}:${v.value}`,
+        meta: v.meta,
+        kind: "operator",
+      })),
+    });
+  }
+
+  return null;
+}
+
+export function applyAutocompleteSuggestion(
+  query: string,
+  ctx: SearchAutocompleteContext,
+  item: SearchAutocompleteItem
+): { nextQuery: string; nextCursor: number } {
+  const before = query.slice(0, ctx.tokenStart);
+  const after = query.slice(ctx.tokenEnd);
+  const needsSpace = after.length === 0 || !/^\s/.test(after);
+  const inserted = needsSpace ? `${item.insertToken} ` : item.insertToken;
+  return {
+    nextQuery: `${before}${inserted}${after}`,
+    nextCursor: before.length + inserted.length,
+  };
+}

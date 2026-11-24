@@ -103,6 +103,8 @@ pub struct EdgePeekState {
     hold_open: Arc<AtomicBool>,
     wake_requested: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
+    #[cfg(target_os = "windows")]
+    worker_thread: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
 }
 
 impl Default for EdgePeekState {
@@ -112,6 +114,8 @@ impl Default for EdgePeekState {
             hold_open: Arc::new(AtomicBool::new(false)),
             wake_requested: Arc::new(AtomicBool::new(false)),
             generation: Arc::new(AtomicU64::new(0)),
+            #[cfg(target_os = "windows")]
+            worker_thread: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -150,7 +154,10 @@ impl EdgePeekState {
         };
     }
 
-    pub fn disable_for_window(&self, app: &AppHandle, window: &WebviewWindow) {
+    /// Non-blocking teardown safe to call directly from the Win32 main UI thread
+    /// (`WindowEvent::CloseRequested | Destroyed`) — never calls `h.join()` on the UI thread,
+    /// eliminating cross-thread `SetWindowPos` ABBA deadlocks.
+    pub fn disable_for_window_nonblocking(&self, app: &AppHandle, window: &WebviewWindow) {
         let _ = self.generation.fetch_add(1, Ordering::AcqRel);
         self.wake_requested.store(false, Ordering::Release);
         let side = {
@@ -181,7 +188,7 @@ impl EdgePeekState {
 }
 
 #[tauri::command]
-pub fn mini_dock_set_edge_peek(
+pub async fn mini_dock_set_edge_peek(
     app: AppHandle,
     window: WebviewWindow,
     state: State<'_, EdgePeekState>,
@@ -193,65 +200,115 @@ pub fn mini_dock_set_edge_peek(
     }
 
     let chosen_side = EdgeSide::from_opt_str(side.as_deref());
-    if !enabled {
-        state.disable_for_window(&app, &window);
-        return Ok(EdgePeekStatePayload {
-            enabled: false,
-            collapsed: false,
-            side: chosen_side.as_str().to_string(),
-        });
-    }
-
-    let gen = state.generation.fetch_add(1, Ordering::AcqRel) + 1;
-    state.wake_requested.store(false, Ordering::Release);
-    {
-        let mut guard = state.inner.lock().unwrap_or_else(|e| e.into_inner());
-        guard.enabled = true;
-        guard.collapsed = false;
-        guard.side = chosen_side;
-    }
+    let inner_arc = Arc::clone(&state.inner);
+    let hold_arc = Arc::clone(&state.hold_open);
+    let wake_arc = Arc::clone(&state.wake_requested);
+    let gen_arc = Arc::clone(&state.generation);
+    #[cfg(target_os = "windows")]
+    let worker_arc = Arc::clone(&state.worker_thread);
 
     #[cfg(target_os = "windows")]
-    {
-        let hwnd_raw = window
+    let (hwnd_raw, scale) = {
+        let hwnd = window
             .hwnd()
             .map_err(|e| format!("Failed reading window handle: {}", e))?
             .0 as isize;
-        let scale = window.scale_factor().unwrap_or(1.0).clamp(0.75, 4.0);
-        controller::restore_window_normal(hwnd_raw);
-        controller::snap_window_to_edge(hwnd_raw, chosen_side, scale);
-
-        let app_clone = app.clone();
-        let inner_arc = Arc::clone(&state.inner);
-        let hold_arc = Arc::clone(&state.hold_open);
-        let wake_arc = Arc::clone(&state.wake_requested);
-        let gen_arc = Arc::clone(&state.generation);
-
-        std::thread::Builder::new()
-            .name("audify-edge-peek".to_string())
-            .spawn(move || {
-                controller::run_edge_peek_loop(
-                    app_clone,
-                    hwnd_raw,
-                    chosen_side,
-                    scale,
-                    gen,
-                    inner_arc,
-                    hold_arc,
-                    wake_arc,
-                    gen_arc,
-                );
-            })
-            .map_err(|e| format!("Failed starting Edge-Peek monitor: {}", e))?;
-    }
-
-    let payload = EdgePeekStatePayload {
-        enabled: true,
-        collapsed: false,
-        side: chosen_side.as_str().to_string(),
+        let sc = window.scale_factor().unwrap_or(1.0).clamp(0.75, 4.0);
+        (hwnd, sc)
     };
-    let _ = app.emit(EDGE_PEEK_STATE_EVENT, &payload);
-    Ok(payload)
+
+    // Claim generation synchronously BEFORE spawning so rapid ON->OFF toggles or CloseRequested
+    // teardowns can never execute out of order inside `spawn_blocking`.
+    let my_gen = state.generation.fetch_add(1, Ordering::AcqRel) + 1;
+    state.wake_requested.store(false, Ordering::Release);
+
+    let app_for_task = app.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<EdgePeekStatePayload, String> {
+        #[cfg(target_os = "windows")]
+        let mut worker_guard = worker_arc.lock().unwrap_or_else(|e| e.into_inner());
+
+        #[cfg(target_os = "windows")]
+        if let Some(prev) = worker_guard.take() {
+            if prev.thread().id() != std::thread::current().id() {
+                let _ = prev.join();
+            }
+        }
+
+        // Superseded by a newer toggle or window teardown while waiting for lock/join
+        if gen_arc.load(Ordering::Acquire) != my_gen {
+            let guard = inner_arc.lock().unwrap_or_else(|e| e.into_inner());
+            return Ok(EdgePeekStatePayload {
+                enabled: guard.enabled,
+                collapsed: guard.collapsed,
+                side: guard.side.as_str().to_string(),
+            });
+        }
+
+        if !enabled {
+            let side_final = {
+                let mut guard = inner_arc.lock().unwrap_or_else(|e| e.into_inner());
+                guard.enabled = false;
+                guard.collapsed = false;
+                guard.side
+            };
+            #[cfg(target_os = "windows")]
+            controller::dispatch_restore_window_normal(&app_for_task, hwnd_raw);
+            let payload = EdgePeekStatePayload {
+                enabled: false,
+                collapsed: false,
+                side: side_final.as_str().to_string(),
+            };
+            let _ = app_for_task.emit(EDGE_PEEK_STATE_EVENT, &payload);
+            return Ok(payload);
+        }
+
+        {
+            let mut guard = inner_arc.lock().unwrap_or_else(|e| e.into_inner());
+            guard.enabled = true;
+            guard.collapsed = false;
+            guard.side = chosen_side;
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            controller::dispatch_restore_window_normal(&app_for_task, hwnd_raw);
+            controller::snap_window_to_edge(hwnd_raw, chosen_side, scale);
+
+            let app_clone = app_for_task.clone();
+            let inner_for_loop = Arc::clone(&inner_arc);
+            let hold_for_loop = Arc::clone(&hold_arc);
+            let wake_for_loop = Arc::clone(&wake_arc);
+            let gen_for_loop = Arc::clone(&gen_arc);
+
+            let handle = std::thread::Builder::new()
+                .name("audify-edge-peek".to_string())
+                .spawn(move || {
+                    controller::run_edge_peek_loop(
+                        app_clone,
+                        hwnd_raw,
+                        chosen_side,
+                        scale,
+                        my_gen,
+                        inner_for_loop,
+                        hold_for_loop,
+                        wake_for_loop,
+                        gen_for_loop,
+                    );
+                })
+                .map_err(|e| format!("Failed starting Edge-Peek monitor: {}", e))?;
+            *worker_guard = Some(handle);
+        }
+
+        let payload = EdgePeekStatePayload {
+            enabled: true,
+            collapsed: false,
+            side: chosen_side.as_str().to_string(),
+        };
+        let _ = app_for_task.emit(EDGE_PEEK_STATE_EVENT, &payload);
+        Ok(payload)
+    })
+    .await
+    .map_err(|e| format!("Edge-Peek worker join error: {}", e))?
 }
 
 #[tauri::command]

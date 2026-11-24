@@ -40,6 +40,10 @@ export const ShortcutsCheatsheetModal: React.FC<ShortcutsCheatsheetModalProps> =
         ["Play / Pause", fmt("playPause")],
         ["Stop", fmt("stopPlayback")],
         ["Previous / Next Track", `${fmt("prevTrack")} / ${fmt("nextTrack")}`],
+        ["Extend Multi-Select / Page", "Shift+↑/↓ · PgUp/PgDn"],
+        ["Seek / Fine Seek", "← / →  (Shift: ±0.1s)"],
+        ["Replay / Start / End", "Enter · Home / End"],
+        ["Trim Active Slice", "Alt+←/→ (Shift: In)"],
         ["Toggle Loop", fmt("toggleLoop")],
         ["Toggle Shuffle", fmt("toggleShuffle")],
         ["Toggle Auto-Preview", fmt("toggleAutoPreview")],
@@ -68,6 +72,8 @@ export const ShortcutsCheatsheetModal: React.FC<ShortcutsCheatsheetModalProps> =
 
   const tips: [string, string][] = [
     ["Left-Drag Waveform", "Precision live scrubbing across the waveform at any point"],
+    ["Wheel / Middle-Drag Waveform", "Zoom in/out horizontally around cursor & pan across zoomed waveform"],
+    ["Drag Deck Filename → NLE", "Audition with pitch or slice, then drag straight from the deck header"],
     ["Right-Drag / Shift-Drag Waveform", "Draw a precision WAV slice region directly on the deck"],
     ["Drag Slice Body → NLE", "Exports & drops the sliced WAV directly into Premiere / Resolve"],
     ["Drop Audio File on Waveform", "Instant AI acoustic similarity search against your entire library"],

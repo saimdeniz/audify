@@ -1,17 +1,25 @@
 import { invoke } from "@tauri-apps/api/core";
 import { SampleItem, SliceRange } from "../../types";
+import { markLocalKeyEdited } from "../../utils/localStorageSafe";
 import { resolveSamplesByIds } from "../../utils/sampleLookup";
 import { getPlayheadSec, resetPlayheadClock, setPlayheadSec } from "../playheadClock";
 import {
   AUDIFY_STORAGE_KEYS,
+  postCrossWindowSync,
   pushRecentSampleId,
   safeSetItem,
   saveLastSample,
 } from "../storageHelpers";
 import { SampleStoreState, StoreSliceContext } from "../types";
 
+export interface PlaybackSliceTimers {
+  flushPendingVolume: () => void;
+  cancelPendingVolume: () => void;
+}
+
 export function createPlaybackSlice(
-  ctx: StoreSliceContext
+  ctx: StoreSliceContext,
+  timers?: PlaybackSliceTimers
 ): Pick<
   SampleStoreState,
   | "selectSample"
@@ -36,6 +44,27 @@ export function createPlaybackSlice(
   | "showInFolder"
 > {
   const { set, get, emitNotice } = ctx;
+  let volumePersistTimer: ReturnType<typeof setTimeout> | null = null;
+  const cancelPendingVolume = () => {
+    if (volumePersistTimer !== null) {
+      clearTimeout(volumePersistTimer);
+      volumePersistTimer = null;
+    }
+  };
+  const flushPendingVolume = () => {
+    if (volumePersistTimer !== null) {
+      clearTimeout(volumePersistTimer);
+      volumePersistTimer = null;
+      safeSetItem(AUDIFY_STORAGE_KEYS.volume, String(get().volume), {
+        broadcast: false,
+      });
+      void get().persistActiveProfileSettings(true);
+    }
+  };
+  if (timers) {
+    timers.flushPendingVolume = flushPendingVolume;
+    timers.cancelPendingVolume = cancelPendingVolume;
+  }
 
   return {
     selectSample: (sample: SampleItem, shouldPlay?: boolean) => {
@@ -62,6 +91,11 @@ export function createPlaybackSlice(
         recentOnly || isVirtualPreview
           ? recentSampleIds
           : pushRecentSampleId(recentSampleIds, sample.id);
+      const prevKnown = get().knownSampleIds;
+      const nextKnownIds =
+        !isVirtualPreview && sample.id > 0 && !prevKnown.has(sample.id)
+          ? new Set([...prevKnown, sample.id])
+          : prevKnown;
 
       resetPlayheadClock(initialTime);
       set({
@@ -69,6 +103,7 @@ export function createPlaybackSlice(
         selectedSampleIds: [sample.id],
         lastSelectedIndex: idx >= 0 ? idx : null,
         recentSampleIds: nextRecentIds,
+        ...(nextKnownIds !== prevKnown ? { knownSampleIds: nextKnownIds } : {}),
         currentTimeSec: initialTime,
         durationSec: Math.max(0.01, sample.duration_ms / 1000),
         sliceRange: targetSlice,
@@ -95,11 +130,16 @@ export function createPlaybackSlice(
       const isShift = Boolean(opts?.shiftKey);
 
       if (isShift && samples.length > 0) {
+        const selectedIdx = selectedSample
+          ? samples.findIndex((s) => s.id === selectedSample.id)
+          : -1;
         const anchor =
           lastSelectedIndex !== null &&
           lastSelectedIndex >= 0 &&
           lastSelectedIndex < samples.length
             ? lastSelectedIndex
+            : selectedIdx >= 0
+            ? selectedIdx
             : index;
         const start = Math.max(0, Math.min(anchor, index));
         const end = Math.min(samples.length - 1, Math.max(anchor, index));
@@ -161,6 +201,11 @@ export function createPlaybackSlice(
       const nextRecentIds = get().recentOnly
         ? get().recentSampleIds
         : pushRecentSampleId(get().recentSampleIds, sample.id);
+      const prevKnown = get().knownSampleIds;
+      const nextKnownIds =
+        sample.id > 0 && !prevKnown.has(sample.id)
+          ? new Set([...prevKnown, sample.id])
+          : prevKnown;
 
       resetPlayheadClock(initialTime);
       set({
@@ -168,6 +213,7 @@ export function createPlaybackSlice(
         selectedSampleIds: [sample.id],
         lastSelectedIndex: index,
         recentSampleIds: nextRecentIds,
+        ...(nextKnownIds !== prevKnown ? { knownSampleIds: nextKnownIds } : {}),
         currentTimeSec: initialTime,
         durationSec: Math.max(0.01, sample.duration_ms / 1000),
         sliceRange: targetSlice,
@@ -221,7 +267,7 @@ export function createPlaybackSlice(
       let nextIndex = -1;
       let nextHistory = shuffleHistory;
 
-      if (isShuffle && samples.length > 1) {
+      if (isShuffle && Math.abs(delta) === 1 && samples.length > 1) {
         if (delta < 0 && shuffleHistory.length > 0) {
           const histCopy = shuffleHistory.slice();
           while (histCopy.length > 0) {
@@ -264,6 +310,11 @@ export function createPlaybackSlice(
       const nextRecentIds = get().recentOnly
         ? get().recentSampleIds
         : pushRecentSampleId(get().recentSampleIds, target.id);
+      const prevKnown = get().knownSampleIds;
+      const nextKnownIds =
+        target.id > 0 && !prevKnown.has(target.id)
+          ? new Set([...prevKnown, target.id])
+          : prevKnown;
 
       resetPlayheadClock(0);
       set({
@@ -272,6 +323,7 @@ export function createPlaybackSlice(
         lastSelectedIndex: nextIndex,
         shuffleHistory: nextHistory,
         recentSampleIds: nextRecentIds,
+        ...(nextKnownIds !== prevKnown ? { knownSampleIds: nextKnownIds } : {}),
         currentTimeSec: 0,
         durationSec: Math.max(0.01, target.duration_ms / 1000),
         sliceRange: null,
@@ -359,15 +411,24 @@ export function createPlaybackSlice(
 
     setVolume: (volume: number) => {
       const clamped = Math.max(0, Math.min(1, volume));
-      safeSetItem(AUDIFY_STORAGE_KEYS.volume, String(clamped));
+      markLocalKeyEdited(AUDIFY_STORAGE_KEYS.volume);
       set((s) => ({
         volume: clamped,
         preMuteVolume: clamped > 0.02 ? clamped : s.preMuteVolume,
       }));
-      void get().persistActiveProfileSettings();
+      postCrossWindowSync("live-visual", { volume: clamped });
+      cancelPendingVolume();
+      volumePersistTimer = setTimeout(() => {
+        volumePersistTimer = null;
+        safeSetItem(AUDIFY_STORAGE_KEYS.volume, String(clamped), {
+          broadcast: false,
+        });
+        void get().persistActiveProfileSettings();
+      }, 180);
     },
 
     toggleMute: () => {
+      cancelPendingVolume();
       const { volume, preMuteVolume } = get();
       const nextVol =
         volume > 0.005 ? 0 : preMuteVolume > 0.02 ? preMuteVolume : 0.85;
@@ -429,9 +490,25 @@ export function createPlaybackSlice(
       set({ sliceRange });
     },
 
-    setInAppDragSample: (inAppDragSample: SampleItem | null) => {
+    setInAppDragSample: (
+      inAppDragSample: SampleItem | null,
+      opts?: { single?: boolean; origin?: "list" | "deck-header" }
+    ) => {
       if (!inAppDragSample) {
-        set({ inAppDragSample: null, inAppDragSamples: [] });
+        set({
+          inAppDragSample: null,
+          inAppDragSamples: [],
+          inAppDragOrigin: null,
+        });
+        return;
+      }
+      const origin = opts?.origin ?? "list";
+      if (opts?.single) {
+        set({
+          inAppDragSample,
+          inAppDragSamples: [inAppDragSample],
+          inAppDragOrigin: origin,
+        });
         return;
       }
       const { selectedSampleIds, samples, allProfileSamples } = get();
@@ -447,11 +524,13 @@ export function createPlaybackSlice(
         set({
           inAppDragSample,
           inAppDragSamples: batch.length > 0 ? batch : [inAppDragSample],
+          inAppDragOrigin: origin,
         });
       } else {
         set({
           inAppDragSample,
           inAppDragSamples: [inAppDragSample],
+          inAppDragOrigin: origin,
         });
       }
     },

@@ -1,6 +1,8 @@
 import { SampleRateFilter, SortDir, SortKey, TypeFilter } from "../../types";
 import { clearSmartSearchCache } from "../../utils/smartSearch";
+import { shouldUseCatalogWorker } from "../../workers/catalogWorkerClient";
 import { applyClientFacetFilters, reconcileSelectionAfterFilter } from "../filterEngine";
+import { resetPlayheadClock } from "../playheadClock";
 import {
   AUDIFY_STORAGE_KEYS,
   loadSavedSort,
@@ -10,6 +12,7 @@ import {
 } from "../storageHelpers";
 import type { MainFilterRequest, StoreSliceContext } from "../types";
 import { bumpMemoryFilterSeq } from "../workerBridge";
+import { cancelPendingSimilaritySearch } from "./aiSlice";
 
 export function createFilterSlice(
   ctx: StoreSliceContext,
@@ -31,6 +34,9 @@ export function createFilterSlice(
   const clearFilters = (preserveSimilarity: boolean) => {
     opts.clearSearchDebounceTimer();
     clearSmartSearchCache();
+    if (!preserveSimilarity) {
+      cancelPendingSimilaritySearch();
+    }
     persistNavigationFilters(null, null, false, null);
     const prevSim = get().similaritySession;
     const restoreSort =
@@ -71,6 +77,20 @@ export function createFilterSlice(
     if (!applyInstantMemoryFilter({ preserveMultiSelect: false })) {
       void get().fetchSamples({ preserveMultiSelect: false });
     }
+  };
+
+  const canOffloadFacetToWorker = (): boolean => {
+    const st = get();
+    if (st.trashFilterActive || !shouldUseCatalogWorker(st.allProfileSamples.length)) {
+      return false;
+    }
+    if (st.selectedCollectionId !== null) {
+      const activeCol = st.collections.find((c) => c.id === st.selectedCollectionId);
+      if (!activeCol?.smart_query?.trim()) {
+        return false;
+      }
+    }
+    return true;
   };
 
   return {
@@ -294,6 +314,11 @@ export function createFilterSlice(
     },
 
     setTypeFilter: (typeFilter: TypeFilter) => {
+      if (canOffloadFacetToWorker()) {
+        set({ typeFilter });
+        applyInstantMemoryFilter({ preserveMultiSelect: true });
+        return;
+      }
       bumpMemoryFilterSeq();
       opts.bumpFetchSeq();
       const {
@@ -319,16 +344,35 @@ export function createFilterSlice(
         selectedSampleIds,
         true
       );
+      const selectionChanged =
+        (reconciled.nextSelected?.id ?? null) !== (selectedSample?.id ?? null);
+      if (selectionChanged) {
+        resetPlayheadClock(0);
+      }
       set({
         typeFilter,
         samples: filtered,
         selectedSample: reconciled.nextSelected,
         selectedSampleIds: reconciled.nextSelectedIds,
         lastSelectedIndex: reconciled.nextSelectedIndex,
+        ...(selectionChanged
+          ? {
+              sliceRange: null,
+              currentTimeSec: 0,
+              durationSec: reconciled.nextSelected
+                ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
+                : 0,
+            }
+          : {}),
       });
     },
 
     setSrFilter: (srFilter: SampleRateFilter) => {
+      if (canOffloadFacetToWorker()) {
+        set({ srFilter });
+        applyInstantMemoryFilter({ preserveMultiSelect: true });
+        return;
+      }
       bumpMemoryFilterSeq();
       opts.bumpFetchSeq();
       const {
@@ -354,12 +398,26 @@ export function createFilterSlice(
         selectedSampleIds,
         true
       );
+      const selectionChanged =
+        (reconciled.nextSelected?.id ?? null) !== (selectedSample?.id ?? null);
+      if (selectionChanged) {
+        resetPlayheadClock(0);
+      }
       set({
         srFilter,
         samples: filtered,
         selectedSample: reconciled.nextSelected,
         selectedSampleIds: reconciled.nextSelectedIds,
         lastSelectedIndex: reconciled.nextSelectedIndex,
+        ...(selectionChanged
+          ? {
+              sliceRange: null,
+              currentTimeSec: 0,
+              durationSec: reconciled.nextSelected
+                ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
+                : 0,
+            }
+          : {}),
       });
     },
 
@@ -406,6 +464,11 @@ export function createFilterSlice(
         } else {
           safeRemoveItem(AUDIFY_STORAGE_KEYS.sort);
         }
+      }
+      if (canOffloadFacetToWorker()) {
+        set({ sortKey: nextKey, sortDir: nextDir });
+        applyInstantMemoryFilter({ preserveMultiSelect: true });
+        return;
       }
       const nextSamples = applyClientFacetFilters(
         rawSamples,

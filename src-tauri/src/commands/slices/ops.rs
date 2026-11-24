@@ -282,36 +282,57 @@ pub(crate) fn batch_rename_slices_with_conn(
 }
 
 #[tauri::command]
-pub fn toggle_slice_favorite(
+pub async fn toggle_slice_favorite(
     state: State<'_, AppState>,
     slice_id: i64,
 ) -> Result<SliceHistoryRecord, String> {
-    let conn = state.lock_db();
-    toggle_slice_favorite_with_conn(&conn, slice_id)
-        .map_err(|e| sanitize_err(&state.user_dir, &e))
+    let state_owned = state.inner().clone();
+    let user_dir_err = state.user_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = state_owned.lock_db();
+        toggle_slice_favorite_with_conn(&conn, slice_id)
+            .map_err(|e| sanitize_err(&state_owned.user_dir, &e))
+    })
+    .await
+    .map_err(|e| sanitize_err(&user_dir_err, &format!("Toggle slice favorite task failed: {}", e)))?
 }
 
 #[tauri::command]
-pub fn toggle_slice_favorites_batch(
+pub async fn toggle_slice_favorites_batch(
     state: State<'_, AppState>,
     slice_ids: Vec<i64>,
     is_favorite: bool,
 ) -> Result<Vec<i64>, String> {
-    let mut conn = state.lock_db();
-    toggle_slice_favorites_batch_with_conn(&mut conn, &slice_ids, is_favorite)
-        .map_err(|e| sanitize_err(&state.user_dir, &e))
+    let state_owned = state.inner().clone();
+    let user_dir_err = state.user_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = state_owned.lock_db();
+        toggle_slice_favorites_batch_with_conn(&mut conn, &slice_ids, is_favorite)
+            .map_err(|e| sanitize_err(&state_owned.user_dir, &e))
+    })
+    .await
+    .map_err(|e| sanitize_err(&user_dir_err, &format!("Batch slice favorite task failed: {}", e)))?
 }
 
 #[tauri::command]
-pub fn batch_rename_slices(
+pub async fn batch_rename_slices(
     app: AppHandle,
     state: State<'_, AppState>,
     entries: Vec<SliceBatchRenameEntryInput>,
 ) -> Result<Vec<SliceRenameOutcome>, String> {
     crate::library_watcher::suppress_watcher_if_managed(&app, 2500);
-    let mut conn = state.lock_db();
-    batch_rename_slices_with_conn(&mut conn, &state.user_dir, &entries)
-        .map_err(|e| sanitize_err(&state.user_dir, &e))
+    let state_owned = state.inner().clone();
+    let user_dir_err = state.user_dir.clone();
+    let app_after = app.clone();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = state_owned.lock_db();
+        batch_rename_slices_with_conn(&mut conn, &state_owned.user_dir, &entries)
+            .map_err(|e| sanitize_err(&state_owned.user_dir, &e))
+    })
+    .await
+    .map_err(|e| sanitize_err(&user_dir_err, &format!("Batch rename slices task failed: {}", e)))?;
+    crate::library_watcher::suppress_watcher_if_managed(&app_after, 1500);
+    res
 }
 
 #[cfg(test)]

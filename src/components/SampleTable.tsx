@@ -37,7 +37,11 @@ const LazySampleBatchActionBar = lazy(() =>
     default: m.SampleBatchActionBar,
   }))
 );
-import { SampleTableEmptyState } from "./sample-table/SampleTableEmptyState";
+const SampleTableEmptyState = lazy(() =>
+  import("./sample-table/SampleTableEmptyState").then((m) => ({
+    default: m.SampleTableEmptyState,
+  }))
+);
 import { SampleTableHeader } from "./sample-table/SampleTableHeader";
 import { SampleTableRowsPane } from "./sample-table/SampleTableRowsPane";
 import { ContextMenuState, RowPopoverPosition } from "./sample-table/tableLayout";
@@ -240,6 +244,15 @@ export const SampleTable: React.FC = () => {
     return { rootCollections: roots, childrenByParentId: childrenMap };
   }, [collections]);
 
+  const isSmartCollectionActive = useMemo(() => {
+    if (selectedCollectionId === null) return false;
+    return Boolean(
+      collections
+        .find((c) => c.id === selectedCollectionId)
+        ?.smart_query?.trim()
+    );
+  }, [collections, selectedCollectionId]);
+
   const selectedIdSet = useMemo(
     () => new Set(selectedSampleIds),
     [selectedSampleIds]
@@ -355,21 +368,23 @@ export const SampleTable: React.FC = () => {
           />
 
           {!hasInitialized || libraries.length === 0 || samples.length === 0 ? (
-            <SampleTableEmptyState
-              hasLibraries={libraries.length > 0}
-              isInitializing={!hasInitialized}
-              isScanning={isScanning}
-              isScanningDuplicates={
-                duplicatesFilterActive && isScanningDuplicates
-              }
-              duplicatesFilterActive={duplicatesFilterActive}
-              duplicateHasResult={duplicateHasResult}
-              duplicateScopeLabel={duplicateScopeLabel}
-              duplicateScanModeLabel={duplicateScanModeLabel}
-              onScanDuplicates={handleScanDuplicates}
-              onAddFolder={handleAddFolder}
-              onResetFilters={resetAllFilters}
-            />
+            <Suspense fallback={<div className="flex-1" />}>
+              <SampleTableEmptyState
+                hasLibraries={libraries.length > 0}
+                isInitializing={!hasInitialized}
+                isScanning={isScanning}
+                isScanningDuplicates={
+                  duplicatesFilterActive && isScanningDuplicates
+                }
+                duplicatesFilterActive={duplicatesFilterActive}
+                duplicateHasResult={duplicateHasResult}
+                duplicateScopeLabel={duplicateScopeLabel}
+                duplicateScanModeLabel={duplicateScanModeLabel}
+                onScanDuplicates={handleScanDuplicates}
+                onAddFolder={handleAddFolder}
+                onResetFilters={resetAllFilters}
+              />
+            </Suspense>
           ) : (
             <SampleTableRowsPane
               parentRef={parentRef}
@@ -379,14 +394,14 @@ export const SampleTable: React.FC = () => {
               selectedIdSet={selectedIdSet}
               selectedTagSet={selectedTagSet}
               selectedCollectionId={selectedCollectionId}
+              isSmartCollectionActive={isSmartCollectionActive}
               selectedGenre={selectedGenre}
               similaritySession={similaritySession}
               isSimilarityMode={isSimilarityMode}
               duplicateMetaBySampleId={duplicateMetaBySampleId}
               aiSuggestionsBySampleId={aiSuggestionsBySampleId}
-              rowTagPopover={rowTagPopover}
-              rowGenrePopover={rowGenrePopover}
-              hoverOverflowTags={hoverOverflowTags}
+              activeTagPopoverSampleId={rowTagPopover?.sampleId ?? null}
+              activeGenrePopoverSampleId={rowGenrePopover?.sampleId ?? null}
               setHoverOverflowTags={setHoverOverflowTags}
               columnOrder={columnOrder}
               visibleCols={visibleCols}
@@ -407,7 +422,7 @@ export const SampleTable: React.FC = () => {
 
       <DragDropFeedbackOverlay />
 
-      {selectedSampleIds.length > 1 && !slicesFilterActive && (
+      {selectedSampleIds.length > 1 && !showSlicesTable && (
         <Suspense fallback={null}>
           <LazySampleBatchActionBar
             selectedSampleIds={selectedSampleIds}

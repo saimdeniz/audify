@@ -20,6 +20,9 @@ pub struct CallbackSignals {
     pub looped: AtomicBool,
     pub became_paused: AtomicBool,
     pub stream_errored: AtomicBool,
+    /// Lock-free mirror of `PlaybackDsp::is_rendering_audio()` so the controller loop never
+    /// polls `dsp.lock()` at 50 Hz while WASAPI callbacks are rendering.
+    pub rendering: AtomicBool,
 }
 
 impl CallbackSignals {
@@ -94,7 +97,10 @@ where
     T: SizedSample + FromSample<f32>,
 {
     let err_signals = Arc::clone(&signals);
-    let mut scratch: Vec<f32> = Vec::with_capacity(4096);
+    let prealloc_samples = ((config.sample_rate.0 as usize).max(48_000) / 4)
+        .saturating_mul(channels.max(2))
+        .max(8192);
+    let mut scratch: Vec<f32> = vec![0.0; prealloc_samples];
     device
         .build_output_stream(
             config,
@@ -105,6 +111,9 @@ where
                 let slice = &mut scratch[..data.len()];
                 if let Ok(mut guard) = dsp.try_lock() {
                     let ev = guard.render_into(slice, channels);
+                    signals
+                        .rendering
+                        .store(guard.is_rendering_audio(), Ordering::Release);
                     signals.record_dsp_events(ev.ended, ev.looped, ev.became_paused);
                 } else {
                     slice.fill(0.0);
@@ -182,6 +191,9 @@ pub fn open_output_stream(
                     move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                         if let Ok(mut guard) = dsp.try_lock() {
                             let ev = guard.render_into(data, channels);
+                            signals
+                                .rendering
+                                .store(guard.is_rendering_audio(), Ordering::Release);
                             signals.record_dsp_events(ev.ended, ev.looped, ev.became_paused);
                         } else {
                             data.fill(0.0);

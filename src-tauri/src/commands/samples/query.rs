@@ -1,5 +1,5 @@
 use super::fts_query::{build_fts_match_expression, load_synonym_config};
-use super::lookup::{hydrate_sample_peaks, hydrate_sample_tags};
+use super::lookup::{hydrate_sample_peaks, hydrate_sample_tag_ids, hydrate_sample_tags};
 use crate::commands::{normalize_path_str, parent_folder_path, SampleItem};
 use crate::db::{get_active_profile_id, AppState};
 use rusqlite::{params_from_iter, Connection};
@@ -48,6 +48,7 @@ fn prefilter_sample_ids_by_large_tag_set(
     Ok(running.unwrap_or_default())
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn query_samples_with_conn_ext(
     conn: &Connection,
@@ -60,6 +61,35 @@ pub(crate) fn query_samples_with_conn_ext(
     offset: Option<i64>,
     include_peaks: Option<bool>,
     trashed_only: Option<bool>,
+) -> Result<Vec<SampleItem>, String> {
+    query_samples_with_conn_compact(
+        conn,
+        search_query,
+        folder_filter,
+        favorite_only,
+        tag_ids,
+        collection_id,
+        limit,
+        offset,
+        include_peaks,
+        trashed_only,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn query_samples_with_conn_compact(
+    conn: &Connection,
+    search_query: Option<String>,
+    folder_filter: Option<String>,
+    favorite_only: Option<bool>,
+    tag_ids: Option<Vec<i64>>,
+    collection_id: Option<i64>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    include_peaks: Option<bool>,
+    trashed_only: Option<bool>,
+    compact_tags: bool,
 ) -> Result<Vec<SampleItem>, String> {
     let active_id = get_active_profile_id(conn);
     let limit = limit.map(|l| l.max(1));
@@ -102,9 +132,10 @@ pub(crate) fn query_samples_with_conn_ext(
     let mut where_clauses: Vec<String> = Vec::new();
 
     if want_trashed {
-        where_clauses.push("s.is_trashed = 1".to_string());
+        where_clauses.push("COALESCE(s.is_trashed, 0) = 1".to_string());
     } else {
-        where_clauses.push("s.is_trashed = 0".to_string());
+        // Matches partial indexes `idx_samples_active_lib_id` & `idx_samples_active_genre_lib`
+        where_clauses.push("COALESCE(s.is_trashed, 0) = 0".to_string());
     }
 
     let fts_match = search_query
@@ -316,6 +347,7 @@ pub(crate) fn query_samples_with_conn_ext(
                 camelot_key: row.get(18)?,
                 peaks_json: row.get(19)?,
                 tags: Vec::new(),
+                tag_ids: Vec::new(),
                 created_at: row.get(20)?,
                 file_modified_at,
                 is_trashed,
@@ -361,7 +393,11 @@ pub(crate) fn query_samples_with_conn_ext(
     if want_peaks {
         hydrate_sample_peaks(conn, &mut out);
     }
-    hydrate_sample_tags(conn, active_id, want_trashed, &mut out);
+    if compact_tags {
+        hydrate_sample_tag_ids(conn, active_id, want_trashed, &mut out);
+    } else {
+        hydrate_sample_tags(conn, active_id, want_trashed, &mut out);
+    }
 
     Ok(out)
 }
@@ -379,9 +415,11 @@ pub async fn query_samples(
     offset: Option<i64>,
     include_peaks: Option<bool>,
     trashed_only: Option<bool>,
+    compact_tags: Option<bool>,
 ) -> Result<Vec<SampleItem>, String> {
+    let want_compact_tags = compact_tags.unwrap_or(false);
     crate::db::run_read_query(&state, move |conn| {
-        query_samples_with_conn_ext(
+        query_samples_with_conn_compact(
             conn,
             search_query,
             folder_filter,
@@ -392,6 +430,7 @@ pub async fn query_samples(
             offset,
             include_peaks,
             trashed_only,
+            want_compact_tags,
         )
     })
     .await

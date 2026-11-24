@@ -324,10 +324,8 @@ pub fn init_schema_on_conn(conn: &Connection) -> Result<(), String> {
         "
         PRAGMA foreign_keys = ON;
 
-        CREATE INDEX IF NOT EXISTS idx_samples_library_id ON samples(library_id);
         CREATE INDEX IF NOT EXISTS idx_samples_is_loop ON samples(is_loop);
         CREATE INDEX IF NOT EXISTS idx_samples_trashed_lib ON samples(is_trashed, library_id);
-        CREATE INDEX IF NOT EXISTS idx_samples_file_path_nocase ON samples(file_path COLLATE NOCASE);
         CREATE INDEX IF NOT EXISTS idx_samples_genre ON samples(genre COLLATE NOCASE);
         CREATE INDEX IF NOT EXISTS idx_samples_bpm ON samples(bpm);
         CREATE INDEX IF NOT EXISTS idx_samples_camelot ON samples(camelot_key COLLATE NOCASE);

@@ -156,7 +156,7 @@ export function DuplicateOptionDropdown<T extends string | number>({
               maxHeight: menuCoords.maxHeight,
               zIndex: Z_INDEX.popoverFloating,
             }}
-            className="bg-surface-2 backdrop-blur-md border border-line-strong rounded-sm shadow-2xl p-1 overflow-y-auto space-y-0.5 select-none"
+            className="bg-surface-2 audify-overlay-surface border border-line-strong rounded-sm shadow-2xl p-1 overflow-y-auto space-y-0.5 select-none"
           >
             {options.map((opt) => {
               const selected = opt.value === value;

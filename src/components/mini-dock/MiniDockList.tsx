@@ -1,7 +1,6 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Pause, Play, Star } from "lucide-react";
-import { useShallow } from "zustand/react/shallow";
 import { useSampleStore } from "../../store/useSampleStore";
 import {
   formatDuplicateModeLabel,
@@ -45,17 +44,15 @@ export const MiniDockList: React.FC<MiniDockListProps> = ({
   const collections = useSampleStore((s) => s.collections);
   const selectedSample = useSampleStore((s) => s.selectedSample);
   const selectedSampleIds = useSampleStore((s) => s.selectedSampleIds);
-  const selectedSampleObjects = useSampleStore(
-    useShallow((s) =>
-      s.selectedSampleIds.length <= 1
-        ? EMPTY_SAMPLES
-        : resolveSamplesByIds(
-            s.selectedSampleIds,
-            s.allProfileSamples.length > 0 ? s.allProfileSamples : s.samples,
-            s.samples
-          )
-    )
-  );
+  const selectedSampleObjects = useMemo(() => {
+    if (selectedSampleIds.length <= 1) return EMPTY_SAMPLES;
+    const pool = useSampleStore.getState().allProfileSamples;
+    return resolveSamplesByIds(
+      selectedSampleIds,
+      pool.length > 0 ? pool : samples,
+      samples
+    );
+  }, [selectedSampleIds, samples]);
   const isPlaying = useSampleStore((s) => s.isPlaying);
   const similaritySession = useSampleStore((s) => s.similaritySession);
   const libraries = useSampleStore((s) => s.libraries);
@@ -235,6 +232,16 @@ export const MiniDockList: React.FC<MiniDockListProps> = ({
     [onOpenContextMenu]
   );
 
+  const handleBatchNativeDrag = useCallback(
+    (paths: string[], src?: SampleItem) => {
+      const primary = src || selectedSampleObjects[0];
+      if (primary) {
+        void onStartSampleDrag(paths, primary);
+      }
+    },
+    [onStartSampleDrag, selectedSampleObjects]
+  );
+
   return (
     <div className="relative flex-1 min-h-0 flex flex-col overflow-hidden">
       {samples.length === 0 ? (
@@ -356,12 +363,7 @@ export const MiniDockList: React.FC<MiniDockListProps> = ({
             childrenByParentId={childrenByParentId}
             batchPopover={batchPopover}
             setBatchPopover={setBatchPopover}
-            onStartNativeDrag={(paths, src) => {
-              const primary = src || selectedSampleObjects[0];
-              if (primary) {
-                void onStartSampleDrag(paths, primary);
-              }
-            }}
+            onStartNativeDrag={handleBatchNativeDrag}
           />
         </Suspense>
       )}

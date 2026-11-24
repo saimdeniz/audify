@@ -239,7 +239,10 @@ export const SlicesTableView: React.FC = () => {
     overscan: 14,
   });
 
+  const prevActiveSliceIdRef = useRef<number | null>(null);
   useEffect(() => {
+    if (activeSliceId === prevActiveSliceIdRef.current) return;
+    prevActiveSliceIdRef.current = activeSliceId;
     if (activeSliceId === null) return;
     const idx = visibleSlices.findIndex((s) => s.id === activeSliceId);
     if (idx >= 0) {

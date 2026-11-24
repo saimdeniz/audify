@@ -56,6 +56,17 @@ export type CatalogWorkerRequest =
       updates: CatalogPoolPatchEntry[];
     }
   | {
+      type: "patch_mtimes";
+      poolEpoch: number;
+      ids: Int32Array;
+      mtimes: Float64Array;
+    }
+  | {
+      type: "remove_ids";
+      poolEpoch: number;
+      ids: number[];
+    }
+  | {
       type: "clear_search_cache";
     }
   | {

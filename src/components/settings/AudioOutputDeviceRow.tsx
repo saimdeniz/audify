@@ -292,7 +292,7 @@ export const AudioOutputDeviceRow: React.FC = React.memo(() => {
               maxHeight: coords.maxHeight,
               zIndex: Z_INDEX.popoverFloating,
             }}
-            className="bg-surface-2 backdrop-blur-md border border-line-strong rounded-sm shadow-lg flex flex-col overflow-hidden select-none focus:outline-none"
+            className="bg-surface-2 audify-overlay-surface border border-line-strong rounded-sm shadow-lg flex flex-col overflow-hidden select-none focus:outline-none"
           >
             <div
               role="listbox"

@@ -117,6 +117,7 @@ fn validate_basic_import_path(
     {
         return Err("Reserved DOS device names are not allowed".to_string());
     }
+    super::reject_symlink_ancestors(p)?;
     if let Ok(sym) = fs::symlink_metadata(p) {
         if sym.file_type().is_symlink() {
             return Err("Symbolic links and junctions are not allowed".to_string());
@@ -186,6 +187,7 @@ fn validate_export_target_common(
         return Err("Network and UNC paths are not allowed".to_string());
     }
 
+    super::reject_symlink_ancestors(parent)?;
     if let Ok(sym_parent) = fs::symlink_metadata(parent) {
         if sym_parent.file_type().is_symlink() {
             return Err("Symbolic links and junctions are not allowed as export directories".to_string());

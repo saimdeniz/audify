@@ -180,6 +180,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
     scheduleDragTabSwitch,
   } = useLeftSidebarDragDrop({
     isMiniOverlay: isHoverOverlayMode,
+    isOverlayOpen,
     isDraggingInApp,
     sidebarRef,
     railRef,
@@ -191,6 +192,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   const isExternalFileDragActive = useExternalFolderDrop({
     enableAdvancedFileOps,
     isMiniOverlay: isHoverOverlayMode,
+    isOverlayOpen,
     dragHoverTargetRef,
     isExternalFileDragRef,
     updateDragHoverTarget,
@@ -330,9 +332,9 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
       ref={sidebarRef}
       className={
         isMiniOverlay
-          ? "w-[40px] bg-surface-rail border-r border-line flex flex-row shrink-0 select-none relative z-30 overflow-visible"
+          ? "w-[40px] bg-surface-rail border-r border-line flex flex-row shrink-0 select-none relative z-50 overflow-visible"
           : isMainHoverCompact
-          ? "w-[40px] bg-surface-rail border-r border-line flex flex-row shrink-0 select-none relative z-30 overflow-visible"
+          ? "w-[40px] bg-surface-rail border-r border-line flex flex-row shrink-0 select-none relative z-50 overflow-visible"
           : sidebarCollapsed
           ? "w-[40px] bg-surface-rail border-r border-line flex flex-row shrink-0 select-none overflow-hidden relative"
           : "w-[296px] bg-surface-1 border-r border-line flex flex-row shrink-0 select-none overflow-hidden relative"

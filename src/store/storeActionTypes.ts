@@ -9,6 +9,7 @@ import {
   CollectionRuleTemplate,
   DuplicateScanMode,
   ExportAudioPreset,
+  ExportLoudnessMode,
   FolderDropResult,
   Genre,
   KeyboardShortcuts,
@@ -300,6 +301,7 @@ export interface SampleSettingsAndMutationActions {
   setAudioOutputDeviceId: (deviceId: string) => void;
   setSliceMicroFade: (enabled: boolean) => void;
   setExportAudioPreset: (preset: ExportAudioPreset) => void;
+  setExportLoudnessMode: (mode: ExportLoudnessMode) => void;
   setSkipLeadingSilence: (enabled: boolean) => void;
   setNormalizePreview: (enabled: boolean) => void;
   setAutoAnalyzeBpmKey: (enabled: boolean) => void;
@@ -405,7 +407,10 @@ export interface SampleSettingsAndMutationActions {
   setStatusMessage: (msg: string | null) => void;
   showStatusNotice: (
     message: string,
-    kind?: "info" | "success" | "error"
+    kind?: "info" | "success" | "error",
+    action?: import("./storePayloads").StatusNoticeAction
   ) => void;
   clearStatusNotice: () => void;
+  pauseStatusNotice: () => void;
+  resumeStatusNotice: () => void;
 }

@@ -74,7 +74,7 @@ interface FilterDrawerProps {
   compact?: boolean;
 }
 
-export const FilterDrawer: React.FC<FilterDrawerProps> = ({
+export const FilterDrawer: React.FC<FilterDrawerProps> = React.memo(({
   compact = false,
 }) => {
   const binFilterActive = useSampleStore((s) => s.binFilterActive);
@@ -314,4 +314,4 @@ export const FilterDrawer: React.FC<FilterDrawerProps> = ({
       )}
     </div>
   );
-};
+});

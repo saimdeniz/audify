@@ -13,6 +13,7 @@ import {
   AsciiMagicLook,
   AsciiPresetId,
   ExportAudioPreset,
+  ExportLoudnessMode,
   MiniDockEdgeSide,
   ProfileSettings,
   ThemeMode,
@@ -103,6 +104,7 @@ export interface BootSettingsSnapshot extends AiBootSettingsSnapshot {
   volume: number;
   sliceMicroFade: boolean;
   exportAudioPreset: ExportAudioPreset;
+  exportLoudnessMode: ExportLoudnessMode;
   skipLeadingSilence: boolean;
   miniDockEdgePeek: boolean;
   miniDockEdgeSide: MiniDockEdgeSide;
@@ -236,6 +238,13 @@ export function loadBootSettings(): BootSettingsSnapshot {
     rawExportPreset === "wav_24" || rawExportPreset === "nle_48k_24"
       ? rawExportPreset
       : "original";
+  const rawLoudness = safeGetItem(AUDIFY_STORAGE_KEYS.exportLoudnessMode);
+  const exportLoudnessMode: ExportLoudnessMode =
+    rawLoudness === "peak_m1" ||
+    rawLoudness === "lufs_m14" ||
+    rawLoudness === "lufs_m24"
+      ? rawLoudness
+      : "off";
   const skipLeadingSilence =
     safeGetItem(AUDIFY_STORAGE_KEYS.skipLeadingSilence) === "true";
   const miniDockEdgePeek =
@@ -284,6 +293,7 @@ export function loadBootSettings(): BootSettingsSnapshot {
     volume,
     sliceMicroFade,
     exportAudioPreset,
+    exportLoudnessMode,
     skipLeadingSilence,
     miniDockEdgePeek,
     miniDockEdgeSide,
@@ -340,6 +350,15 @@ function sanitizeParsedProfileSettings(
     out.exportAudioPreset !== "nle_48k_24"
   ) {
     delete out.exportAudioPreset;
+  }
+  if (
+    out.exportLoudnessMode !== undefined &&
+    out.exportLoudnessMode !== "off" &&
+    out.exportLoudnessMode !== "peak_m1" &&
+    out.exportLoudnessMode !== "lufs_m14" &&
+    out.exportLoudnessMode !== "lufs_m24"
+  ) {
+    delete out.exportLoudnessMode;
   }
   if (
     out.miniDockEdgeSide !== undefined &&

@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Z_INDEX } from "../constants/zIndex";
 import { useSampleStore } from "../store/useSampleStore";
+import { subscribeBodyNodeRemovals } from "../utils/domBodyObserver";
 import { isOsDragCurrentlyInFlight } from "../utils/drag";
 
 interface AnchorRect {
@@ -19,7 +20,10 @@ interface TooltipState {
 }
 
 let measureCanvas: HTMLCanvasElement | null = null;
+const tooltipWidthCache = new Map<string, number>();
 function getAccurateTextWidth(text: string): number {
+  const cached = tooltipWidthCache.get(text);
+  if (cached !== undefined) return cached;
   if (typeof document === "undefined") return text.length * 7;
   if (!measureCanvas) {
     measureCanvas = document.createElement("canvas");
@@ -34,7 +38,12 @@ function getAccurateTextWidth(text: string): number {
   } catch {
     // Ignore unsupported letterSpacing
   }
-  return Math.ceil(ctx.measureText(text).width);
+  const width = Math.ceil(ctx.measureText(text).width);
+  if (tooltipWidthCache.size >= 256) {
+    tooltipWidthCache.clear();
+  }
+  tooltipWidthCache.set(text, width);
+  return width;
 }
 
 /**
@@ -74,6 +83,8 @@ export const GlobalTooltip: React.FC = () => {
   const lastActiveRef = useRef<number>(0);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const lastCoordsRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const visibleRef = useRef<boolean>(false);
+  const cachedWidthRef = useRef<number>(0);
 
   useEffect(() => {
     const isDragActive = () =>
@@ -86,13 +97,11 @@ export const GlobalTooltip: React.FC = () => {
         timerRef.current = null;
       }
       currentTargetRef.current = null;
-      setTooltip((prev) => {
-        if (prev.visible) {
-          lastActiveRef.current = Date.now();
-          return { ...prev, visible: false };
-        }
-        return prev;
-      });
+      if (visibleRef.current) {
+        visibleRef.current = false;
+        lastActiveRef.current = Date.now();
+        setTooltip((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+      }
     };
 
     const handlePointerOver = (e: PointerEvent) => {
@@ -112,12 +121,14 @@ export const GlobalTooltip: React.FC = () => {
         return;
       }
 
-      // Transfer native title -> data-tooltip (and keep synthesized aria-label fresh)
-      if (target.hasAttribute("title")) {
-        const rawTitle = target.getAttribute("title") || "";
+      // Transfer native title -> data-tooltip using `title=""` suppression so React's
+      // later `removeAttribute("title")` still fires a MutationRecord and clears stale tooltips.
+      const rawTitle = target.getAttribute("title");
+      if (rawTitle) {
         const clean = sanitizeTooltipText(rawTitle);
         if (clean) {
           target.setAttribute("data-tooltip", clean);
+          target.setAttribute("data-tooltip-from-title", "true");
           if (
             !target.hasAttribute("aria-label") ||
             target.hasAttribute("data-aria-from-title")
@@ -127,8 +138,15 @@ export const GlobalTooltip: React.FC = () => {
           }
         } else {
           target.removeAttribute("data-tooltip");
+          target.removeAttribute("data-tooltip-from-title");
         }
-        target.removeAttribute("title");
+        target.setAttribute("title", "");
+      } else if (
+        !target.hasAttribute("title") &&
+        target.hasAttribute("data-tooltip-from-title")
+      ) {
+        target.removeAttribute("data-tooltip");
+        target.removeAttribute("data-tooltip-from-title");
       }
 
       const text = target.getAttribute("data-tooltip") || "";
@@ -183,16 +201,29 @@ export const GlobalTooltip: React.FC = () => {
         if (!target.isConnected || currentTargetRef.current !== target) {
           return;
         }
-        // Re-read in case React updated title/data-tooltip while waiting
-        if (target.hasAttribute("title")) {
-          const fresh = sanitizeTooltipText(target.getAttribute("title") || "");
-          if (fresh) target.setAttribute("data-tooltip", fresh);
-          target.removeAttribute("title");
+        // Re-read in case React updated or cleared title/data-tooltip while waiting
+        const delayedTitle = target.getAttribute("title");
+        if (delayedTitle) {
+          const fresh = sanitizeTooltipText(delayedTitle);
+          if (fresh) {
+            target.setAttribute("data-tooltip", fresh);
+            target.setAttribute("data-tooltip-from-title", "true");
+          } else {
+            target.removeAttribute("data-tooltip");
+            target.removeAttribute("data-tooltip-from-title");
+          }
+          target.setAttribute("title", "");
+        } else if (
+          !target.hasAttribute("title") &&
+          target.hasAttribute("data-tooltip-from-title")
+        ) {
+          target.removeAttribute("data-tooltip");
+          target.removeAttribute("data-tooltip-from-title");
         }
-        const liveText = target.getAttribute("data-tooltip") || text;
+        const liveText = target.getAttribute("data-tooltip") || "";
         if (!liveText) return;
 
-        const tw = getAccurateTextWidth(liveText) + 18;
+        const tw = Math.min(500, getAccurateTextWidth(liveText) + 18);
         const th = 22;
         let posX = 0;
         let posY = 0;
@@ -221,6 +252,8 @@ export const GlobalTooltip: React.FC = () => {
           }
         }
 
+        visibleRef.current = true;
+        cachedWidthRef.current = tw;
         setTooltip({
           text: liveText,
           x: posX,
@@ -244,29 +277,25 @@ export const GlobalTooltip: React.FC = () => {
       }
       lastCoordsRef.current = { x: e.clientX, y: e.clientY };
 
+      if (!visibleRef.current || !tooltipRef.current) return;
+
       const isCentered =
         curTarget.getAttribute("data-tooltip-align") === "center" ||
         curTarget.closest("[data-tooltip-align='center']");
       if (isCentered) return;
 
-      setTooltip((prev) => {
-        if (!prev.visible) return prev;
-        const tw = getAccurateTextWidth(prev.text) + 18;
-        const th = 22;
-        let posX = e.clientX + 10;
-        let posY = e.clientY + 14;
-        if (posX + tw > window.innerWidth - 12) {
-          posX = Math.max(8, window.innerWidth - tw - 12);
-        }
-        if (posY + th > window.innerHeight - 8) {
-          posY = Math.max(8, e.clientY - th - 10);
-        }
-        return {
-          ...prev,
-          x: posX,
-          y: posY,
-        };
-      });
+      const tw = cachedWidthRef.current;
+      const th = 22;
+      let posX = e.clientX + 10;
+      let posY = e.clientY + 14;
+      if (posX + tw > window.innerWidth - 12) {
+        posX = Math.max(8, window.innerWidth - tw - 12);
+      }
+      if (posY + th > window.innerHeight - 8) {
+        posY = Math.max(8, e.clientY - th - 10);
+      }
+      // Update GPU transform directly on the DOM node to avoid React re-renders on every pointer pixel
+      tooltipRef.current.style.transform = `translate3d(${posX}px, ${posY}px, 0)`;
     };
 
     const handlePointerOut = (e: PointerEvent) => {
@@ -279,13 +308,12 @@ export const GlobalTooltip: React.FC = () => {
       }
     };
 
-    // Hide orphaned tooltip immediately if its anchor element unmounts from DOM
-    const domObserver = new MutationObserver(() => {
+    // Hide orphaned tooltip immediately if its anchor element unmounts (via shared body observer)
+    const unsubBodyRemovals = subscribeBodyNodeRemovals(() => {
       if (currentTargetRef.current && !currentTargetRef.current.isConnected) {
         hideImmediately();
       }
     });
-    domObserver.observe(document.body, { childList: true, subtree: true });
 
     window.addEventListener("pointerover", handlePointerOver, { passive: true });
     window.addEventListener("pointermove", handlePointerMove, { passive: true });
@@ -315,7 +343,7 @@ export const GlobalTooltip: React.FC = () => {
     });
 
     return () => {
-      domObserver.disconnect();
+      unsubBodyRemovals();
       unsubStore();
       if (timerRef.current !== null) clearTimeout(timerRef.current);
       window.removeEventListener("pointerover", handlePointerOver);
@@ -334,7 +362,7 @@ export const GlobalTooltip: React.FC = () => {
   useLayoutEffect(() => {
     if (!tooltip.visible || !tooltipRef.current) return;
     const actualTw = tooltipRef.current.offsetWidth;
-    const estimatedTw = getAccurateTextWidth(tooltip.text) + 18;
+    const estimatedTw = Math.min(500, getAccurateTextWidth(tooltip.text) + 18);
     const diff = actualTw - estimatedTw;
     const isCentered =
       currentTargetRef.current?.getAttribute("data-tooltip-align") ===
@@ -367,11 +395,12 @@ export const GlobalTooltip: React.FC = () => {
       ref={tooltipRef}
       data-mica-overlay="true"
       style={{
-        left: `${tooltip.x}px`,
-        top: `${tooltip.y}px`,
+        left: 0,
+        top: 0,
+        transform: `translate3d(${tooltip.x}px, ${tooltip.y}px, 0)`,
         zIndex: Z_INDEX.tooltip,
       }}
-      className="fixed pointer-events-none select-none max-w-[500px] px-2 py-0.5 rounded-xs bg-surface-2 border border-line-strong shadow-lg text-fg text-[11px] font-sans font-medium tracking-wide whitespace-nowrap overflow-hidden text-ellipsis backdrop-blur-md"
+      className="fixed pointer-events-none select-none max-w-[500px] px-2 py-0.5 rounded-xs bg-surface-2 border border-line-strong shadow-lg text-fg text-[11px] font-sans font-medium tracking-wide whitespace-nowrap overflow-hidden text-ellipsis audify-overlay-surface"
     >
       {tooltip.text}
     </div>

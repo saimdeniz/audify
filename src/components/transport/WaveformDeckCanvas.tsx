@@ -1,15 +1,16 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { subscribePlayhead } from "../../store/playheadClock";
 import { useSampleStore } from "../../store/useSampleStore";
-import {
-  beginDragOnMove,
-  preExportAudioSlice,
-  startNativeSliceDrag,
-} from "../../utils/drag";
+import { useDevicePixelRatio } from "../../utils/devicePixelRatio";
+import { preExportAudioSlice } from "../../utils/drag";
 import { onError } from "../../utils/errors";
 import { useHiResPeaks } from "../../utils/hiResPeaks";
 import { usePeaksJson } from "../../utils/peaksStore";
 import { useWaveformDeckInteractions } from "./useWaveformDeckInteractions";
+import {
+  startDeckHeaderSampleDrag,
+  startDeckSliceDrag,
+} from "./waveformDeckDrag";
 import { WaveformDeckHeader } from "./WaveformDeckHeader";
 import {
   buildWaveLayerStyleKey,
@@ -40,6 +41,7 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
   const pitchSemitones = useSampleStore((s) => s.pitchSemitones);
   const sliceMicroFade = useSampleStore((s) => s.sliceMicroFade);
   const exportAudioPreset = useSampleStore((s) => s.exportAudioPreset);
+  const exportLoudnessMode = useSampleStore((s) => s.exportLoudnessMode);
   const saveSliceShortcut = useSampleStore((s) => s.shortcuts.saveSlice);
 
   const saveActiveSlice = useSampleStore((s) => s.saveActiveSlice);
@@ -51,6 +53,7 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
     selectedSample?.peaks_json
   );
   const hiResPeaks = useHiResPeaks(selectedSample?.file_path);
+  const liveDpr = useDevicePixelRatio();
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -141,42 +144,16 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
     (e: React.MouseEvent) => {
       if (e.button !== 0 || !selectedSample || !sliceRange) return;
       e.preventDefault();
-      const sample = selectedSample;
-      const range = sliceRange;
-      beginDragOnMove(e.clientX, e.clientY, () => {
-        const st = useSampleStore.getState();
-        const dur = Math.max(0.05, range.endSec - range.startSec).toFixed(2);
-        const label = `Slice (${dur}s) · ${sample.file_name}`;
-        void startNativeSliceDrag(
-          sample.file_path,
-          range.startSec,
-          range.endSec,
-          label,
-          {
-            pitchSemitones: st.pitchSemitones,
-            applyMicroFade: st.sliceMicroFade,
-            exportPreset: st.exportAudioPreset,
-          }
-        ).then((res) => {
-          if (res?.droppedExternally && st.autoBinOnNleDrag && sample.id > 0) {
-            useSampleStore.getState().addSamplesToBin([sample.id]);
-          }
-          if (res?.droppedExternally) {
-            void useSampleStore.getState().recordSliceExport({
-              slicePath: res.exportedPath,
-              sourceSampleId: sample.id > 0 ? sample.id : null,
-              sourceFilePath: sample.file_path,
-              startSec: range.startSec,
-              endSec: range.endSec,
-              pitchSemitones: st.pitchSemitones,
-              applyMicroFade: st.sliceMicroFade,
-            });
-            useSampleStore
-              .getState()
-              .setStatusMessage(`Exported slice (${dur}s) to timeline`);
-          }
-        });
-      });
+      startDeckSliceDrag(selectedSample, sliceRange, e.clientX, e.clientY);
+    },
+    [selectedSample, sliceRange]
+  );
+
+  const handleHeaderSampleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0 || !selectedSample || selectedSample.is_trashed) return;
+      e.preventDefault();
+      startDeckHeaderSampleDrag(selectedSample, sliceRange, e.clientX, e.clientY);
     },
     [selectedSample, sliceRange]
   );
@@ -237,6 +214,7 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
         pitchSemitones,
         applyMicroFade: sliceMicroFade,
         exportPreset: exportAudioPreset,
+        loudnessMode: exportLoudnessMode,
         cacheOnly: true,
       }).catch(onError("slice pre-export"));
     }, 60);
@@ -250,6 +228,7 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
     pitchSemitones,
     sliceMicroFade,
     exportAudioPreset,
+    exportLoudnessMode,
   ]);
 
   const drawWaveform = useCallback(() => {
@@ -264,11 +243,30 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
       };
     }
 
+    // Release offscreen & main canvas GPU backing stores whenever hidden or collapsed
+    if (
+      (typeof document !== "undefined" && document.visibilityState === "hidden") ||
+      canvasSizeRef.current.width <= 0 ||
+      canvasSizeRef.current.height <= 0
+    ) {
+      cancelCrossfade();
+      if (waveLayersRef.current) {
+        disposeWaveLayerCache(waveLayersRef.current);
+        waveLayersRef.current = null;
+      }
+      if (canvas.width !== 0 || canvas.height !== 0) {
+        canvas.width = 0;
+        canvas.height = 0;
+      }
+      return;
+    }
+
     const currentSampleId = selectedSample?.id ?? null;
-    const currentViewport = viewport;
+    const currentViewport = viewportRef.current;
     const currentStyleSizeKey = buildWaveLayerStyleKey({
       logicalWidth: canvasSizeRef.current.width,
       logicalHeight: canvasSizeRef.current.height,
+      dpr: liveDpr,
       waveformSensitivity,
       waveformStyle,
       themeMode,
@@ -347,6 +345,7 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
       waveformStyle,
       logicalWidth: canvasSizeRef.current.width,
       logicalHeight: canvasSizeRef.current.height,
+      dpr: liveDpr,
       crossfade: crossfadeParam,
     });
     if (
@@ -363,7 +362,6 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
     hiResPeaks,
     effectiveDuration,
     sliceRange,
-    viewport,
     hoverZone,
     themeMode,
     accentColor,
@@ -371,13 +369,14 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
     waveformSensitivity,
     waveformStyle,
     cancelCrossfade,
+    liveDpr,
   ]);
 
   drawWaveformRef.current = drawWaveform;
 
   useEffect(() => {
     drawWaveform();
-  }, [drawWaveform]);
+  }, [drawWaveform, viewport]);
 
   useEffect(() => {
     return subscribePlayhead(() => {
@@ -409,12 +408,31 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
       drawWaveformRef.current();
     });
     ro.observe(container);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        cancelCrossfade();
+        if (waveLayersRef.current) {
+          disposeWaveLayerCache(waveLayersRef.current);
+          waveLayersRef.current = null;
+        }
+        const c = canvasRef.current;
+        if (c && (c.width !== 0 || c.height !== 0)) {
+          c.width = 0;
+          c.height = 0;
+        }
+      } else {
+        syncRect();
+        drawWaveformRef.current();
+      }
+    };
     window.addEventListener("resize", syncRect);
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       ro.disconnect();
       window.removeEventListener("resize", syncRect);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, []);
+  }, [cancelCrossfade]);
 
   const canvasCursorClass =
     dragMode === "panning"
@@ -430,6 +448,7 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
   return (
     <div
       ref={deckPanelRef}
+      data-waveform-similarity-drop="true"
       className="flex-1 flex flex-col bg-surface-0 relative overflow-hidden"
     >
       <WaveformDeckHeader
@@ -445,6 +464,7 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
         onClearSlice={handleClearSlice}
         onSaveSlice={handleSaveSlice}
         onSliceBadgeMouseDown={handleSliceBadgeMouseDown}
+        onHeaderSampleMouseDown={handleHeaderSampleMouseDown}
       />
 
       <div

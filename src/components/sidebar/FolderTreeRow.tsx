@@ -15,19 +15,15 @@ interface FolderTreeRowProps {
   isAnyDragActive: boolean;
   isExternalFileDragActive: boolean;
   inAppDragCount: number;
-  dragHoverTarget: string | null;
-  dropFlashTarget: string | null;
+  isDropHovered: boolean;
+  isDropFlashed: boolean;
   isScanning: boolean;
   createInputRef: React.RefObject<HTMLInputElement>;
   newSubfolderName: string;
   setNewSubfolderName: (val: string) => void;
   setCreatingSubfolderTarget: (v: null) => void;
   submitCreateSubfolder: () => Promise<void>;
-  renamingFolderTarget: {
-    libraryId: number;
-    folderPath: string;
-    currentName: string;
-  } | null;
+  isRenamingThisFolder: boolean;
   renameInputRef: React.RefObject<HTMLInputElement>;
   renameFolderDraft: string;
   setRenameFolderDraft: (val: string) => void;
@@ -75,15 +71,15 @@ export const FolderTreeRow: React.FC<FolderTreeRowProps> = React.memo(({
   isAnyDragActive,
   isExternalFileDragActive,
   inAppDragCount,
-  dragHoverTarget,
-  dropFlashTarget,
+  isDropHovered,
+  isDropFlashed,
   isScanning,
   createInputRef,
   newSubfolderName,
   setNewSubfolderName,
   setCreatingSubfolderTarget,
   submitCreateSubfolder,
-  renamingFolderTarget,
+  isRenamingThisFolder,
   renameInputRef,
   renameFolderDraft,
   setRenameFolderDraft,
@@ -171,9 +167,6 @@ export const FolderTreeRow: React.FC<FolderTreeRowProps> = React.memo(({
     } = row;
     const dropKey = `folder:${lib.id}:${lib.path}`;
     const canDropHere = !readOnlyScope && enableAdvancedFileOps && !lib.is_read_only;
-    const isDropHovered =
-      canDropHere && isAnyDragActive && dragHoverTarget === dropKey;
-    const isDropFlashed = !readOnlyScope && dropFlashTarget === dropKey;
 
     return (
       <SidebarTreeRow
@@ -251,7 +244,7 @@ export const FolderTreeRow: React.FC<FolderTreeRowProps> = React.memo(({
           }
         }}
         onMouseLeave={() => {
-          if (dragHoverTarget === dropKey) {
+          if (isDropHovered) {
             setDragHoverTarget?.(null);
           }
         }}
@@ -304,15 +297,6 @@ export const FolderTreeRow: React.FC<FolderTreeRowProps> = React.memo(({
   const nodeLower = normalizeTreeKey(node.fullPath);
   const dropKey = `folder:${lib.id}:${node.fullPath}`;
   const canDropHere = !readOnlyScope && enableAdvancedFileOps && !lib.is_read_only;
-  const isDropHovered =
-    canDropHere && isAnyDragActive && dragHoverTarget === dropKey;
-  const isDropFlashed = !readOnlyScope && dropFlashTarget === dropKey;
-  const isRenamingThisFolder = Boolean(
-    !readOnlyScope &&
-      renamingFolderTarget &&
-      renamingFolderTarget.libraryId === lib.id &&
-      normalizeTreeKey(renamingFolderTarget.folderPath) === nodeLower
-  );
 
   return (
     <SidebarTreeRow
@@ -424,7 +408,7 @@ export const FolderTreeRow: React.FC<FolderTreeRowProps> = React.memo(({
         }
       }}
       onMouseLeave={() => {
-        if (dragHoverTarget === dropKey) {
+        if (isDropHovered) {
           setDragHoverTarget?.(null);
         }
       }}

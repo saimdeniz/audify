@@ -1,6 +1,6 @@
 use crate::commands::{resolve_or_create_auto_tag, AutoTagPreviewResult};
 use crate::db::{
-    get_active_profile_id, open_read_conn, AppState, AutoTagRule, SAMPLE_TAGS_FTS_TRIGGERS_SQL,
+    get_active_profile_id, AppState, AutoTagRule, SAMPLE_TAGS_FTS_TRIGGERS_SQL,
 };
 use crate::scanner::{detect_is_loop, match_auto_tags, parse_rules_from_settings};
 use rusqlite::{params, Connection};
@@ -236,7 +236,7 @@ pub(crate) fn apply_auto_tag_rules_with_conn(conn: &mut Connection) -> Result<us
 pub async fn apply_auto_tag_rules_to_library(state: State<'_, AppState>) -> Result<usize, String> {
     let state_cloned = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let (active_id, settings_json, samples) = match open_read_conn(&state_cloned.user_dir) {
+        let (active_id, settings_json, samples) = match state_cloned.acquire_read_conn() {
             Ok(read_conn) => read_auto_tag_inputs(&read_conn)?,
             Err(_) => {
                 let conn = state_cloned.lock_db();
@@ -315,15 +315,14 @@ fn preview_auto_tag_rule_with_conn(
 }
 
 #[tauri::command]
-pub fn preview_auto_tag_rule(
+pub async fn preview_auto_tag_rule(
     state: State<'_, AppState>,
     rule: AutoTagRule,
 ) -> Result<AutoTagPreviewResult, String> {
-    if let Ok(read_conn) = open_read_conn(&state.user_dir) {
-        return preview_auto_tag_rule_with_conn(&read_conn, rule);
-    }
-    let conn = state.lock_db();
-    preview_auto_tag_rule_with_conn(&conn, rule)
+    crate::db::run_read_query(&state, move |conn| {
+        preview_auto_tag_rule_with_conn(conn, rule)
+    })
+    .await
 }
 
 #[cfg(test)]

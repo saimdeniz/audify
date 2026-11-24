@@ -4,6 +4,56 @@ use super::path_guards::{
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Runs a Windows Shell API closure on a dedicated short-lived COM STA thread
+/// (`COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE`) with guaranteed `CoUninitialize` cleanup,
+/// avoiding COM apartment pollution on shared Tokio `spawn_blocking` worker threads.
+#[cfg(target_os = "windows")]
+fn run_on_sta_thread<F, T>(thread_name: &str, f: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    use std::ffi::c_void;
+
+    #[link(name = "ole32")]
+    extern "system" {
+        fn CoInitializeEx(reserved: *mut c_void, co_init: u32) -> i32;
+        fn CoUninitialize();
+    }
+
+    const COINIT_APARTMENTTHREADED: u32 = 0x2;
+    const COINIT_DISABLE_OLE1DDE: u32 = 0x4;
+
+    struct ComStaGuard(bool);
+    impl Drop for ComStaGuard {
+        fn drop(&mut self) {
+            if self.0 {
+                unsafe {
+                    CoUninitialize();
+                }
+            }
+        }
+    }
+
+    let handle = std::thread::Builder::new()
+        .name(thread_name.to_string())
+        .spawn(move || {
+            let hr = unsafe {
+                CoInitializeEx(
+                    std::ptr::null_mut(),
+                    COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE,
+                )
+            };
+            let _guard = ComStaGuard(hr == 0 || hr == 1);
+            f()
+        })
+        .map_err(|e| format!("Failed to spawn shell STA worker: {}", e))?;
+
+    handle
+        .join()
+        .map_err(|_| "Shell STA worker panicked".to_string())?
+}
+
 /// Opens Windows Explorer with the exact file selected using `SHParseDisplayName` +
 /// `SHOpenFolderAndSelectItems` (never invoking `explorer.exe` CLI or `.raw_arg`).
 #[cfg(target_os = "windows")]
@@ -29,8 +79,6 @@ pub fn reveal_file_in_explorer(file_path: &Path) -> Result<(), String> {
     }
     #[link(name = "ole32")]
     extern "system" {
-        fn CoInitializeEx(reserved: *mut c_void, co_init: u32) -> i32;
-        fn CoUninitialize();
         fn CoTaskMemFree(ptr: *mut c_void);
     }
 
@@ -56,10 +104,7 @@ pub fn reveal_file_in_explorer(file_path: &Path) -> Result<(), String> {
         .chain(std::iter::once(0))
         .collect();
 
-    unsafe {
-        let hr_init = CoInitializeEx(std::ptr::null_mut(), 0x2);
-        let initialized = hr_init == 0 || hr_init == 1;
-
+    run_on_sta_thread("audify-shell-reveal", move || unsafe {
         let mut pidl: *mut c_void = std::ptr::null_mut();
         let hr_parse = SHParseDisplayName(
             wide.as_ptr(),
@@ -84,11 +129,8 @@ pub fn reveal_file_in_explorer(file_path: &Path) -> Result<(), String> {
         if !pidl.is_null() {
             CoTaskMemFree(pidl);
         }
-        if initialized {
-            CoUninitialize();
-        }
         result
-    }
+    })
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -165,21 +207,26 @@ pub fn open_directory_in_shell(dir_path: &Path) -> Result<(), String> {
         .chain(std::iter::once(0))
         .collect();
 
-    let code = unsafe {
-        ShellExecuteW(
-            std::ptr::null_mut(),
-            verb_wide.as_ptr(),
-            dir_wide.as_ptr(),
-            std::ptr::null(),
-            std::ptr::null(),
-            SW_SHOWNORMAL,
-        )
-    };
-    if code <= 32 {
-        Err(format!("Failed to open folder in Explorer (ShellExecuteW code {})", code))
-    } else {
-        Ok(())
-    }
+    run_on_sta_thread("audify-shell-open-dir", move || {
+        let code = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                verb_wide.as_ptr(),
+                dir_wide.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if code <= 32 {
+            Err(format!(
+                "Failed to open folder in Explorer (ShellExecuteW code {})",
+                code
+            ))
+        } else {
+            Ok(())
+        }
+    })
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -211,24 +258,21 @@ pub fn open_directory_in_shell(dir_path: &Path) -> Result<(), String> {
 }
 
 /// Moves one or more quarantined files to the operating system Recycle Bin / Trash
-/// using Win32 `SHFileOperationW` (`FO_DELETE | FOF_ALLOWUNDO`) on Windows so Audify
-/// never permanently destroys user audio files with `fs::remove_file` in production.
+/// using modern COM `IFileOperation` (`FOF_ALLOWUNDO | FOFX_RECYCLEONDELETE`) on Windows,
+/// supporting paths beyond legacy `SHFileOperationW`'s 248-char limit while ensuring
+/// Audify never permanently destroys user audio files with `fs::remove_file` in production.
 #[cfg(target_os = "windows")]
 pub fn move_files_to_os_recycle_bin(paths: &[PathBuf]) -> Result<(), String> {
-    use std::ffi::c_void;
     use std::os::windows::ffi::OsStrExt;
     use windows::core::PCWSTR;
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::Shell::{
-        SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT,
-        FO_DELETE, SHFILEOPSTRUCTW,
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
+        COINIT_DISABLE_OLE1DDE,
     };
-
-    #[link(name = "ole32")]
-    extern "system" {
-        fn CoInitializeEx(reserved: *mut c_void, co_init: u32) -> i32;
-        fn CoUninitialize();
-    }
+    use windows::Win32::UI::Shell::{
+        FileOperation, IFileOperation, IShellItem, SHCreateItemFromParsingName,
+        FILEOPERATION_FLAGS, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT,
+    };
 
     struct ComInitGuard(bool);
     impl Drop for ComInitGuard {
@@ -239,7 +283,7 @@ pub fn move_files_to_os_recycle_bin(paths: &[PathBuf]) -> Result<(), String> {
         }
     }
 
-    let mut double_null_wide: Vec<u16> = Vec::new();
+    let mut validated: Vec<(String, String)> = Vec::with_capacity(paths.len());
     for p in paths {
         let raw = p.to_string_lossy();
         if is_unc_or_network_path(&raw) {
@@ -248,6 +292,7 @@ pub fn move_files_to_os_recycle_bin(paths: &[PathBuf]) -> Result<(), String> {
         if has_ntfs_ads_colon(&raw) {
             return Err("Alternate data streams are not allowed".to_string());
         }
+        super::path_guards::reject_symlink_ancestors(p)?;
         let sym_meta = fs::symlink_metadata(p)
             .map_err(|_| format!("Failed to inspect '{}'", display_leaf(p)))?;
         if sym_meta.file_type().is_symlink() {
@@ -259,49 +304,93 @@ pub fn move_files_to_os_recycle_bin(paths: &[PathBuf]) -> Result<(), String> {
             return Err("Symbolic links pointing to network/UNC paths are not allowed".to_string());
         }
         let clean = strip_verbatim_prefix(&canon);
-        let win_str = clean.to_string_lossy().replace('/', "\\");
-        double_null_wide.extend(std::ffi::OsStr::new(&win_str).encode_wide());
-        double_null_wide.push(0);
+        let win_clean = clean.to_string_lossy().replace('/', "\\");
+        let win_verbatim = canon.to_string_lossy().replace('/', "\\");
+        validated.push((win_clean, win_verbatim));
     }
 
-    if double_null_wide.is_empty() {
+    if validated.is_empty() {
         return Ok(());
     }
-    // Double-NULL terminator required by SHFileOperationW
-    double_null_wide.push(0);
 
-    const COINIT_APARTMENTTHREADED: u32 = 0x2;
-    const COINIT_DISABLE_OLE1DDE: u32 = 0x4;
-    let hr_init = unsafe {
-        CoInitializeEx(
-            std::ptr::null_mut(),
-            COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE,
-        )
-    };
-    let _com_guard = ComInitGuard(hr_init == 0 || hr_init == 1);
+    // Run Shell IFileOperation on a dedicated fresh OS thread so COM STA initialization
+    // never collides with Tokio worker threads that may already be initialized as MTA.
+    let handle = std::thread::Builder::new()
+        .name("audify-recycle-sta".to_string())
+        .spawn(move || -> Result<(), String> {
+            let hr_init =
+                unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
+            let _com_guard = ComInitGuard(hr_init.is_ok());
 
-    let mut file_op = SHFILEOPSTRUCTW {
-        hwnd: HWND(0),
-        wFunc: FO_DELETE,
-        pFrom: PCWSTR(double_null_wide.as_ptr()),
-        pTo: PCWSTR::null(),
-        fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT).0 as u16,
-        fAnyOperationsAborted: windows::Win32::Foundation::BOOL(0),
-        hNameMappings: std::ptr::null_mut(),
-        lpszProgressTitle: PCWSTR::null(),
-    };
+            const FOFX_RECYCLEONDELETE: FILEOPERATION_FLAGS = FILEOPERATION_FLAGS(0x0008_0000);
+            unsafe {
+                let op: IFileOperation = CoCreateInstance(&FileOperation, None, CLSCTX_ALL)
+                    .map_err(|e| format!("Failed to initialize Windows Recycle Bin operation: {}", e))?;
+                let flags = FOF_ALLOWUNDO
+                    | FOF_NOCONFIRMATION
+                    | FOF_NOERRORUI
+                    | FOF_SILENT
+                    | FOFX_RECYCLEONDELETE;
+                op.SetOperationFlags(flags)
+                    .map_err(|e| format!("Failed to configure Windows Recycle Bin flags: {}", e))?;
 
-    let ret = unsafe { SHFileOperationW(&mut file_op) };
-    if ret != 0 {
-        return Err(format!(
-            "Windows Recycle Bin operation failed (SHFileOperationW code 0x{:X})",
-            ret
-        ));
-    }
-    if file_op.fAnyOperationsAborted.as_bool() {
-        return Err("Windows Recycle Bin operation was aborted".to_string());
-    }
-    Ok(())
+                for (win_clean, win_verbatim) in &validated {
+                    let wide_clean: Vec<u16> = std::ffi::OsStr::new(win_clean)
+                        .encode_wide()
+                        .chain(std::iter::once(0))
+                        .collect();
+                    let item: IShellItem =
+                        match SHCreateItemFromParsingName(PCWSTR(wide_clean.as_ptr()), None) {
+                            Ok(it) => it,
+                            Err(_) if win_verbatim != win_clean => {
+                                let wide_verb: Vec<u16> = std::ffi::OsStr::new(win_verbatim)
+                                    .encode_wide()
+                                    .chain(std::iter::once(0))
+                                    .collect();
+                                SHCreateItemFromParsingName(PCWSTR(wide_verb.as_ptr()), None)
+                                    .map_err(|e| {
+                                        format!(
+                                            "Windows Recycle Bin could not locate file (HRESULT 0x{:X})",
+                                            e.code().0 as u32
+                                        )
+                                    })?
+                            }
+                            Err(e) => {
+                                return Err(format!(
+                                    "Windows Recycle Bin could not locate file (HRESULT 0x{:X})",
+                                    e.code().0 as u32
+                                ));
+                            }
+                        };
+                    op.DeleteItem(&item, None).map_err(|e| {
+                        format!(
+                            "Failed to queue file for Windows Recycle Bin (HRESULT 0x{:X})",
+                            e.code().0 as u32
+                        )
+                    })?;
+                }
+
+                op.PerformOperations().map_err(|e| {
+                    format!(
+                        "Windows Recycle Bin operation failed (HRESULT 0x{:X})",
+                        e.code().0 as u32
+                    )
+                })?;
+                if op
+                    .GetAnyOperationsAborted()
+                    .map(|b| b.as_bool())
+                    .unwrap_or(false)
+                {
+                    return Err("Windows Recycle Bin operation was aborted".to_string());
+                }
+            }
+            Ok(())
+        })
+        .map_err(|e| format!("Failed to spawn Windows Recycle Bin thread: {}", e))?;
+
+    handle
+        .join()
+        .map_err(|_| "Windows Recycle Bin thread panicked".to_string())?
 }
 
 #[cfg(not(target_os = "windows"))]

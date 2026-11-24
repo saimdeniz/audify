@@ -292,7 +292,7 @@ export const ColorPickerPopover: React.FC<ColorPickerPopoverProps> = ({
             data-color-picker-portal="true"
             data-popover-portal="true"
             data-mica-overlay="true"
-            className="bg-surface-2 border border-line-strong rounded-lg p-2.5 shadow-2xl space-y-2 select-none text-fg backdrop-blur-md"
+            className="bg-surface-2 border border-line-strong rounded-lg p-2.5 shadow-2xl space-y-2 select-none text-fg audify-overlay-surface"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header: Segmented Mode Selector & Theme-Safe Live Hex Pill */}

@@ -1,7 +1,9 @@
 mod decode;
 mod export;
+mod loudness;
 mod metadata;
 mod pcm_ops;
+mod transcode;
 
 pub(crate) use decode::{copy_packet_samples, open_audio_decoder, OpenedAudioDecoder};
 pub use decode::{
@@ -9,18 +11,17 @@ pub use decode::{
     decode_audio_and_peaks, fallback_lofty_props,
 };
 #[cfg(test)]
-pub use export::export_wav_slice;
+pub use export::{export_wav_slice, export_wav_slice_with_options, export_wav_slice_with_preset};
 pub use export::{
-    build_default_slice_file_name_with_preset, export_wav_slice_to_path_with_preset,
-    export_wav_slice_with_preset, transcode_audio_to_pcm_wav,
+    build_default_slice_file_name_with_params, export_wav_slice_to_path_with_params,
+    export_wav_slice_with_params, SliceExportParams,
 };
-#[cfg(test)]
-pub use export::export_wav_slice_with_options;
 pub use metadata::{
     detect_audio_genre, extract_embedded_audio_meta, extract_embedded_meta_and_bpm_key,
     extract_embedded_meta_batch, resolve_metadata_titles_validated,
 };
 pub use pcm_ops::write_wav_i16;
+pub use transcode::transcode_audio_to_pcm_wav;
 
 use crate::security::normalize_clean_path;
 use std::fs;
@@ -357,6 +358,67 @@ mod tests {
             bits_orig_hi, 24,
             "Original preset must preserve 24-bit headroom on >16-bit lossless sources"
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn export_wav_slice_with_loudness_normalization_boosts_quiet_sfx_and_tags_filename() {
+        let root = std::env::temp_dir().join(format!("audify_loud_exp_{}", std::process::id()));
+        let slices = root.join("slices");
+        fs::create_dir_all(&slices).unwrap();
+
+        // Quiet 48 kHz mono 1 kHz sine (~ -20 dBFS peak = ~3276 i16)
+        let src = root.join("quiet_foley.wav");
+        let quiet_samples: Vec<i16> = (0..48_000)
+            .map(|i| (((i as f64) * 2.0 * std::f64::consts::PI * 1000.0 / 48_000.0).sin() * 3200.0) as i16)
+            .collect();
+        write_wav_i16(&src, 48_000, 1, &quiet_samples).unwrap();
+
+        let out_peak = export_wav_slice_with_params(
+            &src,
+            &slices,
+            &SliceExportParams {
+                start_sec: 0.0,
+                end_sec: 0.8,
+                pitch_semitones: None,
+                apply_micro_fade: Some(false),
+                export_preset: Some("original"),
+                loudness_mode: Some("peak_m1"),
+            },
+        )
+        .unwrap();
+        assert!(out_peak.contains("_pk1.wav"));
+        let bytes = fs::read(&out_peak).unwrap();
+        let max_abs = bytes[44..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| i16::from_le_bytes([c[0], c[1]]).unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        // -1 dBTP of 32767 is ~29203
+        assert!(
+            max_abs > 28_000 && max_abs <= 29_500,
+            "Peak -1 dBTP export should boost quiet SFX to ~29203 (got {})",
+            max_abs
+        );
+
+        let out_lufs = export_wav_slice_with_params(
+            &src,
+            &slices,
+            &SliceExportParams {
+                start_sec: 0.0,
+                end_sec: 0.8,
+                pitch_semitones: None,
+                apply_micro_fade: Some(false),
+                export_preset: Some("original"),
+                loudness_mode: Some("lufs_m14"),
+            },
+        )
+        .unwrap();
+        assert!(out_lufs.contains("_lufs14.wav"));
+        assert_ne!(out_lufs, out_peak);
 
         let _ = fs::remove_dir_all(&root);
     }
