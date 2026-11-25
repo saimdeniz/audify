@@ -8,6 +8,7 @@ import {
 import {
   AUDIFY_STORAGE_KEYS,
   isStandaloneSettingsWindow,
+  markLocalKeyEdited,
   normalizeSettingsTab,
   postCrossWindowSync,
   safeGetItem,
@@ -27,32 +28,82 @@ export function createAppearanceAndModalActions(
 ) {
   const { set, get } = ctx;
   let tintPersistTimer: ReturnType<typeof setTimeout> | null = null;
+  let liveVisualRafId: number | null = null;
+  let pendingLiveVisualPatch: Record<string, unknown> | null = null;
   let autoAccentSeq = 0;
 
-  registerTintTimers({
-    flushPendingTint: () => {
-      if (tintPersistTimer !== null) {
-        clearTimeout(tintPersistTimer);
-        tintPersistTimer = null;
-        safeSetItem(
-          AUDIFY_STORAGE_KEYS.themeTintIntensity,
-          String(get().themeTintIntensity),
-          { broadcast: false }
-        );
-        safeSetItem(
-          AUDIFY_STORAGE_KEYS.customBgBlur,
-          String(get().customBgBlur),
-          { broadcast: false }
-        );
-        safeSetItem(
-          AUDIFY_STORAGE_KEYS.customBgOpacity,
-          String(get().customBgOpacity),
-          { broadcast: false }
-        );
-        void get().persistActiveProfileSettings(true);
+  const flushPendingLiveVisualSync = () => {
+    if (liveVisualRafId !== null && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(liveVisualRafId);
+    }
+    liveVisualRafId = null;
+    if (pendingLiveVisualPatch) {
+      const patch = pendingLiveVisualPatch;
+      pendingLiveVisualPatch = null;
+      postCrossWindowSync("live-visual", patch);
+    }
+  };
+
+  const queueLiveVisualSync = (patch: Record<string, unknown>) => {
+    pendingLiveVisualPatch = pendingLiveVisualPatch
+      ? { ...pendingLiveVisualPatch, ...patch }
+      : { ...patch };
+    if (typeof requestAnimationFrame !== "function") {
+      flushPendingLiveVisualSync();
+      return;
+    }
+    if (liveVisualRafId !== null) return;
+    liveVisualRafId = requestAnimationFrame(() => {
+      liveVisualRafId = null;
+      if (pendingLiveVisualPatch) {
+        const nextPatch = pendingLiveVisualPatch;
+        pendingLiveVisualPatch = null;
+        postCrossWindowSync("live-visual", nextPatch);
       }
-    },
+    });
+  };
+
+  const persistSliderVisualValuesToStorage = () => {
+    const live = get();
+    safeSetItem(
+      AUDIFY_STORAGE_KEYS.themeTintIntensity,
+      String(live.themeTintIntensity),
+      { broadcast: false }
+    );
+    safeSetItem(
+      AUDIFY_STORAGE_KEYS.customBgBlur,
+      String(live.customBgBlur),
+      { broadcast: false }
+    );
+    safeSetItem(
+      AUDIFY_STORAGE_KEYS.customBgOpacity,
+      String(live.customBgOpacity),
+      { broadcast: false }
+    );
+  };
+
+  const flushPendingVisualPersistence = () => {
+    flushPendingLiveVisualSync();
+    if (tintPersistTimer !== null) {
+      clearTimeout(tintPersistTimer);
+      tintPersistTimer = null;
+      persistSliderVisualValuesToStorage();
+      void get().persistActiveProfileSettings(true);
+    }
+  };
+
+  if (typeof window !== "undefined") {
+    window.addEventListener("pagehide", flushPendingVisualPersistence);
+  }
+
+  registerTintTimers({
+    flushPendingTint: flushPendingVisualPersistence,
     cancelPendingTint: () => {
+      if (liveVisualRafId !== null && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(liveVisualRafId);
+      }
+      liveVisualRafId = null;
+      pendingLiveVisualPatch = null;
       if (tintPersistTimer !== null) {
         clearTimeout(tintPersistTimer);
         tintPersistTimer = null;
@@ -64,6 +115,7 @@ export function createAppearanceAndModalActions(
     if (tintPersistTimer) clearTimeout(tintPersistTimer);
     tintPersistTimer = setTimeout(() => {
       tintPersistTimer = null;
+      persistSliderVisualValuesToStorage();
       void get().persistActiveProfileSettings();
     }, 150);
   };
@@ -168,6 +220,7 @@ export function createAppearanceAndModalActions(
     getFallbackManualAccent,
     syncAutoAccentFromBackdrop,
     scheduleVisualPersist,
+    queueLiveVisualSync,
   });
 
   return {
@@ -274,14 +327,13 @@ export function createAppearanceAndModalActions(
         0,
         Math.min(1, Number(themeTintIntensity.toFixed(2)))
       );
-      // Persist to localStorage synchronously so rapid scrubs never clash with stale storage reads;
-      // only the SQLite profile write stays debounced.
-      safeSetItem(AUDIFY_STORAGE_KEYS.themeTintIntensity, String(clamped), {
-        broadcast: false,
-      });
+      if (get().themeTintIntensity === clamped) return;
+      // Mark locally edited synchronously to block remote echoes while deferring
+      // localStorage writes until drag settles (eliminates cross-window `storage` storms).
+      markLocalKeyEdited(AUDIFY_STORAGE_KEYS.themeTintIntensity);
       applyVisualEffectsToDom(get().enableMica, clamped);
       set({ themeTintIntensity: clamped });
-      postCrossWindowSync("live-visual", {
+      queueLiveVisualSync({
         enableMica: get().enableMica,
         themeTintIntensity: clamped,
       });

@@ -1,5 +1,6 @@
 use super::fts_query::{build_fts_match_expression, load_synonym_config};
 use super::lookup::{hydrate_sample_peaks, hydrate_sample_tag_ids, hydrate_sample_tags};
+use super::sort::build_samples_order_by_sql;
 use crate::commands::{normalize_path_str, parent_folder_path, SampleItem};
 use crate::db::{get_active_profile_id, AppState};
 use rusqlite::{params_from_iter, Connection};
@@ -146,6 +147,7 @@ pub(crate) fn query_samples_with_conn_compact(
     )
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn query_samples_with_conn_faceted(
     conn: &Connection,
@@ -161,6 +163,43 @@ pub(crate) fn query_samples_with_conn_faceted(
     include_peaks: Option<bool>,
     trashed_only: Option<bool>,
     compact_tags: bool,
+) -> Result<Vec<SampleItem>, String> {
+    query_samples_with_conn_sorted(
+        conn,
+        search_query,
+        folder_filter,
+        favorite_only,
+        tag_ids,
+        excluded_tag_ids,
+        tag_match_mode,
+        collection_id,
+        limit,
+        offset,
+        include_peaks,
+        trashed_only,
+        compact_tags,
+        None,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn query_samples_with_conn_sorted(
+    conn: &Connection,
+    search_query: Option<String>,
+    folder_filter: Option<String>,
+    favorite_only: Option<bool>,
+    tag_ids: Option<Vec<i64>>,
+    excluded_tag_ids: Option<Vec<i64>>,
+    tag_match_mode: Option<String>,
+    collection_id: Option<i64>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    include_peaks: Option<bool>,
+    trashed_only: Option<bool>,
+    compact_tags: bool,
+    sort_key: Option<String>,
+    sort_dir: Option<String>,
 ) -> Result<Vec<SampleItem>, String> {
     let active_id = get_active_profile_id(conn);
     let limit = limit.map(|l| l.max(1));
@@ -223,7 +262,15 @@ pub(crate) fn query_samples_with_conn_faceted(
         sql.push_str(" INNER JOIN samples_fts fts ON fts.rowid = s.id");
     }
 
-    let use_filename_index_fast_path = limit.unwrap_or(i64::MAX) <= 1_000
+    let (order_by_sql, is_default_filename_asc) = build_samples_order_by_sql(
+        sort_key.as_deref(),
+        sort_dir.as_deref(),
+        using_fts,
+        want_trashed,
+    );
+
+    let use_filename_index_fast_path = is_default_filename_asc
+        && limit.unwrap_or(i64::MAX) <= 1_000
         && !using_fts
         && collection_id.is_none()
         && folder_filter
@@ -419,13 +466,7 @@ pub(crate) fn query_samples_with_conn_faceted(
         sql.push_str(&where_clauses.join(" AND "));
     }
 
-    if using_fts {
-        sql.push_str(" ORDER BY bm25(samples_fts), s.file_name COLLATE NOCASE ASC");
-    } else if want_trashed {
-        sql.push_str(" ORDER BY s.trashed_at DESC, s.file_name COLLATE NOCASE ASC");
-    } else {
-        sql.push_str(" ORDER BY s.file_name COLLATE NOCASE ASC");
-    }
+    sql.push_str(&order_by_sql);
 
     if large_tag_allowlist.is_none() && large_tag_denylist.is_none() {
         if let Some(lim) = limit {
@@ -558,10 +599,12 @@ pub async fn query_samples(
     include_peaks: Option<bool>,
     trashed_only: Option<bool>,
     compact_tags: Option<bool>,
+    sort_key: Option<String>,
+    sort_dir: Option<String>,
 ) -> Result<Vec<SampleItem>, String> {
     let want_compact_tags = compact_tags.unwrap_or(false);
     crate::db::run_read_query(&state, move |conn| {
-        query_samples_with_conn_faceted(
+        query_samples_with_conn_sorted(
             conn,
             search_query,
             folder_filter,
@@ -575,6 +618,8 @@ pub async fn query_samples(
             include_peaks,
             trashed_only,
             want_compact_tags,
+            sort_key,
+            sort_dir,
         )
     })
     .await
@@ -609,10 +654,142 @@ pub(crate) fn query_samples_with_conn(
 
 #[cfg(test)]
 mod tests {
-    use super::query_samples_with_conn_faceted;
+    use super::{query_samples_with_conn_faceted, query_samples_with_conn_sorted};
     use crate::db::init_schema_on_conn;
     use crate::db::taxonomy::ensure_taxonomy_tag;
     use rusqlite::{params, Connection};
+
+    #[test]
+    fn sorted_query_matches_frontend_empty_last_and_limit_consistency() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        init_schema_on_conn(&conn).expect("init schema");
+
+        conn.execute(
+            "INSERT INTO libraries (id, path, name, is_global) VALUES (1, 'C:/SFX', 'SFX', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO samples (id, library_id, file_path, file_name, extension, duration_ms, genre, bpm, camelot_key)
+             VALUES
+               (1, 1, 'C:/SFX/0_untagged.wav', '0_untagged.wav', 'wav', 500, '', NULL, ''),
+               (2, 1, 'C:/SFX/z_acoustic.wav', 'z_acoustic.wav', 'wav', 1500, 'Acoustic', 90.0, '10A'),
+               (3, 1, 'C:/SFX/m_cinematic.wav', 'm_cinematic.wav', 'wav', 2500, 'Cinematic', 140.0, '2A'),
+               (4, 1, 'C:/SFX/a_ambient.wav', 'a_ambient.wav', 'wav', 1000, 'Ambient', 0.0, '8B')",
+            [],
+        )
+        .unwrap();
+
+        // Genre ASC: Acoustic -> Ambient -> Cinematic -> empty last (NOT filename-first `0_untagged.wav`)
+        let genre_asc = query_samples_with_conn_sorted(
+            &conn,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(150),
+            Some(0),
+            Some(false),
+            Some(false),
+            false,
+            Some("genre".to_string()),
+            Some("asc".to_string()),
+        )
+        .unwrap();
+        let ids: Vec<i64> = genre_asc.iter().map(|s| s.id).collect();
+        assert_eq!(ids, vec![2, 4, 3, 1]);
+
+        // Stage 1 LIMIT 2 must return exact top 2 rows of full Genre ASC list
+        let genre_asc_top2 = query_samples_with_conn_sorted(
+            &conn,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(2),
+            Some(0),
+            Some(false),
+            Some(false),
+            false,
+            Some("genre".to_string()),
+            Some("asc".to_string()),
+        )
+        .unwrap();
+        let top2_ids: Vec<i64> = genre_asc_top2.iter().map(|s| s.id).collect();
+        assert_eq!(top2_ids, vec![2, 4]);
+
+        // Genre DESC: Cinematic -> Ambient -> Acoustic -> empty STILL last
+        let genre_desc = query_samples_with_conn_sorted(
+            &conn,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(150),
+            Some(0),
+            Some(false),
+            Some(false),
+            false,
+            Some("genre".to_string()),
+            Some("desc".to_string()),
+        )
+        .unwrap();
+        let desc_ids: Vec<i64> = genre_desc.iter().map(|s| s.id).collect();
+        assert_eq!(desc_ids, vec![3, 4, 2, 1]);
+
+        // Key ASC: numeric Camelot order (2A -> 8B -> 10A) with empty last
+        let key_asc = query_samples_with_conn_sorted(
+            &conn,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(150),
+            Some(0),
+            Some(false),
+            Some(false),
+            false,
+            Some("key".to_string()),
+            Some("asc".to_string()),
+        )
+        .unwrap();
+        let key_ids: Vec<i64> = key_asc.iter().map(|s| s.id).collect();
+        assert_eq!(key_ids, vec![3, 4, 2, 1]);
+
+        // BPM DESC: 140 -> 90 -> missing/zero last (ordered by filename tie-break)
+        let bpm_desc = query_samples_with_conn_sorted(
+            &conn,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(150),
+            Some(0),
+            Some(false),
+            Some(false),
+            false,
+            Some("bpm".to_string()),
+            Some("desc".to_string()),
+        )
+        .unwrap();
+        let bpm_ids: Vec<i64> = bpm_desc.iter().map(|s| s.id).collect();
+        assert_eq!(bpm_ids, vec![3, 2, 1, 4]);
+    }
 
     #[test]
     fn faceted_query_supports_or_within_facet_and_across_facets_rollup_and_exclude() {

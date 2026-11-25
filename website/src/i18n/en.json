@@ -61,11 +61,29 @@
       "Win32 Edge-Peek Mini Dock"
     ]
   },
+  "metrics": {
+    "eyebrow": "MEASURED ENGINEERING NUMBERS",
+    "note": "BENCHMARKED ON 55,000+ LOCAL AUDIO FILES",
+    "items": [
+      {
+        "label": "MEMORY FOOTPRINT",
+        "desc": "Typical RAM usage on 55,000+ indexed samples using Rust, SQLite WAL, and virtualized 34px rows."
+      },
+      {
+        "label": "OFFLINE AI SIMILARITY",
+        "desc": "128-D cosine vector search across tens of thousands of local YAMNet ONNX embeddings."
+      },
+      {
+        "label": "TELEMETRY & CLOUD CALLS",
+        "desc": "Zero analytics, zero accounts, and a locked-down offline Content Security Policy."
+      }
+    ]
+  },
   "demo": {
     "eyebrow": "INTERACTIVE REPLICA · REAL CC0 AUDIO",
     "title": "Experience Audify right in your browser.",
     "subtitle": "A faithful replica of Audify's actual studio interface powered by 12 real CC0 Public Domain audio files. Click any row to audition, drag across the waveform deck to slice, shift pitch live, or run AI similarity matching.",
-    "hintControls": "Space: Play/Pause · ↑/↓: Navigate · Drag waveform: Slice · Shift+Enter: Find Similar",
+    "hintControls": "Space: Play · ↑/↓: Navigate · Drag: Slice · Shift+Enter: Similar",
     "searchPlaceholder": "Search samples, tags, genres...",
     "dockButton": "DOCK",
     "dockActive": "DOCK OPEN",
@@ -351,7 +369,9 @@
       "Auto-creates ./user/ next to Audify.exe",
       "100% offline · zero accounts · zero telemetry",
       "Includes Dark, Light, High Contrast & ASCII themes"
-    ]
+    ],
+    "trustLabel": "Compiled transparently from source on GitHub Actions (windows-latest)",
+    "trustLink": "Inspect build workflow"
   },
   "footer": {
     "tagline": "Local-first desktop audio & SFX library manager engineered with Rust, SQLite FTS5, and Tauri v2.",

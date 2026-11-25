@@ -706,4 +706,57 @@ describe("useSampleStore AI slice state transitions", () => {
       })
     );
   });
+
+  it("reports silent-only AI analysis skips as an info notice instead of a failure error", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "analyze_samples_ai") {
+        return Promise.resolve({
+          processed: 1,
+          indexed: 0,
+          skipped_silent: 1,
+          suggestions_added: 0,
+          tags_auto_applied: 0,
+          canceled: false,
+          avg_ms_per_clip: 0.2,
+        });
+      }
+      if (cmd === "get_ai_model_status") {
+        return Promise.resolve(makeModelStatusStub());
+      }
+      return Promise.resolve([]);
+    });
+
+    await useSampleStore.getState().analyzeSamplesAi({ reanalyzeExisting: false });
+    const afterSilentOnly = useSampleStore.getState();
+    expect(afterSilentOnly.isAnalyzingAi).toBe(false);
+    expect(afterSilentOnly.statusNotice?.kind).toBe("info");
+    expect(afterSilentOnly.statusNotice?.message).toBe(
+      "All analyzable samples are already AI indexed (1 silent track skipped)."
+    );
+
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "analyze_samples_ai") {
+        return Promise.resolve({
+          processed: 5,
+          indexed: 3,
+          skipped_silent: 2,
+          suggestions_added: 4,
+          tags_auto_applied: 0,
+          canceled: false,
+          avg_ms_per_clip: 12.5,
+        });
+      }
+      if (cmd === "get_ai_model_status") {
+        return Promise.resolve(makeModelStatusStub());
+      }
+      return Promise.resolve([]);
+    });
+
+    useSampleStore.getState().setAiTaggingMode("suggest");
+    await useSampleStore.getState().analyzeSamplesAi({ reanalyzeExisting: true });
+    const afterMixed = useSampleStore.getState();
+    expect(afterMixed.statusNotice?.kind).toBe("success");
+    expect(afterMixed.statusNotice?.message).toContain("AI indexed 3 samples");
+    expect(afterMixed.statusNotice?.message).toContain("2 silent skipped");
+  });
 });

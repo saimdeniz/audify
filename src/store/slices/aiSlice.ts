@@ -321,22 +321,32 @@ export function createAiSlice(ctx: StoreSliceContext): AiSliceActions {
           set({ isAnalyzingAi: false, aiIndexProgress: null });
           return;
         }
+        const skippedSilent = summary.skipped_silent ?? 0;
         const tagSummary =
           taggingMode === "vectors_only"
             ? "similarity vectors only"
             : `${summary.suggestions_added + summary.tags_auto_applied} tags`;
+        const silentSuffix =
+          skippedSilent > 0
+            ? ` · ${skippedSilent} silent skipped`
+            : "";
         const msg = summary.canceled
           ? `AI analysis canceled (${summary.indexed} indexed)`
           : summary.indexed === 0
-          ? "All active samples are already AI indexed."
-          : `AI indexed ${summary.indexed} samples · ${tagSummary} (${summary.avg_ms_per_clip.toFixed(1)} ms/clip)`;
+          ? skippedSilent > 0
+            ? `All analyzable samples are already AI indexed (${skippedSilent} silent ${skippedSilent === 1 ? "track" : "tracks"} skipped).`
+            : "All active samples are already AI indexed."
+          : `AI indexed ${summary.indexed} samples · ${tagSummary}${silentSuffix} (${summary.avg_ms_per_clip.toFixed(1)} ms/clip)`;
         set({
           isAnalyzingAi: false,
           aiIndexProgress: null,
           statusMessage: msg,
         });
         if (!(opts?.silentIfNotReady && summary.indexed === 0)) {
-          emitNotice(msg, "success");
+          emitNotice(
+            msg,
+            summary.indexed === 0 && skippedSilent > 0 ? "info" : "success"
+          );
         }
       } catch (err) {
         set({ isAnalyzingAi: false, aiIndexProgress: null });

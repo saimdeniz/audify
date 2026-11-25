@@ -52,22 +52,22 @@ export const Footer: React.FC<FooterProps> = ({ release }) => {
               </h4>
               <ul className="mt-2.5 space-y-1.5 text-[12.5px] text-fg-3">
                 <li>
-                  <a href="#overview" className="hover:text-accent-fg">
+                  <a href="#overview" className="footer-link-nudge hover:text-accent-fg">
                     {messages.nav.overview}
                   </a>
                 </li>
                 <li>
-                  <a href="#demo" className="hover:text-accent-fg">
+                  <a href="#demo" className="footer-link-nudge hover:text-accent-fg">
                     {messages.nav.demo}
                   </a>
                 </li>
                 <li>
-                  <a href="#features" className="hover:text-accent-fg">
+                  <a href="#features" className="footer-link-nudge hover:text-accent-fg">
                     {messages.nav.features}
                   </a>
                 </li>
                 <li>
-                  <a href="#download" className="hover:text-accent-fg">
+                  <a href="#download" className="footer-link-nudge hover:text-accent-fg">
                     {messages.nav.download}
                   </a>
                 </li>
@@ -81,17 +81,17 @@ export const Footer: React.FC<FooterProps> = ({ release }) => {
               </h4>
               <ul className="mt-2.5 space-y-1.5 text-[12.5px] text-fg-3">
                 <li>
-                  <a href="#workflow" className="hover:text-accent-fg">
+                  <a href="#workflow" className="footer-link-nudge hover:text-accent-fg">
                     {messages.nav.workflow}
                   </a>
                 </li>
                 <li>
-                  <a href="#docs" className="hover:text-accent-fg">
+                  <a href="#docs" className="footer-link-nudge hover:text-accent-fg">
                     {messages.nav.docs}
                   </a>
                 </li>
                 <li>
-                  <a href="#faq" className="hover:text-accent-fg">
+                  <a href="#faq" className="footer-link-nudge hover:text-accent-fg">
                     {messages.nav.faq}
                   </a>
                 </li>
@@ -100,7 +100,7 @@ export const Footer: React.FC<FooterProps> = ({ release }) => {
                     href={SITE_CONFIG.githubRepoUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="hover:text-accent-fg"
+                    className="footer-link-nudge hover:text-accent-fg"
                   >
                     GitHub Repository
                   </a>
@@ -119,7 +119,7 @@ export const Footer: React.FC<FooterProps> = ({ release }) => {
                     href={SITE_CONFIG.licenseUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="hover:text-accent-fg"
+                    className="footer-link-nudge hover:text-accent-fg"
                   >
                     {SITE_CONFIG.licenseSpdx} License
                   </a>
@@ -129,7 +129,7 @@ export const Footer: React.FC<FooterProps> = ({ release }) => {
                     href={SITE_CONFIG.thirdPartyNoticesUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="hover:text-accent-fg"
+                    className="footer-link-nudge hover:text-accent-fg"
                   >
                     Third-Party Notices
                   </a>
@@ -139,7 +139,7 @@ export const Footer: React.FC<FooterProps> = ({ release }) => {
                     href={release.releaseUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="hover:text-accent-fg"
+                    className="footer-link-nudge hover:text-accent-fg"
                   >
                     Latest Release ({release.version})
                   </a>
@@ -149,7 +149,7 @@ export const Footer: React.FC<FooterProps> = ({ release }) => {
                     href="https://creativecommons.org/publicdomain/zero/1.0/"
                     target="_blank"
                     rel="noreferrer"
-                    className="hover:text-accent-fg"
+                    className="footer-link-nudge hover:text-accent-fg"
                   >
                     {messages.footer.demoAudioShort}
                   </a>

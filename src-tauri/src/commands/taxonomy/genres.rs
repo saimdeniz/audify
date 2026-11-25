@@ -1,7 +1,7 @@
 use super::manage::delete_tag_with_conn;
 use super::tags::{create_tag_with_options_conn, query_facets_with_conn, query_tags_with_conn};
-use crate::audio::extract_embedded_meta_batch;
-use crate::commands::Genre;
+use crate::audio::extract_embedded_meta_batch_with_progress;
+use crate::commands::{BatchJobProgressPayload, Genre};
 use crate::db::taxonomy::{facet_domain_in_db, resolve_facet_id_in_db};
 use crate::db::{
     ensure_taxonomy_tag, get_active_profile_id, is_sample_visible_in_profile, run_read_query,
@@ -12,7 +12,7 @@ use crate::security::validate_hex_color;
 use crate::taxonomy_catalog::{is_canonical_mood_name, sanitize_id3_genre_or_mood_typo};
 use rusqlite::{params, Connection};
 use std::collections::HashSet;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 fn tag_to_genre(tag: crate::commands::Tag) -> Genre {
     Genre {
@@ -315,9 +315,34 @@ pub async fn assign_sample_genre_batch(
 }
 
 #[tauri::command]
-pub async fn auto_detect_library_genres(state: State<'_, AppState>) -> Result<usize, String> {
+pub async fn auto_detect_library_genres(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
     let state_owned = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let app_worker = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let emit_progress = |stage: &str,
+                             processed: usize,
+                             total: usize,
+                             percentage: f64,
+                             current_item: &str,
+                             matched_count: usize,
+                             done: bool| {
+            let _ = app_worker.emit(
+                "genre-detect-progress",
+                BatchJobProgressPayload {
+                    stage_label: stage.to_string(),
+                    processed,
+                    total,
+                    percentage: percentage.clamp(0.0, 100.0),
+                    current_item: current_item.to_string(),
+                    matched_count,
+                    done,
+                },
+            );
+        };
+
         let candidates: Vec<(i64, String, String)> = {
             let conn = state_owned.lock_db();
             let active_profile_id = get_active_profile_id(&conn);
@@ -345,14 +370,33 @@ pub async fn auto_detect_library_genres(state: State<'_, AppState>) -> Result<us
             rows.flatten().collect()
         };
 
-        if candidates.is_empty() {
+        let total = candidates.len();
+        if total == 0 {
+            emit_progress("Genres up to date", 0, 0, 100.0, "", 0, true);
             return Ok(0);
         }
 
-        let detected = extract_embedded_meta_batch(&candidates);
+        emit_progress("Scanning genres", 0, total, 0.0, "", 0, false);
+
+        let detected = extract_embedded_meta_batch_with_progress(
+            &candidates,
+            |processed, tot, matched, file_name| {
+                let pct = if tot > 0 {
+                    (processed as f64 / tot as f64) * 85.0
+                } else {
+                    0.0
+                };
+                emit_progress("Scanning genres", processed, tot, pct, file_name, matched, false);
+            },
+        );
+
         if detected.is_empty() {
+            emit_progress("Genres up to date", total, total, 100.0, "", 0, true);
             return Ok(0);
         }
+
+        let detected_total = detected.len();
+        emit_progress("Saving genres", 0, detected_total, 86.0, "", 0, false);
 
         let mut conn = state_owned.lock_db();
         let tx = conn
@@ -361,6 +405,7 @@ pub async fn auto_detect_library_genres(state: State<'_, AppState>) -> Result<us
 
         let mut updated_sample_ids: Vec<i64> = Vec::new();
         let mut detected_count = 0usize;
+        let save_step = (detected_total / 20).clamp(16, 250);
         {
             let mut upd_stmt = tx
                 .prepare(
@@ -378,7 +423,7 @@ pub async fn auto_detect_library_genres(state: State<'_, AppState>) -> Result<us
                 )
                 .map_err(|e| e.to_string())?;
 
-            for (sid, meta) in detected {
+            for (idx, (sid, meta)) in detected.into_iter().enumerate() {
                 let _ = upd_stmt.execute(params![meta.artist, meta.album, meta.year, sid]);
                 if !meta.genre_mood_tags.is_empty() {
                     for (facet_slug, name) in &meta.genre_mood_tags {
@@ -391,6 +436,19 @@ pub async fn auto_detect_library_genres(state: State<'_, AppState>) -> Result<us
                     updated_sample_ids.push(sid);
                     detected_count += 1;
                 }
+                let done_idx = idx + 1;
+                if done_idx == detected_total || done_idx.is_multiple_of(save_step) {
+                    let pct = 86.0 + (done_idx as f64 / detected_total as f64) * 12.0;
+                    emit_progress(
+                        "Saving genres",
+                        done_idx,
+                        detected_total,
+                        pct,
+                        "",
+                        detected_count,
+                        false,
+                    );
+                }
             }
         }
 
@@ -399,8 +457,33 @@ pub async fn auto_detect_library_genres(state: State<'_, AppState>) -> Result<us
         }
 
         tx.commit().map_err(|e| e.to_string())?;
+        emit_progress(
+            "Genres updated",
+            total,
+            total,
+            100.0,
+            "",
+            detected_count,
+            true,
+        );
         Ok(detected_count)
     })
     .await
-    .map_err(|e| format!("Genre & metadata detection worker error: {}", e))?
+    .map_err(|e| format!("Genre & metadata detection worker error: {}", e))?;
+
+    if result.is_err() {
+        let _ = app.emit(
+            "genre-detect-progress",
+            BatchJobProgressPayload {
+                stage_label: "Genre scan failed".to_string(),
+                processed: 0,
+                total: 0,
+                percentage: 100.0,
+                current_item: String::new(),
+                matched_count: 0,
+                done: true,
+            },
+        );
+    }
+    result
 }

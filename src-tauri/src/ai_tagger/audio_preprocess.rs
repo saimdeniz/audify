@@ -237,7 +237,7 @@ pub fn decode_waveform_for_ai(path: &Path) -> Result<Vec<f32>, String> {
     }
 
     if orig_sr == 0 || mono.is_empty() {
-        return Err("Decoded audio stream is empty".to_string());
+        return Err(EMPTY_AUDIO_ERR.to_string());
     }
 
     let max_decode_16k = (AI_DECODE_WINDOW_SECONDS * (AI_TARGET_SAMPLE_RATE as f64)).ceil() as usize;
@@ -246,7 +246,14 @@ pub fn decode_waveform_for_ai(path: &Path) -> Result<Vec<f32>, String> {
     let window = select_active_window(&resampled, max_ai_samples);
 
     if !has_usable_audio_energy(&window) {
-        return Err("Audio signal is silent or below energy threshold".to_string());
+        return Err(SILENT_AUDIO_ERR.to_string());
     }
     Ok(window)
+}
+
+pub(super) const EMPTY_AUDIO_ERR: &str = "Decoded audio stream is empty";
+pub(super) const SILENT_AUDIO_ERR: &str = "Audio signal is silent or below energy threshold";
+
+pub(super) fn is_non_fatal_silent_audio_err(err: &str) -> bool {
+    err == SILENT_AUDIO_ERR || err == EMPTY_AUDIO_ERR
 }

@@ -184,6 +184,19 @@ export function createAutoTagActions(deps: AutoTagActionsDeps) {
     },
 
     reapplyAutoTagRules: async () => {
+      if (get().isApplyingAutoTags) return;
+      set({
+        isApplyingAutoTags: true,
+        autoTagProgress: {
+          stage_label: "Matching rules",
+          processed: 0,
+          total: 0,
+          percentage: 0,
+          current_item: "",
+          matched_count: 0,
+          done: false,
+        },
+      });
       try {
         await get().persistActiveProfileSettings(true);
         const assignedCount = await invoke<number>(
@@ -196,7 +209,7 @@ export function createAutoTagActions(deps: AutoTagActionsDeps) {
         });
         await get().refreshAfterCatalogMutation();
         emitNotice(
-          `Applied profile auto-tag rules (${assignedCount} samples matched)`,
+          `Applied profile auto-tag rules (${assignedCount.toLocaleString()} samples matched)`,
           "success",
           {
             label: "Undo",
@@ -208,6 +221,8 @@ export function createAutoTagActions(deps: AutoTagActionsDeps) {
       } catch (err) {
         console.error("Failed to reapply auto-tag rules:", err);
         emitNotice(`Auto-tag rule error: ${String(err)}`, "error");
+      } finally {
+        set({ isApplyingAutoTags: false, autoTagProgress: null });
       }
     },
 

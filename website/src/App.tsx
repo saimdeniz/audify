@@ -8,6 +8,7 @@ import { FeatureTourSection } from "./components/FeatureTourSection";
 import { Footer } from "./components/Footer";
 import { HeroSection } from "./components/HeroSection";
 import { LightboxModal } from "./components/LightboxModal";
+import { MetricsStripSection } from "./components/MetricsStripSection";
 import { Navbar } from "./components/Navbar";
 import { PortableWorkflowSection } from "./components/PortableWorkflowSection";
 import { ScrollProgress } from "./components/ScrollProgress";
@@ -71,6 +72,7 @@ export const App: React.FC = () => {
           <main className="relative z-10">
             <HeroSection onOpenLightbox={openLightbox} />
             <StudioMarquee />
+            <MetricsStripSection />
             <AudifyLiveDemo />
             <FeatureTourSection onOpenLightbox={openLightbox} />
             <PortableWorkflowSection />

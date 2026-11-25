@@ -4,6 +4,7 @@ import { AUDIFY_STORAGE_KEY_PREFIX } from "../../constants/storageKeys";
 import {
   AiDownloadProgressPayload,
   AiIndexProgressPayload,
+  BatchJobProgressPayload,
   BpmKeyProgressPayload,
   DuplicateScanProgressPayload,
   Profile,
@@ -356,4 +357,20 @@ export function registerStoreListenersOnce({
         : state
     );
   }).catch(onError("duplicate-scan-progress listener"));
+
+  listen<BatchJobProgressPayload>("genre-detect-progress", (event) => {
+    const p = event.payload;
+    set({
+      genreDetectProgress: p.done ? null : p,
+      isDetectingGenres: !p.done,
+    });
+  }).catch(onError("genre-detect-progress listener"));
+
+  listen<BatchJobProgressPayload>("auto-tag-progress", (event) => {
+    const p = event.payload;
+    set({
+      autoTagProgress: p.done ? null : p,
+      isApplyingAutoTags: !p.done,
+    });
+  }).catch(onError("auto-tag-progress listener"));
 }

@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useState } from "react";
+import React, { Suspense, lazy, useEffect, useId, useState } from "react";
 import { useSampleStore } from "../store/useSampleStore";
 import {
   isViewportRenderActive,
@@ -35,10 +35,11 @@ const LazyAsciiMagicCanvas = lazy(() =>
  * triggers full App re-renders. Disabled automatically in High Contrast mode.
  */
 export const AppAtmosphereViewport: React.FC = React.memo(() => {
+  const rawBlurFilterId = useId();
   const themeMode = useSampleStore((s) => s.themeMode);
   const accentColor = useSampleStore((s) => s.accentColor);
   const enableMica = useSampleStore((s) => s.enableMica);
-  const themeTintIntensity = useSampleStore((s) => s.themeTintIntensity);
+  const hasTint = useSampleStore((s) => s.themeTintIntensity > 0);
   const customBgImage = useSampleStore((s) => s.customBgImage);
   const customBgBlur = useSampleStore((s) => s.customBgBlur);
   const customBgOpacity = useSampleStore((s) => s.customBgOpacity);
@@ -141,11 +142,19 @@ export const AppAtmosphereViewport: React.FC = React.memo(() => {
   const hasBackdrop =
     showAsciiLayer || showMagicLayer || showVideoLayer || showImageLayer;
 
+  const blurFilterId = `audify-atmosphere-blur-${rawBlurFilterId.replace(/[^a-zA-Z0-9_-]/g, "")}`;
   const activePreBlurredUrl =
     showImageLayer && preBlurred?.key === blurRequestKey ? preBlurred.url : "";
   const effectiveImageUrl = activePreBlurredUrl || bgMediaUrl;
-  const needsLiveBlur =
-    hasBackdrop && customBgBlur > 0 && !activePreBlurredUrl;
+  const isMotionBackdrop =
+    showAsciiLayer ||
+    showMagicLayer ||
+    showVideoLayer ||
+    (showImageLayer && isGifBg);
+  const needsDirectFilterBlur = isMotionBackdrop && customBgBlur > 0;
+  // Static images keep 1:1 edge-clamped pre-blur cache and only use brief backdrop fallback during settle
+  const needsStaticFallbackBackdropBlur =
+    showImageLayer && !isGifBg && customBgBlur > 0 && !activePreBlurredUrl;
 
   return (
     <div
@@ -153,13 +162,38 @@ export const AppAtmosphereViewport: React.FC = React.memo(() => {
       className="absolute inset-[1px] overflow-hidden pointer-events-none z-0 bg-surface-0"
       style={{ clipPath: "inset(0)", isolation: "isolate" }}
     >
-      {themeTintIntensity > 0 && (
+      {needsDirectFilterBlur && (
+        <svg
+          aria-hidden="true"
+          focusable="false"
+          className="absolute w-0 h-0 overflow-hidden pointer-events-none"
+        >
+          <defs>
+            <filter
+              id={blurFilterId}
+              x="0%"
+              y="0%"
+              width="100%"
+              height="100%"
+              colorInterpolationFilters="sRGB"
+            >
+              <feGaussianBlur
+                in="SourceGraphic"
+                stdDeviation={customBgBlur}
+                edgeMode="duplicate"
+              />
+            </filter>
+          </defs>
+        </svg>
+      )}
+      {hasTint && (
         <div
           className="absolute inset-0"
           style={{
             opacity: enableMica
-              ? themeTintIntensity
-              : themeTintIntensity * 0.55,
+              ? "var(--tint-scale, 0)"
+              : "calc(var(--tint-scale, 0) * 0.55)",
+            willChange: "opacity",
             background: `
               radial-gradient(circle at 16% 14%, rgb(var(--accent-rgb) / 0.32) 0%, transparent 52%),
               radial-gradient(circle at 78% 12%, rgb(var(--accent-rgb) / 0.25) 0%, transparent 48%),
@@ -171,50 +205,74 @@ export const AppAtmosphereViewport: React.FC = React.memo(() => {
         />
       )}
 
-      {/* Dedicated isolation group keeps live backdrop-filter scoped strictly to media */}
+      {/* Motion backdrops blur 1:1 via edge-clamped SVG feGaussianBlur (zero zoom, zero dark borders, no backdrop-filter readback) */}
       <div className="absolute inset-0" style={{ isolation: "isolate" }}>
-        {showAsciiLayer && (
+        {isMotionBackdrop && (
           <div
             className="absolute inset-0"
-            style={{ opacity: customBgOpacity, willChange: "opacity" }}
+            style={{
+              filter: needsDirectFilterBlur
+                ? `url(#${blurFilterId})`
+                : undefined,
+              transform: "translateZ(0)",
+              willChange: needsDirectFilterBlur ? "filter" : undefined,
+            }}
           >
-            <Suspense fallback={null}>
-              <LazyAsciiWallpaperCanvas
-                wallpaperKind={wallpaperKind}
-                asciiPreset={asciiPreset}
-                motionSpeed={asciiMotionSpeed}
-                accentHex={accentColor}
-                themeMode={themeMode}
-                isPlaying={isPlaying}
-                blurPx={customBgBlur}
+            {showAsciiLayer && (
+              <div
+                className="absolute inset-0"
+                style={{ opacity: customBgOpacity, willChange: "opacity" }}
+              >
+                <Suspense fallback={null}>
+                  <LazyAsciiWallpaperCanvas
+                    wallpaperKind={wallpaperKind}
+                    asciiPreset={asciiPreset}
+                    motionSpeed={asciiMotionSpeed}
+                    accentHex={accentColor}
+                    themeMode={themeMode}
+                    isPlaying={isPlaying}
+                    blurPx={customBgBlur}
+                  />
+                </Suspense>
+              </div>
+            )}
+
+            {showMagicLayer && (
+              <div
+                className="absolute inset-0"
+                style={{ opacity: customBgOpacity, willChange: "opacity" }}
+              >
+                <Suspense fallback={null}>
+                  <LazyAsciiMagicCanvas
+                    slug={asciiMagicSlug}
+                    look={asciiMagicLook}
+                    motionSpeed={asciiMotionSpeed}
+                    themeMode={themeMode}
+                    fit={asciiMagicFit}
+                    blurPx={customBgBlur}
+                  />
+                </Suspense>
+              </div>
+            )}
+
+            {showVideoLayer && (
+              <WallpaperVideoLayer src={bgMediaUrl} opacity={customBgOpacity} />
+            )}
+
+            {showImageLayer && isGifBg && gifPlaybackActive && (
+              <div
+                className="absolute inset-0 bg-cover bg-center bg-no-repeat"
+                style={{
+                  backgroundImage: `url("${effectiveImageUrl}")`,
+                  opacity: customBgOpacity,
+                  willChange: "opacity",
+                }}
               />
-            </Suspense>
+            )}
           </div>
         )}
 
-        {showMagicLayer && (
-          <div
-            className="absolute inset-0"
-            style={{ opacity: customBgOpacity, willChange: "opacity" }}
-          >
-            <Suspense fallback={null}>
-              <LazyAsciiMagicCanvas
-                slug={asciiMagicSlug}
-                look={asciiMagicLook}
-                motionSpeed={asciiMotionSpeed}
-                themeMode={themeMode}
-                fit={asciiMagicFit}
-                blurPx={customBgBlur}
-              />
-            </Suspense>
-          </div>
-        )}
-
-        {showVideoLayer && (
-          <WallpaperVideoLayer src={bgMediaUrl} opacity={customBgOpacity} />
-        )}
-
-        {showImageLayer && (!isGifBg || gifPlaybackActive) && (
+        {showImageLayer && !isGifBg && (
           <div
             className="absolute inset-0 bg-cover bg-center bg-no-repeat"
             style={{
@@ -225,8 +283,8 @@ export const AppAtmosphereViewport: React.FC = React.memo(() => {
           />
         )}
 
-        {/* Live optical blur only mounts for motion backdrops or while pre-blur settles */}
-        {needsLiveBlur && (
+        {/* Brief fallback blur only while static photo pre-blur cache settles */}
+        {needsStaticFallbackBackdropBlur && (
           <div
             className="absolute inset-0 pointer-events-none"
             style={{

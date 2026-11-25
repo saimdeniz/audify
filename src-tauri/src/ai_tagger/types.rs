@@ -88,6 +88,8 @@ pub struct AiTagSuggestionItem {
 pub struct AiAnalysisSummary {
     pub processed: usize,
     pub indexed: usize,
+    #[serde(default)]
+    pub skipped_silent: usize,
     pub suggestions_added: usize,
     pub tags_auto_applied: usize,
     pub canceled: bool,

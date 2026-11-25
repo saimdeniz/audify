@@ -31,7 +31,7 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({ src, caption, onCl
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="relative flex max-h-[92vh] w-full max-w-[1440px] flex-col overflow-hidden rounded-lg border border-line-strong bg-surface-1 shadow-2xl"
+        className="modal-pop-in relative flex max-h-[92vh] w-full max-w-[1440px] flex-col overflow-hidden rounded-lg border border-line-strong bg-surface-1 shadow-2xl"
       >
         <div className="flex items-center justify-between border-b border-line bg-surface-header px-4 py-2.5">
           <span className="font-mono text-[11px] text-fg-2">{caption}</span>
@@ -39,9 +39,9 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({ src, caption, onCl
             type="button"
             onClick={onClose}
             aria-label="Close full resolution preview"
-            className="flex h-7 w-7 items-center justify-center rounded-sm border border-line bg-surface-2 text-fg-2 hover:border-line-hover hover:text-fg"
+            className="group flex h-7 w-7 items-center justify-center rounded-sm border border-line bg-surface-2 text-fg-2 hover:border-accent hover:text-accent-fg"
           >
-            <X className="h-4 w-4" />
+            <X className="h-4 w-4 transition-transform duration-200 ease-out group-hover:rotate-90" />
           </button>
         </div>
         <div className="overflow-auto bg-surface-0 p-2">

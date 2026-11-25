@@ -23,6 +23,17 @@ import {
 import { applyThemeAndAccentToDom, applyVisualEffectsToDom } from "../themeDom";
 import type { StoreGet, StoreSet } from "../types";
 
+function areJsonEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== typeof b || a === null || b === null) return false;
+  if (typeof a !== "object") return false;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
+}
+
 export function applyRemoteSettingsFromStorage(get: StoreGet, set: StoreSet): void {
   const snap = loadBootSettings();
   const candidate = {
@@ -80,30 +91,65 @@ export function applyRemoteSettingsFromStorage(get: StoreGet, set: StoreSet): vo
     binSampleIds: loadSavedBinSampleIds(),
   };
 
-  const initialProtected = preserveRecentLocalProfileFields(get(), candidate);
-  applyThemeAndAccentToDom(
-    initialProtected.themeMode,
-    initialProtected.accentColor
+  const currentBefore = get();
+  const initialProtected = preserveRecentLocalProfileFields(
+    currentBefore,
+    candidate
   );
-  applyVisualEffectsToDom(
-    initialProtected.enableMica,
-    initialProtected.themeTintIntensity
-  );
+  if (
+    initialProtected.themeMode !== currentBefore.themeMode ||
+    initialProtected.accentColor !== currentBefore.accentColor
+  ) {
+    applyThemeAndAccentToDom(
+      initialProtected.themeMode,
+      initialProtected.accentColor
+    );
+  }
+  if (
+    initialProtected.enableMica !== currentBefore.enableMica ||
+    initialProtected.themeTintIntensity !== currentBefore.themeTintIntensity
+  ) {
+    applyVisualEffectsToDom(
+      initialProtected.enableMica,
+      initialProtected.themeTintIntensity
+    );
+  }
 
-  const prevKind = get().wallpaperKind;
+  const prevKind = currentBefore.wallpaperKind;
   let nextKind: WallpaperKind = prevKind;
   set((state) => {
     const protectedPatch = preserveRecentLocalProfileFields(state, candidate);
     nextKind = protectedPatch.wallpaperKind;
-    return {
-      ...protectedPatch,
-      ...(!isStandaloneSettingsWindow()
-        ? { settingsTab: loadSavedSettingsTab() }
-        : {}),
-      activeProfile: state.activeProfile
-        ? { ...state.activeProfile, color: protectedPatch.accentColor }
-        : null,
-    };
+
+    const diff: Record<string, unknown> = {};
+    for (const [key, nextVal] of Object.entries(protectedPatch)) {
+      const prevVal = (state as unknown as Record<string, unknown>)[key];
+      if (!areJsonEqual(prevVal, nextVal)) {
+        diff[key] = nextVal;
+      }
+    }
+
+    if (!isStandaloneSettingsWindow()) {
+      const nextTab = loadSavedSettingsTab();
+      if (nextTab !== state.settingsTab) {
+        diff.settingsTab = nextTab;
+      }
+    }
+
+    if (
+      state.activeProfile &&
+      state.activeProfile.color !== protectedPatch.accentColor
+    ) {
+      diff.activeProfile = {
+        ...state.activeProfile,
+        color: protectedPatch.accentColor,
+      };
+    }
+
+    if (Object.keys(diff).length === 0) {
+      return state;
+    }
+    return diff;
   });
   if (nextKind !== prevKind || nextKind === "none") {
     releaseBackdropTransitionCaches(prevKind, nextKind);
@@ -150,7 +196,9 @@ export function applyLiveVisualPatch(
     if (nextTheme !== state.themeMode || nextAccent !== state.accentColor) {
       applyThemeAndAccentToDom(nextTheme, nextAccent);
     }
-    applyVisualEffectsToDom(nextMica, nextTint);
+    if (nextMica !== state.enableMica || nextTint !== state.themeTintIntensity) {
+      applyVisualEffectsToDom(nextMica, nextTint);
+    }
 
     const nextBgImage =
       !isProtected(AUDIFY_STORAGE_KEYS.customBgImage) &&

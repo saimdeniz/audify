@@ -285,7 +285,7 @@ pub(crate) fn query_sample_tags(
              FROM sample_tags st
              INNER JOIN tags t ON t.id = st.tag_id
              WHERE st.sample_id = ?1
-             ORDER BY t.facet_id ASC, t.sort_order ASC, t.name COLLATE NOCASE ASC",
+             ORDER BY t.name COLLATE NOCASE ASC, t.id ASC",
         )
         .map_err(|e| format!("Query prepare error: {}", e))?;
 

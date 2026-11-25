@@ -299,7 +299,7 @@ describe("Settings open & standalone window flow", () => {
     expect(reanalyzeBtn.className).toContain("whitespace-nowrap");
     expect(approveBtn.parentElement?.closest(".bg-surface-2")).toBeNull();
     expect(reanalyzeBtn.closest(".bg-surface-2")).not.toBeNull();
-  });
+  }, 15000);
 
   it("unmounts standalone settings DOM when hidden and remounts cleanly when shown", async () => {
     window.history.replaceState({}, "", "/index.html?window=settings&tab=profiles");

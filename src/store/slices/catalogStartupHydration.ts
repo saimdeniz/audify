@@ -126,7 +126,8 @@ export function resolveInitialSelectedSample(
         srFilter,
       })
     ) {
-      filteredInitial.unshift(directSavedSample);
+      // Keep the saved sample ready in the waveform deck without unshifting it
+      // into row 0 (which would cause a visible list jump when Stage 2 loads).
       initialSelected = directSavedSample;
     }
   } else if (savedLast.id !== null || savedLast.path !== null) {

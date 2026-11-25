@@ -119,6 +119,16 @@ export interface BpmKeyProgressPayload {
   updated_count: number;
 }
 
+export interface BatchJobProgressPayload {
+  stage_label: string;
+  processed: number;
+  total: number;
+  percentage: number;
+  current_item: string;
+  matched_count: number;
+  done: boolean;
+}
+
 export interface SampleBpmKeyPatch {
   sample_id: number;
   bpm: number | null;

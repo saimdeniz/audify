@@ -26,18 +26,22 @@ export const PortableWorkflowSection: React.FC = () => {
           </div>
         </Reveal>
 
-        {/* 4-Step Connected Portable Architecture Grid */}
+        {/* 4-Step Connected Portable Architecture Grid with dashed studio signal rail */}
         <div className="relative grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute left-[12%] right-[12%] top-[36px] hidden border-t border-dashed border-line-strong lg:block"
+          />
           {messages.workflow.steps.map((step, idx) => {
             const Icon = STEP_ICONS[idx] ?? HardDrive;
             return (
               <Reveal key={step.num} delayMs={idx * 70}>
-                <SpotlightCard className="surface-card-soft flex h-full flex-col rounded-md border border-line p-5 transition-colors hover:border-line-hover">
+                <SpotlightCard className="studio-card-lift surface-card-soft group relative z-10 flex h-full flex-col rounded-md border border-line p-5">
                   <div className="mb-4 flex items-center justify-between">
-                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-[4px] border border-line bg-surface-1 text-accent-fg">
+                    <span className="studio-icon-pop inline-flex h-8 w-8 items-center justify-center rounded-[4px] border border-line bg-surface-1 text-accent-fg">
                       <Icon className="h-4 w-4" />
                     </span>
-                    <span className="font-mono text-[11px] font-semibold text-fg-faint">
+                    <span className="font-mono text-[11px] font-semibold text-fg-faint transition-colors duration-200 group-hover:text-accent-fg">
                       {step.num}
                     </span>
                   </div>

@@ -411,32 +411,59 @@ pub fn detect_audio_genre(path: Option<&Path>, file_name: &str, file_path: &str)
 pub fn extract_embedded_meta_batch(
     items: &[(i64, String, String)],
 ) -> Vec<(i64, EmbeddedAudioMeta)> {
+    extract_embedded_meta_batch_with_progress(items, |_, _, _, _| {})
+}
+
+pub fn extract_embedded_meta_batch_with_progress<F>(
+    items: &[(i64, String, String)],
+    on_progress: F,
+) -> Vec<(i64, EmbeddedAudioMeta)>
+where
+    F: Fn(usize, usize, usize, &str) + Sync,
+{
+    let total = items.len();
+    if total == 0 {
+        return Vec::new();
+    }
+    let step = (total / 120).clamp(16, 250);
+    let processed = std::sync::atomic::AtomicUsize::new(0);
+    let matched = std::sync::atomic::AtomicUsize::new(0);
+
     items
         .par_iter()
         .filter_map(|(id, file_path, file_name)| {
-            if is_unc_or_network_path(file_path) || has_ntfs_ads_colon(file_path) {
-                return None;
-            }
-            let p = Path::new(file_path);
-            let path_opt = if fs::symlink_metadata(p)
-                .map(|m| !m.file_type().is_symlink() && m.is_file())
-                .unwrap_or(false)
-            {
-                Some(p)
-            } else {
+            let result = if is_unc_or_network_path(file_path) || has_ntfs_ads_colon(file_path) {
                 None
+            } else {
+                let p = Path::new(file_path);
+                let path_opt = if fs::symlink_metadata(p)
+                    .map(|m| !m.file_type().is_symlink() && m.is_file())
+                    .unwrap_or(false)
+                {
+                    Some(p)
+                } else {
+                    None
+                };
+                let meta = extract_embedded_audio_meta(path_opt, file_name, file_path);
+                if meta.genre.is_empty()
+                    && meta.genre_mood_tags.is_empty()
+                    && meta.artist.is_empty()
+                    && meta.album.is_empty()
+                    && meta.year.is_empty()
+                {
+                    None
+                } else {
+                    matched.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    Some((*id, meta))
+                }
             };
-            let meta = extract_embedded_audio_meta(path_opt, file_name, file_path);
-            if meta.genre.is_empty()
-                && meta.genre_mood_tags.is_empty()
-                && meta.artist.is_empty()
-                && meta.album.is_empty()
-                && meta.year.is_empty()
-            {
-                None
-            } else {
-                Some((*id, meta))
+
+            let done = processed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if done == 1 || done == total || done.is_multiple_of(step) {
+                let m = matched.load(std::sync::atomic::Ordering::Relaxed);
+                on_progress(done, total, m, file_name);
             }
+            result
         })
         .collect()
 }
@@ -458,4 +485,27 @@ pub fn resolve_metadata_titles_validated(
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_embedded_meta_batch_with_progress;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn batch_metadata_progress_reports_final_item_count() {
+        let items = vec![
+            (1, "C:/NonExistent/Ambient/pad_01.wav".to_string(), "pad_01.wav".to_string()),
+            (2, "C:/NonExistent/Cinematic/boom_02.wav".to_string(), "boom_02.wav".to_string()),
+        ];
+        let max_seen = AtomicUsize::new(0);
+        let calls = AtomicUsize::new(0);
+        let _ = extract_embedded_meta_batch_with_progress(&items, |done, total, _matched, _name| {
+            assert_eq!(total, 2);
+            calls.fetch_add(1, Ordering::Relaxed);
+            max_seen.fetch_max(done, Ordering::Relaxed);
+        });
+        assert!(calls.load(Ordering::Relaxed) >= 1);
+        assert_eq!(max_seen.load(Ordering::Relaxed), 2);
+    }
 }

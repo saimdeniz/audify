@@ -88,6 +88,8 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
         binFilterActive: initBinFilterActive,
         binSampleIds: initBinIds,
         selectedCollectionId: initCol,
+        sortKey: bootSortKey,
+        sortDir: bootSortDir,
       } = get();
 
       const savedLast = loadSavedLastSample();
@@ -96,13 +98,13 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
       const quickStatIds = Array.from(new Set([...initRecentIds, ...initBinIds]));
 
       const needTagsImmediately =
-        standaloneSettings &&
-        (initSettingsTab === "tags" || initSettingsTab === "genres");
+        !standaloneSettings ||
+        initSettingsTab === "tags" ||
+        initSettingsTab === "genres";
       const needGenresImmediately =
-        standaloneSettings && initSettingsTab === "genres";
-      const needCollectionsImmediately = !standaloneSettings
-        ? initCol !== null
-        : initSettingsTab === "collections";
+        !standaloneSettings || initSettingsTab === "genres";
+      const needCollectionsImmediately =
+        !standaloneSettings || initSettingsTab === "collections";
 
       try {
         const [
@@ -143,6 +145,9 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
                 limit: 150,
                 offset: 0,
                 includePeaks: true,
+                ...(bootSortKey && bootSortKey !== "match"
+                  ? { sortKey: bootSortKey, sortDir: bootSortDir }
+                  : {}),
               }).catch(() => [] as SampleItem[]),
           !standaloneSettings && (savedLast.id !== null || savedLast.path !== null)
             ? invoke<SampleItem | null>("get_sample_by_id_or_path", {

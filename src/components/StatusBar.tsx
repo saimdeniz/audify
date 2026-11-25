@@ -8,7 +8,9 @@ import {
   PictureInPicture2,
   Star,
 } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import { useSampleStore } from "../store/useSampleStore";
+import { resolveActiveBackgroundJob } from "../utils/activeBackgroundJob";
 import { beginWindowTitlebarDrag } from "../utils/drag";
 import { CollectionIcon } from "./CollectionIcon";
 import { StatusBarAudioDeviceButton } from "./StatusBarAudioDeviceButton";
@@ -214,12 +216,25 @@ export const TopHeaderBar: React.FC = React.memo(() => {
 export const BottomStatusBar: React.FC = React.memo(() => {
   const hasInitialized = useSampleStore((s) => s.hasInitialized);
   const activeProfileName = useSampleStore((s) => s.activeProfile?.name);
-  const isScanning = useSampleStore((s) => s.isScanning);
-  const scanProgress = useSampleStore((s) => s.scanProgress);
-  const isScanningDuplicates = useSampleStore((s) => s.isScanningDuplicates);
-  const duplicateScanProgress = useSampleStore(
-    (s) => s.duplicateScanProgress
+  const jobSnapshot = useSampleStore(
+    useShallow((s) => ({
+      isScanning: s.isScanning,
+      scanProgress: s.scanProgress,
+      isDetectingGenres: s.isDetectingGenres,
+      genreDetectProgress: s.genreDetectProgress,
+      isApplyingAutoTags: s.isApplyingAutoTags,
+      autoTagProgress: s.autoTagProgress,
+      isAnalyzingBpmKey: s.isAnalyzingBpmKey,
+      bpmKeyProgress: s.bpmKeyProgress,
+      isDownloadingAiModel: s.isDownloadingAiModel,
+      aiDownloadProgress: s.aiDownloadProgress,
+      isAnalyzingAi: s.isAnalyzingAi,
+      aiIndexProgress: s.aiIndexProgress,
+      isScanningDuplicates: s.isScanningDuplicates,
+      duplicateScanProgress: s.duplicateScanProgress,
+    }))
   );
+  const activeJob = resolveActiveBackgroundJob(jobSnapshot);
   const statusMessage = useSampleStore((s) => s.statusMessage);
   const selectedSampleSize = useSampleStore(
     (s) => s.selectedSample?.file_size ?? null
@@ -236,18 +251,15 @@ export const BottomStatusBar: React.FC = React.memo(() => {
   const inAppDragCount = useSampleStore((s) => s.inAppDragSamples.length);
   const setStatusMessage = useSampleStore((s) => s.setStatusMessage);
 
+  const hasActiveJob = activeJob !== null;
   useEffect(() => {
-    if (!statusMessage || isScanning) return;
+    if (!statusMessage || hasActiveJob) return;
     const timer = window.setTimeout(() => {
       setStatusMessage(null);
     }, 3500);
     return () => window.clearTimeout(timer);
-  }, [statusMessage, isScanning, setStatusMessage]);
+  }, [statusMessage, hasActiveJob, setStatusMessage]);
 
-  const pct = scanProgress ? Math.round(scanProgress.percentage) : 0;
-  const dupPct = duplicateScanProgress
-    ? Math.min(100, Math.max(0, Math.round(duplicateScanProgress.percentage)))
-    : 0;
   const activeCol =
     selectedCollectionId !== null
       ? collections.find((c) => c.id === selectedCollectionId)
@@ -260,35 +272,39 @@ export const BottomStatusBar: React.FC = React.memo(() => {
       className="h-[24px] bg-surface-1 border-t border-line px-3 flex items-center justify-between font-mono tabular-nums text-[11px] text-fg-2 shrink-0 select-none"
     >
       <div className="flex items-center space-x-3 min-w-0 truncate">
-        {isScanning && scanProgress ? (
-          <div className="flex items-center space-x-2">
-            <span className="text-accent-fg font-semibold">
-              Scanning [{scanProgress.processed}/{scanProgress.total}] ({pct}%)
+        {activeJob ? (
+          <div
+            data-testid="main-job-progress-bar"
+            className="flex items-center space-x-2 min-w-0"
+          >
+            <span className="text-accent-fg font-semibold shrink-0">
+              {activeJob.label}
+              {activeJob.countLabel ? ` [${activeJob.countLabel}]` : ""} (
+              {activeJob.percentage}%)
             </span>
-            <div className="w-[140px] h-[6px] bg-surface-0 border border-line rounded-2xs overflow-hidden">
+            <div className="w-[140px] h-[6px] bg-surface-0 border border-line rounded-2xs overflow-hidden shrink-0">
               <div
-                className="h-full bg-accent"
-                style={{ width: `${pct}%` }}
+                className={`h-full bg-accent transition-[width] duration-75 ${
+                  activeJob.indeterminate ? "animate-pulse" : ""
+                }`}
+                style={{
+                  width: activeJob.indeterminate
+                    ? "28%"
+                    : `${activeJob.percentage}%`,
+                }}
               />
             </div>
-            <span className="text-fg-3 truncate max-w-[320px]">
-              {scanProgress.current_file}
-            </span>
-          </div>
-        ) : isScanningDuplicates && duplicateScanProgress ? (
-          <div className="flex items-center space-x-2">
-            <span className="text-accent-fg font-semibold">
-              {duplicateScanProgress.stage_label} ({dupPct}%)
-            </span>
-            <div className="w-[140px] h-[6px] bg-surface-0 border border-line rounded-2xs overflow-hidden">
-              <div
-                className="h-full bg-accent transition-[width] duration-75"
-                style={{ width: `${dupPct}%` }}
-              />
-            </div>
-            {duplicateScanProgress.current_file && (
-              <span className="text-fg-3 truncate max-w-[280px]">
-                {duplicateScanProgress.current_file}
+            {activeJob.detail && (
+              <span className="text-fg-3 truncate max-w-[300px]">
+                {activeJob.detail}
+              </span>
+            )}
+            {activeJob.activeCount > 1 && (
+              <span
+                className="px-1 rounded-2xs bg-accent-soft border border-accent/40 text-accent-fg text-[9.5px] font-semibold shrink-0"
+                title={`${activeJob.activeCount} background tasks running`}
+              >
+                +{activeJob.activeCount - 1}
               </span>
             )}
           </div>

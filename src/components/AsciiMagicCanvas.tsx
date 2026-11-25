@@ -36,19 +36,23 @@ export const AsciiMagicCanvas: React.FC<AsciiMagicCanvasProps> = React.memo(
       height: 0,
       dpr: 1,
     });
+    const blurTier = blurPx >= 8 ? 2 : blurPx >= 3 ? 1 : 0;
     const configRef = useRef({
       slug,
       look,
       motionSpeed,
       themeMode,
       fit,
-      blurPx,
+      blurTier,
     });
-    configRef.current = { slug, look, motionSpeed, themeMode, fit, blurPx };
+    configRef.current = { slug, look, motionSpeed, themeMode, fit, blurTier };
     const warnedSlugErrorRef = useRef<string | null>(null);
     const sandboxRetainedRef = useRef(false);
     const idleReleaseTimerRef = useRef<number | null>(null);
     const resumeLoopRef = useRef<(() => void) | null>(null);
+    const syncSizeRef = useRef<(() => boolean) | null>(null);
+    const redrawRafIdRef = useRef<number | null>(null);
+    const prevBlurTierRef = useRef<number>(blurTier);
 
     const ensureSandboxRetained = () => {
       if (idleReleaseTimerRef.current !== null) {
@@ -90,6 +94,8 @@ export const AsciiMagicCanvas: React.FC<AsciiMagicCanvasProps> = React.memo(
         fit: cfg.fit,
       });
     };
+    const paintCurrentRef = useRef(paintCurrent);
+    paintCurrentRef.current = paintCurrent;
 
     const clearCanvas = () => {
       const canvas = canvasRef.current;
@@ -101,40 +107,88 @@ export const AsciiMagicCanvas: React.FC<AsciiMagicCanvasProps> = React.memo(
       ctx.clearRect(0, 0, width, height);
     };
 
-    // Track canvas CSS + device-pixel geometry with ResizeObserver.
+    const scheduleImmediateRedraw = () => {
+      if (redrawRafIdRef.current !== null) return;
+      if (typeof requestAnimationFrame === "function") {
+        redrawRafIdRef.current = requestAnimationFrame(() => {
+          redrawRafIdRef.current = null;
+          paintCurrentRef.current();
+        });
+      } else {
+        paintCurrentRef.current();
+      }
+    };
+
+    // Track canvas CSS + device-pixel geometry with ResizeObserver (mount/unmount only).
     useEffect(() => {
       const canvas = canvasRef.current;
       if (!canvas) return;
 
-      const updateSize = () => {
-        const rect = canvas.getBoundingClientRect();
-        const width = Math.max(0, Math.round(rect.width));
-        const height = Math.max(0, Math.round(rect.height));
+      const applyBackingSize = (cssWidth: number, cssHeight: number): boolean => {
+        const width = Math.max(0, Math.round(cssWidth));
+        const height = Math.max(0, Math.round(cssHeight));
         const rawDpr = window.devicePixelRatio || 1;
-        const blur = configRef.current.blurPx;
+        const tier = configRef.current.blurTier;
         const baseDpr =
           width > 640 ? Math.min(1.25, rawDpr) : Math.min(1.5, rawDpr);
         const dpr =
-          blur >= 6
+          tier === 2
             ? Math.min(0.5, baseDpr)
-            : blur >= 2
+            : tier === 1
               ? Math.min(0.75, baseDpr)
               : baseDpr;
         const targetW = Math.max(1, Math.round(width * dpr));
         const targetH = Math.max(1, Math.round(height * dpr));
+        const prev = sizeRef.current;
+        if (
+          prev.width === width &&
+          prev.height === height &&
+          prev.dpr === dpr &&
+          canvas.width === targetW &&
+          canvas.height === targetH
+        ) {
+          return false;
+        }
         if (canvas.width !== targetW || canvas.height !== targetH) {
           canvas.width = targetW;
           canvas.height = targetH;
         }
         sizeRef.current = { width, height, dpr };
-        paintCurrent();
+        return true;
+      };
+
+      syncSizeRef.current = () => {
+        const { width, height } = sizeRef.current;
+        if (width > 0 && height > 0) {
+          return applyBackingSize(width, height);
+        }
+        const rect = canvas.getBoundingClientRect();
+        return applyBackingSize(rect.width, rect.height);
       };
 
       ensureSandboxRetained();
-      updateSize();
-      const observer = new ResizeObserver(updateSize);
+      const initialRect = canvas.getBoundingClientRect();
+      applyBackingSize(initialRect.width, initialRect.height);
+      paintCurrent();
+
+      const observer = new ResizeObserver((entries) => {
+        const entry = entries[0];
+        if (!entry) return;
+        const changed = applyBackingSize(
+          entry.contentRect.width,
+          entry.contentRect.height
+        );
+        if (changed) {
+          scheduleImmediateRedraw();
+        }
+      });
       observer.observe(canvas);
       return () => {
+        syncSizeRef.current = null;
+        if (redrawRafIdRef.current !== null) {
+          cancelAnimationFrame(redrawRafIdRef.current);
+          redrawRafIdRef.current = null;
+        }
         observer.disconnect();
         if (idleReleaseTimerRef.current !== null) {
           window.clearTimeout(idleReleaseTimerRef.current);
@@ -146,7 +200,23 @@ export const AsciiMagicCanvas: React.FC<AsciiMagicCanvasProps> = React.memo(
           sandboxRetainedRef.current = false;
         }
       };
-    }, [blurPx]);
+    }, []);
+
+    // Settle backing-store DPR smoothly across discrete blur tiers without
+    // tearing down ResizeObserver, sandbox retention, or warm glyph caches.
+    useEffect(() => {
+      if (prevBlurTierRef.current === blurTier) return;
+      prevBlurTierRef.current = blurTier;
+      const delayMs = blurTier === 0 ? 80 : 140;
+      const timer = window.setTimeout(() => {
+        if (syncSizeRef.current?.()) {
+          scheduleImmediateRedraw();
+        }
+      }, delayMs);
+      return () => {
+        window.clearTimeout(timer);
+      };
+    }, [blurTier]);
 
     // Load active piece in sandbox & subscribe to install updates for this slug.
     useEffect(() => {

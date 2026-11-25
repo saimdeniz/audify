@@ -23,6 +23,7 @@ import {
   ASCII_MAGIC_LOOK_STORAGE_KEY,
   ASCII_MAGIC_SLUG_STORAGE_KEY,
   AUDIFY_STORAGE_KEYS,
+  markLocalKeyEdited,
   normalizeAsciiMagicFit,
   normalizeAsciiMagicLook,
   normalizeAsciiMagicSlug,
@@ -40,6 +41,7 @@ export interface BackdropWallpaperHelpers {
   getFallbackManualAccent: () => string;
   syncAutoAccentFromBackdrop: () => void;
   scheduleVisualPersist: () => void;
+  queueLiveVisualSync: (patch: Record<string, unknown>) => void;
 }
 
 export function createBackdropWallpaperActions(
@@ -52,6 +54,7 @@ export function createBackdropWallpaperActions(
     getFallbackManualAccent,
     syncAutoAccentFromBackdrop,
     scheduleVisualPersist,
+    queueLiveVisualSync,
   } = helpers;
 
   return {
@@ -175,11 +178,10 @@ export function createBackdropWallpaperActions(
 
     setCustomBgBlur: (customBgBlur: number) => {
       const clamped = Math.max(0, Math.min(48, Math.round(customBgBlur)));
-      safeSetItem(AUDIFY_STORAGE_KEYS.customBgBlur, String(clamped), {
-        broadcast: false,
-      });
+      if (get().customBgBlur === clamped) return;
+      markLocalKeyEdited(AUDIFY_STORAGE_KEYS.customBgBlur);
       set({ customBgBlur: clamped });
-      postCrossWindowSync("live-visual", { customBgBlur: clamped });
+      queueLiveVisualSync({ customBgBlur: clamped });
       scheduleVisualPersist();
     },
 
@@ -188,11 +190,10 @@ export function createBackdropWallpaperActions(
         0,
         Math.min(1, Number(customBgOpacity.toFixed(2)))
       );
-      safeSetItem(AUDIFY_STORAGE_KEYS.customBgOpacity, String(clamped), {
-        broadcast: false,
-      });
+      if (get().customBgOpacity === clamped) return;
+      markLocalKeyEdited(AUDIFY_STORAGE_KEYS.customBgOpacity);
       set({ customBgOpacity: clamped });
-      postCrossWindowSync("live-visual", { customBgOpacity: clamped });
+      queueLiveVisualSync({ customBgOpacity: clamped });
       scheduleVisualPersist();
     },
 

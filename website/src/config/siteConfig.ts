@@ -36,5 +36,6 @@ export const SITE_CONFIG = {
   githubRepoUrl: "https://github.com/saimdeniz/audify",
   licenseUrl: "https://github.com/saimdeniz/audify/blob/main/LICENSE",
   thirdPartyNoticesUrl: "https://github.com/saimdeniz/audify/blob/main/THIRD_PARTY_NOTICES.md",
+  buildWorkflowUrl: "https://github.com/saimdeniz/audify/blob/main/.github/workflows/build-and-release.yml",
   sha256: "737C78929EF2E787FF51C62BEF60D7D9CEBB3688F3686F56A73EC4CCB0AB7623",
 } as const;

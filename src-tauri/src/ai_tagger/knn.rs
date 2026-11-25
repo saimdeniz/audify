@@ -451,6 +451,7 @@ pub fn run_knn_tag_suggestions(
     Ok(AiAnalysisSummary {
         processed,
         indexed: processed,
+        skipped_silent: 0,
         suggestions_added,
         tags_auto_applied,
         canceled,

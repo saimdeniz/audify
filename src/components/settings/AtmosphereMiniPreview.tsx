@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import { resolveAtmosphereStyle } from "../../constants/atmosphereStyles";
 import {
   getAsciiMagicPreview,
@@ -181,6 +181,10 @@ export const AtmosphereMiniPreview: React.FC = React.memo(() => {
       ? "bg-accent"
       : "bg-fg-3";
 
+  const rawPreviewBlurId = useId();
+  const previewBlurFilterId = `audify-preview-blur-${rawPreviewBlurId.replace(/[^a-zA-Z0-9_-]/g, "")}`;
+  const previewBlurPx = hasBackdrop && customBgBlur > 0 ? Math.min(customBgBlur, 14) : 0;
+
   return (
     <div className="w-full rounded-sm border border-line bg-surface-0 overflow-hidden flex flex-col select-none shadow-xs">
       {/* Static Snapshot Viewport Area (16:9 monitor ratio) */}
@@ -188,10 +192,39 @@ export const AtmosphereMiniPreview: React.FC = React.memo(() => {
         className="relative aspect-video w-full overflow-hidden bg-surface-0"
         style={{ clipPath: "inset(0)", isolation: "isolate" }}
       >
+        {previewBlurPx > 0 && (
+          <svg
+            aria-hidden="true"
+            focusable="false"
+            className="absolute w-0 h-0 overflow-hidden pointer-events-none"
+          >
+            <defs>
+              <filter
+                id={previewBlurFilterId}
+                x="0%"
+                y="0%"
+                width="100%"
+                height="100%"
+                colorInterpolationFilters="sRGB"
+              >
+                <feGaussianBlur
+                  in="SourceGraphic"
+                  stdDeviation={previewBlurPx}
+                  edgeMode="duplicate"
+                />
+              </filter>
+            </defs>
+          </svg>
+        )}
         {showAscii || showMagic ? (
           <div
             className="absolute inset-0 pointer-events-none"
-            style={{ opacity: customBgOpacity }}
+            style={{
+              opacity: customBgOpacity,
+              filter:
+                previewBlurPx > 0 ? `url(#${previewBlurFilterId})` : undefined,
+              transform: previewBlurPx > 0 ? "translateZ(0)" : undefined,
+            }}
           >
             <canvas
               ref={asciiCanvasRef}
@@ -205,7 +238,12 @@ export const AtmosphereMiniPreview: React.FC = React.memo(() => {
             alt=""
             decoding="async"
             className="absolute inset-0 w-full h-full object-cover pointer-events-none"
-            style={{ opacity: customBgOpacity }}
+            style={{
+              opacity: customBgOpacity,
+              filter:
+                previewBlurPx > 0 ? `url(#${previewBlurFilterId})` : undefined,
+              transform: previewBlurPx > 0 ? "translateZ(0)" : undefined,
+            }}
           />
         ) : (
           themeTintIntensity > 0 && (
@@ -220,16 +258,6 @@ export const AtmosphereMiniPreview: React.FC = React.memo(() => {
               }}
             />
           )
-        )}
-
-        {hasBackdrop && customBgBlur > 0 && (
-          <div
-            className="absolute inset-0 pointer-events-none"
-            style={{
-              backdropFilter: `blur(${Math.min(customBgBlur, 14)}px)`,
-              WebkitBackdropFilter: `blur(${Math.min(customBgBlur, 14)}px)`,
-            }}
-          />
         )}
 
         {/* Mini Audify Shell Wireframe (Frosted Frame Chrome + Clear Table Stage) */}

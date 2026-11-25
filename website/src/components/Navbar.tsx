@@ -61,12 +61,18 @@ export const Navbar: React.FC<NavbarProps> = ({ version }) => {
   ];
 
   return (
-    <header className="fixed inset-x-0 top-3 z-40 px-3 sm:px-6">
+    <header
+      className={`fixed inset-x-0 z-40 px-3 transition-all duration-300 ease-out sm:px-6 ${
+        scrolled ? "top-2" : "top-3.5"
+      }`}
+    >
       <div className="mx-auto flex max-w-[1200px] flex-col gap-2">
         <nav
           aria-label="Primary navigation"
-          className={`surface-glass-strong flex h-12 items-center justify-between rounded-lg border px-3 transition-shadow duration-150 ${
-            scrolled ? "border-line-strong shadow-lg" : "border-line"
+          className={`surface-glass-strong flex items-center justify-between rounded-lg border px-3 transition-all duration-300 ease-out ${
+            scrolled
+              ? "nav-glass-scrolled h-11 border-line-strong shadow-xl"
+              : "h-[52px] border-line"
           }`}
         >
           {/* Brand */}
@@ -86,7 +92,7 @@ export const Navbar: React.FC<NavbarProps> = ({ version }) => {
             </span>
           </a>
 
-          {/* Center Anchor Links */}
+          {/* Center Anchor Links with directional sweep underline */}
           <div className="hidden items-center gap-0.5 lg:flex">
             {NAV_SECTIONS.map((sec) => {
               const isActive = activeId === sec.id;
@@ -94,10 +100,11 @@ export const Navbar: React.FC<NavbarProps> = ({ version }) => {
                 <a
                   key={sec.id}
                   href={`#${sec.id}`}
-                  className={`rounded-sm px-2.5 py-1.5 text-[12px] font-medium transition-colors duration-75 ${
+                  data-active={isActive ? "true" : "false"}
+                  className={`nav-link-sweep rounded-sm px-2.5 py-1.5 text-[12px] font-medium transition-colors duration-150 ${
                     isActive
-                      ? "bg-accent-soft text-accent-fg"
-                      : "text-fg-3 hover:bg-surface-hover hover:text-fg"
+                      ? "text-accent-fg"
+                      : "text-fg-3 hover:text-fg"
                   }`}
                 >
                   {messages.nav[sec.key]}

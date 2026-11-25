@@ -2,6 +2,7 @@ pub mod fts_query;
 pub mod lookup;
 pub mod mutations;
 pub mod query;
+pub mod sort;
 
 pub use lookup::*;
 pub use mutations::*;

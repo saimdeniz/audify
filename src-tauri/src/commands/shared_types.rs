@@ -81,6 +81,17 @@ pub struct BpmKeyProgressPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchJobProgressPayload {
+    pub stage_label: String,
+    pub processed: usize,
+    pub total: usize,
+    pub percentage: f64,
+    pub current_item: String,
+    pub matched_count: usize,
+    pub done: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SampleBpmKeyPatch {
     pub sample_id: i64,
     pub bpm: Option<f64>,

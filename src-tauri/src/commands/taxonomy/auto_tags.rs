@@ -1,11 +1,13 @@
-use crate::commands::{resolve_or_create_auto_tag, AutoTagPreviewResult};
+use crate::commands::{
+    resolve_or_create_auto_tag, AutoTagPreviewResult, BatchJobProgressPayload,
+};
 use crate::db::{
     get_active_profile_id, AppState, AutoTagRule, SAMPLE_TAGS_FTS_TRIGGERS_SQL,
 };
 use crate::scanner::{detect_is_loop, match_auto_tags, parse_rules_from_settings};
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 pub(super) struct SampleAutoTagInput {
     pub id: i64,
@@ -95,11 +97,25 @@ pub(super) fn compute_auto_tag_plan(
     settings_json: &str,
     samples: Vec<SampleAutoTagInput>,
 ) -> PreparedAutoTagPlan {
+    compute_auto_tag_plan_with_progress(active_id, settings_json, samples, |_, _, _, _| {})
+}
+
+fn compute_auto_tag_plan_with_progress<F>(
+    active_id: i64,
+    settings_json: &str,
+    samples: Vec<SampleAutoTagInput>,
+    mut on_progress: F,
+) -> PreparedAutoTagPlan
+where
+    F: FnMut(usize, usize, usize, &str),
+{
     let (rules, categories) = parse_rules_from_settings(settings_json);
-    let mut computed = Vec::with_capacity(samples.len());
+    let total = samples.len();
+    let step = (total / 120).clamp(16, 250);
+    let mut computed = Vec::with_capacity(total);
     let mut assigned_count: usize = 0;
 
-    for sample in samples {
+    for (idx, sample) in samples.into_iter().enumerate() {
         let (effective_is_loop, new_is_loop) = if sample.loop_is_manual {
             (sample.old_is_loop, None)
         } else {
@@ -126,6 +142,10 @@ pub(super) fn compute_auto_tag_plan(
                 tags,
             });
         }
+        let done = idx + 1;
+        if done == 1 || done == total || done.is_multiple_of(step) {
+            on_progress(done, total, assigned_count, &sample.file_name);
+        }
     }
 
     PreparedAutoTagPlan {
@@ -136,7 +156,19 @@ pub(super) fn compute_auto_tag_plan(
     }
 }
 
+#[cfg(test)]
 fn commit_auto_tag_plan(conn: &mut Connection, plan: &PreparedAutoTagPlan) -> Result<usize, String> {
+    commit_auto_tag_plan_with_progress(conn, plan, |_, _, _, _| {})
+}
+
+fn commit_auto_tag_plan_with_progress<F>(
+    conn: &mut Connection,
+    plan: &PreparedAutoTagPlan,
+    mut on_progress: F,
+) -> Result<usize, String>
+where
+    F: FnMut(&str, usize, usize, f64),
+{
     let tx = conn
         .transaction()
         .map_err(|e| format!("Failed to start database transaction: {}", e))?;
@@ -179,6 +211,9 @@ fn commit_auto_tag_plan(conn: &mut Connection, plan: &PreparedAutoTagPlan) -> Re
     tx.execute(&delete_sql, params![plan.active_id])
         .map_err(|e| e.to_string())?;
 
+    let computed_total = plan.computed.len();
+    let save_step = (computed_total / 25).clamp(16, 250);
+    on_progress("Saving tag links", 0, computed_total, 72.0);
     {
         let mut update_loop_stmt = tx
             .prepare("UPDATE samples SET is_loop = ?1 WHERE id = ?2 AND loop_is_manual = 0")
@@ -190,7 +225,7 @@ fn commit_auto_tag_plan(conn: &mut Connection, plan: &PreparedAutoTagPlan) -> Re
             )
             .map_err(|e| e.to_string())?;
 
-        for item in &plan.computed {
+        for (idx, item) in plan.computed.iter().enumerate() {
             if let Some(detected) = item.new_is_loop {
                 let _ = update_loop_stmt.execute(params![detected, item.sample_id]);
             }
@@ -200,12 +235,18 @@ fn commit_auto_tag_plan(conn: &mut Connection, plan: &PreparedAutoTagPlan) -> Re
                     let _ = insert_stmt.execute(params![item.sample_id, tag_id]);
                 }
             }
+            let done_idx = idx + 1;
+            if done_idx == computed_total || done_idx.is_multiple_of(save_step) {
+                let pct = 72.0 + (done_idx as f64 / computed_total.max(1) as f64) * 20.0;
+                on_progress("Saving tag links", done_idx, computed_total, pct);
+            }
         }
     }
 
     // Prune ONLY auto-generated orphan leaf tags (protecting manual tags, system roots, and parents).
     let _ = crate::db::prune_orphan_auto_tags(&tx);
 
+    on_progress("Updating search index", computed_total, computed_total, 95.0);
     let fts_sql = format!(
         "UPDATE samples_fts
          SET tags_text = {}
@@ -233,9 +274,34 @@ pub(crate) fn apply_auto_tag_rules_with_conn(conn: &mut Connection) -> Result<us
 }
 
 #[tauri::command]
-pub async fn apply_auto_tag_rules_to_library(state: State<'_, AppState>) -> Result<usize, String> {
+pub async fn apply_auto_tag_rules_to_library(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
     let state_cloned = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let app_worker = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let emit_progress = |stage: &str,
+                             processed: usize,
+                             total: usize,
+                             percentage: f64,
+                             current_item: &str,
+                             matched_count: usize,
+                             done: bool| {
+            let _ = app_worker.emit(
+                "auto-tag-progress",
+                BatchJobProgressPayload {
+                    stage_label: stage.to_string(),
+                    processed,
+                    total,
+                    percentage: percentage.clamp(0.0, 100.0),
+                    current_item: current_item.to_string(),
+                    matched_count,
+                    done,
+                },
+            );
+        };
+
         let (active_id, settings_json, samples) = match state_cloned.acquire_read_conn() {
             Ok(read_conn) => read_auto_tag_inputs(&read_conn)?,
             Err(_) => {
@@ -243,19 +309,60 @@ pub async fn apply_auto_tag_rules_to_library(state: State<'_, AppState>) -> Resu
                 read_auto_tag_inputs(&conn)?
             }
         };
-        let plan = compute_auto_tag_plan(active_id, &settings_json, samples);
+        let total = samples.len();
+        emit_progress("Matching rules", 0, total, 0.0, "", 0, false);
+
+        let plan = compute_auto_tag_plan_with_progress(
+            active_id,
+            &settings_json,
+            samples,
+            |processed, tot, matched, file_name| {
+                let pct = if tot > 0 {
+                    (processed as f64 / tot as f64) * 70.0
+                } else {
+                    70.0
+                };
+                emit_progress("Matching rules", processed, tot, pct, file_name, matched, false);
+            },
+        );
+        let matched_total = plan.assigned_count;
+
         let mut conn = state_cloned.lock_db();
         let snapshot =
             super::auto_tags_undo::capture_auto_tag_undo_snapshot(&conn, plan.active_id)?;
-        let assigned = commit_auto_tag_plan(&mut conn, &plan)?;
+        let assigned = commit_auto_tag_plan_with_progress(
+            &mut conn,
+            &plan,
+            |stage, processed, tot, pct| {
+                emit_progress(stage, processed, tot, pct, "", matched_total, false);
+            },
+        )?;
         *state_cloned
             .last_auto_tag_undo
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some(snapshot);
+
+        emit_progress("Rules applied", total, total, 100.0, "", assigned, true);
         Ok(assigned)
     })
     .await
-    .map_err(|e| format!("Auto-tag worker error: {}", e))?
+    .map_err(|e| format!("Auto-tag worker error: {}", e))?;
+
+    if result.is_err() {
+        let _ = app.emit(
+            "auto-tag-progress",
+            BatchJobProgressPayload {
+                stage_label: "Apply rules failed".to_string(),
+                processed: 0,
+                total: 0,
+                percentage: 100.0,
+                current_item: String::new(),
+                matched_count: 0,
+                done: true,
+            },
+        );
+    }
+    result
 }
 
 fn preview_auto_tag_rule_with_conn(
@@ -726,5 +833,63 @@ mod tests {
             )
             .unwrap();
         assert_eq!(manual_preserved, 1, "manual tag untouched across apply & undo");
+    }
+
+    #[test]
+    fn auto_tag_plan_and_commit_emit_monotonic_progress_stages() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        init_schema_on_conn(&conn).expect("init schema");
+        conn.execute(
+            "INSERT INTO libraries (id, path, name, is_global) VALUES (1, 'C:/SFX', 'SFX', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO samples (id, library_id, file_path, file_name, extension, duration_ms)
+             VALUES (1, 1, 'C:/SFX/whoosh_01.wav', 'whoosh_01.wav', 'wav', 500),
+                    (2, 1, 'C:/SFX/impact_02.wav', 'impact_02.wav', 'wav', 500)",
+            [],
+        )
+        .unwrap();
+        let rules_json = serde_json::json!({
+            "autoTagCategories": [],
+            "autoTagRules": [
+                {
+                    "id": "r1",
+                    "tag_name": "Whoosh",
+                    "tag_color": "#F59E0B",
+                    "keywords": ["whoosh"],
+                    "enabled": true,
+                    "include_paths": [],
+                    "exclude_paths": []
+                }
+            ]
+        })
+        .to_string();
+        conn.execute(
+            "UPDATE profiles SET settings_json = ?1 WHERE id = 1",
+            params![rules_json],
+        )
+        .unwrap();
+
+        let (active_id, settings_json, samples) = read_auto_tag_inputs(&conn).unwrap();
+        let mut match_events: Vec<(usize, usize)> = Vec::new();
+        let plan = compute_auto_tag_plan_with_progress(
+            active_id,
+            &settings_json,
+            samples,
+            |done, total, _matched, _name| match_events.push((done, total)),
+        );
+        assert!(!match_events.is_empty());
+        assert_eq!(match_events.last().copied(), Some((2, 2)));
+
+        let mut commit_stages: Vec<(String, f64)> = Vec::new();
+        let assigned = commit_auto_tag_plan_with_progress(&mut conn, &plan, |stage, _, _, pct| {
+            commit_stages.push((stage.to_string(), pct));
+        })
+        .unwrap();
+        assert_eq!(assigned, 1);
+        assert!(commit_stages.iter().any(|(s, _)| s == "Saving tag links"));
+        assert!(commit_stages.iter().any(|(s, p)| s == "Updating search index" && *p >= 95.0));
     }
 }

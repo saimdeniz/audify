@@ -291,3 +291,131 @@ input[type="range"].studio-slider::-moz-range-thumb {
 .focus-frame-ring {
   animation: focus-reticle-pulse 2.6s ease-in-out infinite;
 }
+
+/* =====================================================================
+   KINETIC MICRO-INTERACTIONS (unified cubic-bezier(0.22, 1, 0.36, 1))
+   ===================================================================== */
+:root {
+  --studio-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* 1. Directional nav underline sweep (origin flips right -> left on hover) */
+.nav-link-sweep {
+  position: relative;
+}
+.nav-link-sweep::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 3px;
+  height: 1.5px;
+  border-radius: 1px;
+  background: rgb(var(--accent-rgb));
+  transform: scaleX(0);
+  transform-origin: right center;
+  transition: transform 0.32s var(--studio-ease);
+}
+.nav-link-sweep:hover::after,
+.nav-link-sweep[data-active="true"]::after {
+  transform: scaleX(1);
+  transform-origin: left center;
+}
+
+/* 2. Magnetic CTA smooth spring-back */
+.magnetic-cta {
+  transition:
+    transform 0.24s var(--studio-ease),
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease,
+    box-shadow 0.24s var(--studio-ease);
+  will-change: transform;
+}
+
+/* 3. Hero signal underline draw */
+@keyframes signal-line-draw {
+  0% {
+    opacity: 0;
+    transform: scaleX(0.18);
+  }
+  25% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+.hero-signal-underline {
+  transform-origin: left center;
+  animation: signal-line-draw 0.72s var(--studio-ease) 0.28s both;
+}
+
+/* 4. Card hover lift + internal icon pop choreography */
+.studio-card-lift {
+  transition:
+    transform 0.32s var(--studio-ease),
+    border-color 0.28s var(--studio-ease),
+    box-shadow 0.32s var(--studio-ease);
+}
+.studio-card-lift:hover {
+  transform: translateY(-4px);
+  border-color: rgb(var(--accent-rgb) / 0.45);
+  box-shadow: 0 12px 30px -14px rgba(0, 0, 0, 0.45);
+}
+.studio-icon-pop {
+  transition:
+    transform 0.32s var(--studio-ease),
+    background-color 0.24s var(--studio-ease),
+    border-color 0.24s var(--studio-ease);
+}
+.group:hover .studio-icon-pop {
+  transform: translateY(-1px) scale(1.07);
+  background-color: var(--signal-accent-bg);
+  border-color: rgb(var(--accent-rgb) / 0.55);
+}
+
+/* 5. Lightbox modal pop-in */
+@keyframes modal-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.modal-pop-in {
+  animation: modal-pop-in 0.3s var(--studio-ease) both;
+}
+
+/* 6. Sticky navbar enhanced glass saturation */
+.nav-glass-scrolled {
+  backdrop-filter: saturate(1.55) blur(16px);
+  -webkit-backdrop-filter: saturate(1.55) blur(16px);
+}
+
+/* 7. Footer subtle horizontal nudge */
+.footer-link-nudge {
+  display: inline-block;
+  transition:
+    transform 0.26s var(--studio-ease),
+    color 0.16s ease;
+}
+.footer-link-nudge:hover {
+  transform: translateX(3px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-signal-underline,
+  .modal-pop-in {
+    animation: none;
+  }
+  .studio-card-lift:hover,
+  .group:hover .studio-icon-pop,
+  .footer-link-nudge:hover {
+    transform: none;
+  }
+}

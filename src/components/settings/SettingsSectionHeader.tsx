@@ -89,6 +89,11 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
   const librariesCount = libraries.length;
   const totalSamplesCount = useSampleStore((s) => s.samples.length);
   const isScanning = useSampleStore((s) => s.isScanning);
+  const scanPct = useSampleStore((s) =>
+    s.isScanning && s.scanProgress
+      ? Math.min(100, Math.max(0, Math.round(s.scanProgress.percentage)))
+      : null
+  );
   const collections = useSampleStore((s) => s.collections);
   const collectionTemplatesCount = useSampleStore(
     (s) => s.collectionTemplates.length
@@ -97,12 +102,26 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
   const autoTagRules = useSampleStore((s) => s.autoTagRules);
   const autoTagCategories = useSampleStore((s) => s.autoTagCategories);
   const autoTagRulesDirty = useSampleStore((s) => s.autoTagRulesDirty);
+  const isApplyingAutoTags = useSampleStore((s) => s.isApplyingAutoTags);
+  const autoTagPct = useSampleStore((s) =>
+    s.isApplyingAutoTags && s.autoTagProgress
+      ? Math.min(100, Math.max(0, Math.round(s.autoTagProgress.percentage)))
+      : null
+  );
   const autoTagImpactPreview = useSampleStore((s) => s.autoTagImpactPreview);
   const canUndoAutoTagApply = useSampleStore((s) => s.canUndoAutoTagApply);
   const tagFacets = useSampleStore((s) => s.tagFacets);
   const tags = useSampleStore((s) => s.tags);
   const genres = useSampleStore((s) => s.genres);
   const isDetectingGenres = useSampleStore((s) => s.isDetectingGenres);
+  const genreDetectPct = useSampleStore((s) =>
+    s.isDetectingGenres && s.genreDetectProgress
+      ? Math.min(
+          100,
+          Math.max(0, Math.round(s.genreDetectProgress.percentage))
+        )
+      : null
+  );
   const licenseGroupsCount = useSampleStore((s) => s.licenseGroups.length);
   const enableLicensesSystem = useSampleStore((s) => s.enableLicensesSystem);
   const trashedCount = useSampleStore((s) => s.trashedCount);
@@ -125,7 +144,6 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
   );
   const resetShortcuts = useSampleStore((s) => s.resetShortcuts);
 
-  const [isApplyingRules, setIsApplyingRules] = useState(false);
   const [isUndoingRules, setIsUndoingRules] = useState(false);
 
   useEffect(() => {
@@ -292,13 +310,19 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
               type="button"
               onClick={() => void rebuildAllLibraries()}
               disabled={isScanning || librariesCount === 0}
-              className="h-[24px] px-2.5 bg-surface-2 hover:bg-surface-3 hover:border-accent border border-line text-fg-2 hover:text-fg rounded-xs inline-flex items-center space-x-1.5 text-[11px] font-medium disabled:opacity-40 transition-colors cursor-pointer"
+              className="h-[24px] px-2.5 bg-surface-2 hover:bg-surface-3 hover:border-accent border border-line text-fg-2 hover:text-fg rounded-xs inline-flex items-center space-x-1.5 text-[11px] font-medium tabular-nums disabled:opacity-60 transition-colors cursor-pointer"
               title="Rebuild all 600-bin waveforms & re-apply auto-tags"
             >
               <RotateCcw
-                className={`w-3 h-3 shrink-0 ${isScanning ? "animate-spin" : ""}`}
+                className={`w-3 h-3 shrink-0 ${isScanning ? "animate-spin text-accent-fg" : ""}`}
               />
-              <span>Sync all</span>
+              <span>
+                {isScanning
+                  ? scanPct !== null && scanPct > 0
+                    ? `Syncing ${scanPct}%`
+                    : "Syncing..."
+                  : "Sync all"}
+              </span>
             </button>
             <button
               type="button"
@@ -349,7 +373,7 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
             {canUndoAutoTagApply && (
               <button
                 type="button"
-                disabled={isUndoingRules || isApplyingRules}
+                disabled={isUndoingRules || isApplyingAutoTags}
                 onClick={async () => {
                   try {
                     setIsUndoingRules(true);
@@ -367,17 +391,14 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
             )}
             <button
               type="button"
-              onClick={async () => {
-                try {
-                  setIsApplyingRules(true);
-                  await reapplyAutoTagRules();
-                } finally {
-                  setIsApplyingRules(false);
-                }
-              }}
-              disabled={isApplyingRules || isUndoingRules}
-              className={`h-[24px] px-2.5 inline-flex items-center space-x-1.5 bg-accent hover:bg-accent-hover text-accent-on rounded-xs text-[11px] font-semibold transition-colors disabled:opacity-50 shrink-0 shadow-xs cursor-pointer ${
-                autoTagRulesDirty ? "ring-1 ring-warn" : ""
+              onClick={() => void reapplyAutoTagRules()}
+              disabled={isApplyingAutoTags || isUndoingRules}
+              className={`h-[24px] px-2.5 inline-flex items-center space-x-1.5 rounded-xs text-[11px] font-semibold tabular-nums transition-colors shrink-0 cursor-pointer ${
+                isApplyingAutoTags
+                  ? "bg-accent-soft border border-accent text-accent-fg"
+                  : `bg-accent hover:bg-accent-hover text-accent-on shadow-xs disabled:opacity-50 ${
+                      autoTagRulesDirty ? "ring-1 ring-warn" : ""
+                    }`
               }`}
               title={
                 autoTagRulesDirty
@@ -389,11 +410,17 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
             >
               <RefreshCw
                 className={`w-3 h-3 shrink-0 ${
-                  isApplyingRules ? "animate-spin" : ""
+                  isApplyingAutoTags ? "animate-spin" : ""
                 }`}
               />
-              <span>Apply rules</span>
-              {autoTagRulesDirty && !isApplyingRules && (
+              <span>
+                {isApplyingAutoTags
+                  ? autoTagPct !== null && autoTagPct > 0
+                    ? `Applying ${autoTagPct}%`
+                    : "Applying..."
+                  : "Apply rules"}
+              </span>
+              {autoTagRulesDirty && !isApplyingAutoTags && (
                 <span className="w-1.5 h-1.5 rounded-[2px] bg-warn shrink-0" />
               )}
             </button>
@@ -414,15 +441,25 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
             type="button"
             onClick={() => void autoDetectGenres()}
             disabled={isDetectingGenres}
-            className={`h-[24px] px-2.5 rounded-xs border inline-flex items-center space-x-1.5 text-[11px] font-semibold transition-colors cursor-pointer ${
+            className={`h-[24px] px-2.5 rounded-xs border inline-flex items-center space-x-1.5 text-[11px] font-semibold tabular-nums transition-colors cursor-pointer ${
               isDetectingGenres
-                ? "bg-accent-soft border-accent text-accent-fg animate-pulse"
+                ? "bg-accent-soft border-accent text-accent-fg"
                 : "bg-accent hover:bg-accent-hover border-accent text-accent-on shadow-xs"
             }`}
             title="Auto-Detect Genres from Metadata & Folder Names"
           >
-            <Sparkles className="w-3 h-3 shrink-0" />
-            <span>Auto-assign</span>
+            {isDetectingGenres ? (
+              <RefreshCw className="w-3 h-3 shrink-0 animate-spin" />
+            ) : (
+              <Sparkles className="w-3 h-3 shrink-0" />
+            )}
+            <span>
+              {isDetectingGenres
+                ? genreDetectPct !== null && genreDetectPct > 0
+                  ? `Assigning ${genreDetectPct}%`
+                  : "Assigning..."
+                : "Auto-assign"}
+            </span>
           </button>
         )}
 

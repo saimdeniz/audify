@@ -119,7 +119,15 @@ pub(super) fn hydrate_sample_tags(
     out: &mut [SampleItem],
 ) {
     let mut tag_dict: HashMap<i64, (usize, SampleTagBadge)> = HashMap::new();
-    if let Ok(all_tags) = crate::commands::taxonomy::query_tags_with_conn(conn) {
+    if let Ok(mut all_tags) = crate::commands::taxonomy::query_tags_with_conn(conn) {
+        // Canonical alphabetical order matching `hydrate_sample_tag_ids` and `query_sample_tags`
+        // so Stage 1 (`compactTags=false`) and Stage 2 (`compactTags=true`) never reorder row badges.
+        all_tags.sort_by(|a, b| {
+            a.name
+                .to_ascii_lowercase()
+                .cmp(&b.name.to_ascii_lowercase())
+                .then_with(|| a.id.cmp(&b.id))
+        });
         for (rank, t) in all_tags.into_iter().enumerate() {
             tag_dict.insert(
                 t.id,
@@ -166,7 +174,9 @@ pub(super) fn hydrate_sample_tag_ids(
     out: &mut [SampleItem],
 ) {
     let mut tag_rank: HashMap<i64, usize> = HashMap::new();
-    if let Ok(mut t_stmt) = conn.prepare("SELECT id FROM tags ORDER BY name COLLATE NOCASE ASC") {
+    if let Ok(mut t_stmt) =
+        conn.prepare("SELECT id FROM tags ORDER BY name COLLATE NOCASE ASC, id ASC")
+    {
         if let Ok(t_rows) = t_stmt.query_map([], |r| r.get::<_, i64>(0)) {
             for (rank, tid) in t_rows.flatten().enumerate() {
                 tag_rank.insert(tid, rank);
@@ -502,7 +512,74 @@ mod tests {
         .unwrap();
         assert_eq!(full[0].tags.len(), 2);
         assert!(full[0].tag_ids.is_empty());
+        assert_eq!(
+            full[0].tags.iter().map(|t| t.id).collect::<Vec<_>>(),
+            compact[0].tag_ids
+        );
         let full_json = serde_json::to_string(&full[0]).unwrap();
         assert!(compact_json.len() < full_json.len());
+    }
+
+    #[test]
+    fn stage1_stage2_and_single_tag_hydration_share_identical_alphabetical_order() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema_on_conn(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id, path, name, is_global) VALUES (1, 'D:/SFX', 'SFX', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO samples (id, library_id, file_path, file_name, extension)
+             VALUES
+               (10, 1, 'D:/SFX/ballad_of_the_cats.mp3', 'ballad_of_the_cats.mp3', 'mp3'),
+               (11, 1, 'D:/SFX/heartbeat_extra_1.wav', 'heartbeat_extra_1.wav', 'wav'),
+               (12, 1, 'D:/SFX/heartbeat_extra_2.wav', 'heartbeat_extra_2.wav', 'wav')",
+            [],
+        )
+        .unwrap();
+        // Give `Heartbeat` a higher sample_count and lower sort_order than `Cat` so non-alphabetical
+        // ordering would put `Heartbeat` first.
+        conn.execute(
+            "INSERT INTO tags (id, name, color, facet_id, sort_order) VALUES (1, 'Heartbeat', '#EF4444', 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tags (id, name, color, facet_id, sort_order) VALUES (2, 'Cat', '#10B981', 1, 20)",
+            [],
+        )
+        .unwrap();
+        for (sid, tid) in [(10, 1), (10, 2), (11, 1), (12, 1)] {
+            conn.execute(
+                "INSERT INTO sample_tags (sample_id, tag_id) VALUES (?1, ?2)",
+                params![sid, tid],
+            )
+            .unwrap();
+        }
+
+        let stage1 = query_samples_with_conn_compact(
+            &conn, None, None, None, None, None, Some(10), Some(0), Some(false), Some(false), false,
+        )
+        .unwrap();
+        let stage2 = query_samples_with_conn_compact(
+            &conn, None, None, None, None, None, Some(10), Some(0), Some(false), Some(false), true,
+        )
+        .unwrap();
+        let single = query_sample_tags(&conn, 10).unwrap();
+
+        let s1_row = stage1.iter().find(|s| s.id == 10).unwrap();
+        let s2_row = stage2.iter().find(|s| s.id == 10).unwrap();
+
+        // All three paths must return Cat (2) before Heartbeat (1)
+        assert_eq!(
+            s1_row.tags.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+            vec!["Cat", "Heartbeat"]
+        );
+        assert_eq!(s2_row.tag_ids, vec![2, 1]);
+        assert_eq!(
+            single.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+            vec!["Cat", "Heartbeat"]
+        );
     }
 }

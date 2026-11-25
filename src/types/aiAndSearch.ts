@@ -90,6 +90,7 @@ export interface AiTagSuggestionItem {
 export interface AiAnalysisSummary {
   processed: number;
   indexed: number;
+  skipped_silent?: number;
   suggestions_added: number;
   tags_auto_applied: number;
   canceled: boolean;

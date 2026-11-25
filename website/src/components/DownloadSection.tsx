@@ -1,8 +1,9 @@
 import React, { useState } from "react";
-import { Check, CheckCircle2, Copy, Download, ExternalLink, FolderOpen } from "lucide-react";
+import { Check, CheckCircle2, Copy, Download, ExternalLink, FolderOpen, ShieldCheck } from "lucide-react";
 import { SITE_CONFIG } from "../config/siteConfig";
 import type { LatestReleaseInfo } from "../hooks/useLatestRelease";
 import { useI18n } from "../i18n";
+import { MagneticLink } from "./MagneticLink";
 import { Reveal } from "./Reveal";
 import { SpotlightCard } from "./SpotlightCard";
 
@@ -56,25 +57,43 @@ export const DownloadSection: React.FC<DownloadSectionProps> = ({ release }) => 
                 </ul>
 
                 <div className="mt-7 flex flex-wrap items-center gap-3">
-                  <a
+                  <MagneticLink
                     href={release.downloadUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="inline-flex h-10 items-center gap-2 rounded-sm bg-accent px-5 text-[13px] font-semibold text-accent-on transition-all duration-100 hover:-translate-y-[1px] hover:bg-accent-hover"
+                    className="group inline-flex h-10 items-center gap-2 rounded-sm bg-accent px-5 text-[13px] font-semibold text-accent-on hover:bg-accent-hover"
                   >
-                    <Download className="h-4 w-4" />
+                    <Download className="h-4 w-4 transition-transform duration-200 group-hover:translate-y-[1.5px]" />
                     <span>
                       {messages.download.ctaDownload} ({release.version})
                     </span>
-                  </a>
-                  <a
+                  </MagneticLink>
+                  <MagneticLink
                     href={release.releaseUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="inline-flex h-10 items-center gap-1.5 rounded-sm border border-line-strong bg-surface-2 px-4 text-[12.5px] font-medium text-fg-2 transition-colors hover:border-accent hover:text-accent-fg"
+                    strengthX={0.14}
+                    strengthY={0.2}
+                    className="group inline-flex h-10 items-center gap-1.5 rounded-sm border border-line-strong bg-surface-2 px-4 text-[12.5px] font-medium text-fg-2 hover:border-accent hover:text-accent-fg"
                   >
                     <span>{messages.download.ctaGithub}</span>
-                    <ExternalLink className="h-3.5 w-3.5" />
+                    <ExternalLink className="h-3.5 w-3.5 transition-transform duration-200 group-hover:translate-x-[2px] group-hover:-translate-y-[1px]" />
+                  </MagneticLink>
+                </div>
+
+                {/* Transparent Open-Source CI Trust Strip */}
+                <div className="mt-5 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px] text-fg-3">
+                  <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-accent-fg" />
+                  <span>{messages.download.trustLabel}</span>
+                  <span aria-hidden="true" className="text-fg-faint">·</span>
+                  <a
+                    href={SITE_CONFIG.buildWorkflowUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-fg-2 hover:text-accent-fg hover:underline"
+                  >
+                    <span>{messages.download.trustLink}</span>
+                    <ExternalLink className="h-3 w-3" />
                   </a>
                 </div>
               </div>

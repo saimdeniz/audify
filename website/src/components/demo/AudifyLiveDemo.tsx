@@ -268,11 +268,11 @@ export const AudifyLiveDemo: React.FC = () => {
   const favoriteCount = Object.values(starredIds).filter(Boolean).length;
 
   return (
-    <section id="demo" className="relative z-10 py-20 sm:py-24">
+    <section id="demo" className="relative z-10 pb-20 pt-14 sm:pb-24 sm:pt-16">
       <div className="page-rail">
         {/* Section Heading */}
         <Reveal>
-          <div className="mb-8 flex flex-col justify-between gap-4 md:flex-row md:items-end">
+          <div className="mb-7 flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
             <div>
               <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-accent-fg">
                 {messages.demo.eyebrow}
@@ -280,11 +280,11 @@ export const AudifyLiveDemo: React.FC = () => {
               <h2 className="text-2xl font-semibold tracking-tight text-fg sm:text-4xl">
                 {messages.demo.title}
               </h2>
-              <p className="mt-2.5 max-w-2xl text-[14px] leading-relaxed text-fg-2">
+              <p className="mt-2.5 max-w-xl text-[14px] leading-relaxed text-fg-2">
                 {messages.demo.subtitle}
               </p>
             </div>
-            <div className="rounded-[3px] border border-line bg-surface-1 px-2.5 py-1.5 font-mono text-[10px] text-fg-3">
+            <div className="w-fit shrink-0 rounded-[3px] border border-line bg-surface-1 px-2.5 py-1.5 font-mono text-[10px] text-fg-3 lg:whitespace-nowrap">
               {messages.demo.hintControls}
             </div>
           </div>

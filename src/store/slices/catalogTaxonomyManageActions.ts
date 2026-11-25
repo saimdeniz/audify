@@ -395,6 +395,15 @@ export function createCatalogTaxonomyManageActions(ctx: StoreSliceContext) {
       if (get().isDetectingGenres) return;
       set({
         isDetectingGenres: true,
+        genreDetectProgress: {
+          stage_label: "Scanning genres",
+          processed: 0,
+          total: 0,
+          percentage: 0,
+          current_item: "",
+          matched_count: 0,
+          done: false,
+        },
         statusMessage:
           "Scanning audio file metadata (ID3 / Vorbis / RIFF) & folders for genres & moods...",
       });
@@ -403,16 +412,17 @@ export function createCatalogTaxonomyManageActions(ctx: StoreSliceContext) {
         await get().refreshAfterCatalogMutation();
         const msg =
           updatedCount > 0
-            ? `Auto-detected genre/mood metadata for ${updatedCount} tracks`
+            ? `Auto-detected genre/mood metadata for ${updatedCount.toLocaleString()} tracks`
             : "Genre & Mood scan complete (all detectable tracks already classified)";
         set({
           isDetectingGenres: false,
+          genreDetectProgress: null,
           statusMessage: msg,
         });
         emitNotice(msg, updatedCount > 0 ? "success" : "info");
       } catch (err) {
         console.error("Failed to auto-detect genres:", err);
-        set({ isDetectingGenres: false });
+        set({ isDetectingGenres: false, genreDetectProgress: null });
         emitNotice(`Auto-detect genre error: ${String(err)}`, "error");
       }
     },

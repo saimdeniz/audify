@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { ArrowDownRight, Download, HardDrive, Maximize2, ShieldCheck, Zap } from "lucide-react";
 import { useTheme } from "../context/ThemeContext";
 import { useI18n } from "../i18n";
+import { MagneticLink } from "./MagneticLink";
 import { Reveal } from "./Reveal";
 
 type HeroPreviewKey = "dark" | "light" | "contrast" | "ascii" | "collapsed";
@@ -49,10 +50,16 @@ export const HeroSection: React.FC<HeroSectionProps> = ({ onOpenLightbox }) => {
 
         {/* Headline + Copy */}
         <Reveal delayMs={60}>
-          <h1 className="max-w-4xl text-4xl font-semibold leading-[1.06] tracking-[-0.03em] text-fg sm:text-6xl">
+          <h1 className="max-w-4xl text-4xl font-semibold leading-[1.08] tracking-[-0.03em] text-fg sm:text-6xl">
             {messages.hero.titleLine1}
             <br />
-            <span className="text-accent-fg">{messages.hero.titleAccent}</span>
+            <span className="relative inline-block text-accent-fg">
+              <span>{messages.hero.titleAccent}</span>
+              <span
+                aria-hidden="true"
+                className="hero-signal-underline absolute -bottom-1 left-0 right-0 h-[2px] rounded-full bg-accent/80"
+              />
+            </span>
           </h1>
         </Reveal>
 
@@ -65,20 +72,22 @@ export const HeroSection: React.FC<HeroSectionProps> = ({ onOpenLightbox }) => {
         {/* Actions + Key Specs */}
         <Reveal delayMs={180}>
           <div className="mt-8 flex flex-wrap items-center gap-3">
-            <a
+            <MagneticLink
               href="#download"
-              className="inline-flex h-10 items-center gap-2 rounded-sm bg-accent px-5 text-[13px] font-semibold text-accent-on transition-all duration-100 hover:-translate-y-[1px] hover:bg-accent-hover"
+              className="group inline-flex h-10 items-center gap-2 rounded-sm bg-accent px-5 text-[13px] font-semibold text-accent-on shadow-sm hover:bg-accent-hover hover:shadow-md"
             >
-              <Download className="h-4 w-4" />
+              <Download className="h-4 w-4 transition-transform duration-200 group-hover:translate-y-[1.5px]" />
               <span>{messages.hero.ctaPrimary}</span>
-            </a>
-            <a
+            </MagneticLink>
+            <MagneticLink
               href="#demo"
-              className="surface-card-soft inline-flex h-10 items-center gap-2 rounded-sm border border-line-strong px-5 text-[13px] font-medium text-fg transition-all duration-100 hover:-translate-y-[1px] hover:border-accent hover:text-accent-fg"
+              strengthX={0.16}
+              strengthY={0.22}
+              className="surface-card-soft group inline-flex h-10 items-center gap-2 rounded-sm border border-line-strong px-5 text-[13px] font-medium text-fg hover:border-accent hover:text-accent-fg"
             >
               <span>{messages.hero.ctaSecondary}</span>
-              <ArrowDownRight className="h-4 w-4" />
-            </a>
+              <ArrowDownRight className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-[2.5px] group-hover:translate-y-[2px]" />
+            </MagneticLink>
           </div>
 
           <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-2 font-mono text-[11px] text-fg-3">

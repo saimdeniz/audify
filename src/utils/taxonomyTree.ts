@@ -569,10 +569,21 @@ export function buildDistinctiveTopTags(
   const effectiveCandidates =
     leafCandidates.length > 0 ? leafCandidates : candidates;
 
+  let maxCandidateCount = 0;
+  for (let i = 0; i < effectiveCandidates.length; i++) {
+    const c = getTagRollupCount(effectiveCandidates[i]);
+    if (c > maxCandidateCount) maxCandidateCount = c;
+  }
+  // If `totalViewSamples` is smaller than a tag's profile-wide rollup count (e.g., Stage 1
+  // initial 150-row page before full pool hydration), skip broad-tag pruning so real top
+  // tags aren't falsely hidden mid-boot.
+  const canDetectOverlyBroad =
+    totalViewSamples >= 20 && totalViewSamples >= maxCandidateCount;
+
   const scored = effectiveCandidates.map((tag) => {
     const count = getTagRollupCount(tag);
     const ratio = totalViewSamples > 0 ? count / totalViewSamples : 0;
-    const isOverlyBroad = totalViewSamples >= 20 && ratio > 0.85;
+    const isOverlyBroad = canDetectOverlyBroad && ratio > 0.85;
     return {
       tag,
       isOverlyBroad,

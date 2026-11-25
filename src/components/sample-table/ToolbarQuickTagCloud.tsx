@@ -26,6 +26,17 @@ const ToolbarTagOverflowPopover = lazy(() =>
 
 export const ToolbarQuickTagCloud: React.FC = React.memo(() => {
   const samples = useSampleStore((s) => s.samples);
+  const profileTotalSamples = useSampleStore((s) => {
+    if (s.allProfileSamples.length > 0) return s.allProfileSamples.length;
+    let total = 0;
+    for (let i = 0; i < s.libraries.length; i++) {
+      const lib = s.libraries[i];
+      if (lib.is_global !== false || lib.assigned_to_profile !== false) {
+        total += lib.sample_count || 0;
+      }
+    }
+    return total;
+  });
   const tags = useSampleStore((s) => s.tags);
   const tagFacets = useSampleStore((s) => s.tagFacets);
   const selectedTagIds = useSampleStore((s) => s.selectedTagIds);
@@ -81,7 +92,11 @@ export const ToolbarQuickTagCloud: React.FC = React.memo(() => {
     });
 
     if (!hasActiveFilter) {
-      return buildDistinctiveTopTags(tags, deferredSamples.length, 14, tagFacets)
+      const totalForTagCloud = Math.max(
+        profileTotalSamples,
+        deferredSamples.length
+      );
+      return buildDistinctiveTopTags(tags, totalForTagCloud, 14, tagFacets)
         .filter((t) => !selectedTagSet.has(t.id) && !excludedTagSet.has(t.id))
         .map((t) => toEntry(t, getTagRollupCount(t)))
         .slice(0, 14);
@@ -123,6 +138,7 @@ export const ToolbarQuickTagCloud: React.FC = React.memo(() => {
       .slice(0, 14);
   }, [
     deferredSamples,
+    profileTotalSamples,
     hasActiveFilter,
     tags,
     tagFacets,

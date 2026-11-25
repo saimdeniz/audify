@@ -12,6 +12,7 @@ import {
   AutoTagImpactPreview,
   AutoTagRule,
   BackupFileInfo,
+  BatchJobProgressPayload,
   BpmKeyProgressPayload,
   Collection,
   CollectionRuleTemplate,
@@ -90,6 +91,7 @@ export interface SampleStoreDataState {
   tagMatchMode: import("../types").TagMatchMode;
   selectedGenre: string | null;
   isDetectingGenres: boolean;
+  genreDetectProgress: BatchJobProgressPayload | null;
   selectedCollectionId: number | null;
   selectedLicenseGroupId: string | null;
   binFilterActive: boolean;
@@ -206,6 +208,8 @@ export interface SampleStoreDataState {
   autoTagRules: AutoTagRule[];
   autoTagCategories: AutoTagCategoryConfig[];
   autoTagRulesDirty: boolean;
+  isApplyingAutoTags: boolean;
+  autoTagProgress: BatchJobProgressPayload | null;
   autoTagImpactPreview: AutoTagImpactPreview | null;
   canUndoAutoTagApply: boolean;
   localBackups: BackupFileInfo[];

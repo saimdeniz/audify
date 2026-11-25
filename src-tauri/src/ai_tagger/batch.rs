@@ -1,3 +1,4 @@
+use super::audio_preprocess::is_non_fatal_silent_audio_err;
 use super::knn;
 use super::onnx_runner::AiInferenceOutput;
 use super::similarity::vec_to_blob;
@@ -203,6 +204,7 @@ pub fn run_batch_ai_analysis(
         return Ok(AiAnalysisSummary {
             processed: 0,
             indexed: 0,
+            skipped_silent: 0,
             suggestions_added: 0,
             tags_auto_applied: 0,
             canceled: false,
@@ -218,6 +220,7 @@ pub fn run_batch_ai_analysis(
     let clamped_conf = safe_conf.clamp(0.25, 0.98);
     let mut processed = 0usize;
     let mut indexed = 0usize;
+    let mut skipped_silent = 0usize;
     let mut suggestions_added = 0usize;
     let mut tags_auto_applied = 0usize;
     let mut canceled = false;
@@ -277,7 +280,11 @@ pub fn run_batch_ai_analysis(
                     });
                 }
                 Err(err) => {
-                    last_infer_err = Some(err);
+                    if is_non_fatal_silent_audio_err(&err) {
+                        skipped_silent += 1;
+                    } else {
+                        last_infer_err = Some(err);
+                    }
                 }
             }
         }
@@ -397,9 +404,31 @@ pub fn run_batch_ai_analysis(
     Ok(AiAnalysisSummary {
         processed,
         indexed,
+        skipped_silent,
         suggestions_added,
         tags_auto_applied,
         canceled,
         avg_ms_per_clip: avg_ms,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_non_fatal_silent_audio_err;
+
+    #[test]
+    fn classifies_silent_and_empty_audio_separately_from_fatal_engine_errors() {
+        assert!(is_non_fatal_silent_audio_err(
+            "Audio signal is silent or below energy threshold"
+        ));
+        assert!(is_non_fatal_silent_audio_err(
+            "Decoded audio stream is empty"
+        ));
+        assert!(!is_non_fatal_silent_audio_err(
+            "ONNX Runtime session failed to execute"
+        ));
+        assert!(!is_non_fatal_silent_audio_err(
+            "Failed to open audio file"
+        ));
+    }
 }

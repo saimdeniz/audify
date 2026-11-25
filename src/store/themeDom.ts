@@ -118,7 +118,11 @@ export function applyThemeAndAccentToDom(themeMode: ThemeMode, accentHex: string
 let tintRafId: number | null = null;
 
 function writeTintProperties(root: HTMLElement, t: number): void {
-  root.style.setProperty("--tint-scale", String(t));
+  const scaleStr = String(t);
+  if (root.style.getPropertyValue("--tint-scale") === scaleStr) {
+    return;
+  }
+  root.style.setProperty("--tint-scale", scaleStr);
   root.style.setProperty("--tint-s0", `${(t * 11).toFixed(1)}%`);
   root.style.setProperty("--tint-s1", `${(t * 14).toFixed(1)}%`);
   root.style.setProperty("--tint-s2", `${(t * 16).toFixed(1)}%`);
@@ -139,13 +143,25 @@ export function applyVisualEffectsToDom(
   if (typeof document === "undefined") return;
 
   const root = document.documentElement;
+  const hasMicaAttr =
+    typeof root.getAttribute === "function" &&
+    root.getAttribute("data-mica") === "true";
   if (enableMica) {
-    root.setAttribute("data-mica", "true");
-  } else {
+    if (!hasMicaAttr) {
+      root.setAttribute("data-mica", "true");
+    }
+  } else if (hasMicaAttr || typeof root.getAttribute !== "function") {
     root.removeAttribute("data-mica");
   }
 
   const t = Math.max(0, Math.min(1, themeTintIntensity));
+  if (root.style.getPropertyValue("--tint-scale") === String(t)) {
+    if (tintRafId !== null && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(tintRafId);
+      tintRafId = null;
+    }
+    return;
+  }
   if (typeof requestAnimationFrame === "function") {
     if (tintRafId !== null) {
       cancelAnimationFrame(tintRafId);
