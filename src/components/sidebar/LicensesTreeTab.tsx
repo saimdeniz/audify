@@ -33,6 +33,12 @@ export const LicensesTreeTab: React.FC = () => {
     s.folderStats.length > 0 ? EMPTY_SAMPLES : s.rawSamples
   );
   const licenseGroups = useSampleStore((s) => s.licenseGroups);
+  const licenseGroupMatchCounts = useSampleStore(
+    (s) => s.licenseGroupMatchCounts
+  );
+  const refreshLicenseGroupCounts = useSampleStore(
+    (s) => s.refreshLicenseGroupCounts
+  );
   const selectedLicenseGroupId = useSampleStore(
     (s) => s.selectedLicenseGroupId
   );
@@ -129,16 +135,42 @@ export const LicensesTreeTab: React.FC = () => {
     [libraries]
   );
 
-  const licenseGroupTrees = useMemo(
-    () =>
-      buildLicenseGroupTrees({
-        licenseGroups,
-        visibleLibraries,
-        folderStats,
-        fallbackSamples: fallbackSamplesForTree,
-      }),
-    [licenseGroups, visibleLibraries, folderStats, fallbackSamplesForTree]
+  const hasArtistLinkedGroups = useMemo(
+    () => licenseGroups.some((g) => (g.artists?.length ?? 0) > 0),
+    [licenseGroups]
   );
+
+  useEffect(() => {
+    if (hasArtistLinkedGroups) {
+      void refreshLicenseGroupCounts();
+    }
+  }, [hasArtistLinkedGroups, licenseGroups, refreshLicenseGroupCounts]);
+
+  const licenseGroupTrees = useMemo(() => {
+    const trees = buildLicenseGroupTrees({
+      licenseGroups,
+      visibleLibraries,
+      folderStats,
+      fallbackSamples: fallbackSamplesForTree,
+    });
+    if (!hasArtistLinkedGroups) return trees;
+    const merged: typeof trees = {};
+    for (const g of licenseGroups) {
+      const base = trees[g.id] ?? { totalCount: 0, nodes: [] };
+      const exact =
+        (g.artists?.length ?? 0) > 0 ? licenseGroupMatchCounts[g.id] : undefined;
+      merged[g.id] =
+        exact !== undefined ? { ...base, totalCount: exact } : base;
+    }
+    return merged;
+  }, [
+    licenseGroups,
+    visibleLibraries,
+    folderStats,
+    fallbackSamplesForTree,
+    hasArtistLinkedGroups,
+    licenseGroupMatchCounts,
+  ]);
 
   const filteredLicenseGroups = useMemo(() => {
     const q = licenseSearch.trim().toLowerCase();
@@ -147,7 +179,8 @@ export const LicensesTreeTab: React.FC = () => {
       (g) =>
         g.name.toLowerCase().includes(q) ||
         g.folders.some((f) => f.toLowerCase().includes(q)) ||
-        (g.rel_folders ?? []).some((f) => f.toLowerCase().includes(q))
+        (g.rel_folders ?? []).some((f) => f.toLowerCase().includes(q)) ||
+        (g.artists ?? []).some((a) => a.toLowerCase().includes(q))
     );
   }, [licenseGroups, licenseSearch]);
 

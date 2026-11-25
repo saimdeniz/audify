@@ -13,9 +13,15 @@ export const LicensesTab: React.FC = () => {
   const activeProfileId = useSampleStore((s) => s.activeProfile?.id);
   const libraries = useSampleStore((s) => s.libraries);
   const folderStats = useSampleStore((s) => s.folderStats);
+  const artistStats = useSampleStore((s) => s.artistStats);
   const licenseGroups = useSampleStore((s) => s.licenseGroups);
+  const licenseGroupMatchCounts = useSampleStore((s) => s.licenseGroupMatchCounts);
   const addLicenseGroup = useSampleStore((s) => s.addLicenseGroup);
   const fetchFolderStats = useSampleStore((s) => s.fetchFolderStats);
+  const fetchArtistStats = useSampleStore((s) => s.fetchArtistStats);
+  const refreshLicenseGroupCounts = useSampleStore(
+    (s) => s.refreshLicenseGroupCounts
+  );
 
   const [licenseManagerSearch, setLicenseManagerSearch] = useState("");
   const [activeLicenseId, setActiveLicenseId] = useState<string | null>(
@@ -37,6 +43,23 @@ export const LicensesTab: React.FC = () => {
   }, [folderStats.length, fetchFolderStats]);
 
   useEffect(() => {
+    if (artistStats.length === 0) {
+      void fetchArtistStats();
+    }
+  }, [artistStats.length, fetchArtistStats]);
+
+  const hasArtistLinkedGroups = useMemo(
+    () => licenseGroups.some((g) => (g.artists?.length ?? 0) > 0),
+    [licenseGroups]
+  );
+
+  useEffect(() => {
+    if (hasArtistLinkedGroups) {
+      void refreshLicenseGroupCounts();
+    }
+  }, [hasArtistLinkedGroups, licenseGroups, activeProfileId, refreshLicenseGroupCounts]);
+
+  useEffect(() => {
     if (licenseGroups.length === 0) {
       setActiveLicenseId(null);
     } else if (
@@ -54,7 +77,8 @@ export const LicensesTab: React.FC = () => {
       (g) =>
         g.name.toLowerCase().includes(q) ||
         g.folders.some((f) => f.toLowerCase().includes(q)) ||
-        (g.rel_folders || []).some((rf) => rf.toLowerCase().includes(q))
+        (g.rel_folders || []).some((rf) => rf.toLowerCase().includes(q)) ||
+        (g.artists || []).some((a) => a.toLowerCase().includes(q))
     );
   }, [licenseGroups, licenseManagerSearch]);
 
@@ -97,16 +121,23 @@ export const LicensesTab: React.FC = () => {
         }
       }
     }
+    for (const g of licenseGroups) {
+      if ((g.artists?.length ?? 0) > 0 && licenseGroupMatchCounts[g.id] !== undefined) {
+        byGroup[g.id] = licenseGroupMatchCounts[g.id];
+      }
+    }
     return { byGroup, byFolder };
-  }, [licenseGroups, folderStats, visibleLibraryIds]);
+  }, [licenseGroups, folderStats, visibleLibraryIds, licenseGroupMatchCounts]);
 
   const activeFolders = activeLicenseGroup?.folders;
   const activeRelFolders = activeLicenseGroup?.rel_folders;
+  const activeArtists = activeLicenseGroup?.artists;
 
   useEffect(() => {
     const hasFilters =
       (activeFolders && activeFolders.length > 0) ||
-      (activeRelFolders && activeRelFolders.length > 0);
+      (activeRelFolders && activeRelFolders.length > 0) ||
+      (activeArtists && activeArtists.length > 0);
     if (!hasFilters) {
       setActivePreviewNames([]);
       return;
@@ -116,6 +147,7 @@ export const LicensesTab: React.FC = () => {
     void invokeCommand("preview_license_group_samples", {
       folders: activeFolders ?? [],
       relFolders: activeRelFolders ?? [],
+      artists: activeArtists ?? [],
       limit: 3,
     })
       .then((names) => {
@@ -132,7 +164,7 @@ export const LicensesTab: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [activeFolders, activeRelFolders]);
+  }, [activeFolders, activeRelFolders, activeArtists]);
 
   return (
     <div className="flex flex-col gap-2.5 flex-1 min-h-0">
@@ -164,6 +196,7 @@ export const LicensesTab: React.FC = () => {
         <LicenseGroupInspector
           activeLicenseGroup={activeLicenseGroup}
           licenseCounts={licenseCounts}
+          artistStats={artistStats}
           activePreviewNames={activePreviewNames}
           confirmDeleteLicenseId={confirmDeleteLicenseId}
           setConfirmDeleteLicenseId={setConfirmDeleteLicenseId}

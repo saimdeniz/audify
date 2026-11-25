@@ -241,6 +241,23 @@ pub struct FolderStat {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtistStat {
+    pub artist: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LicenseGroupCountInput {
+    pub id: String,
+    #[serde(default)]
+    pub folders: Vec<String>,
+    #[serde(default)]
+    pub rel_folders: Vec<String>,
+    #[serde(default)]
+    pub artists: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileQuickStats {
     pub favorites_count: i64,
     pub existing_sample_ids: Vec<i64>,

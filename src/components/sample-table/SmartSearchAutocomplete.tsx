@@ -1,5 +1,6 @@
 import React, { useLayoutEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { User } from "lucide-react";
 import { Z_INDEX } from "../../constants/zIndex";
 import type {
   SearchAutocompleteContext,
@@ -113,6 +114,8 @@ export const SmartSearchAutocomplete: React.FC<SmartSearchAutocompleteProps> =
                       className="w-2 h-2 rounded-[2px] shrink-0"
                       style={{ backgroundColor: item.color }}
                     />
+                  ) : item.kind === "artist" ? (
+                    <User className="w-3 h-3 text-fg-3 shrink-0" />
                   ) : item.kind === "source" || item.facetBadge === "SRC" ? (
                     <span className="font-mono text-[10px] text-fg-3 shrink-0 w-2 text-center">
                       #

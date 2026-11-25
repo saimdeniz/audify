@@ -144,7 +144,8 @@ export function createLibrarySyncSlice(
           ? folderStageRaw.filter((s) =>
               isSampleInLicenseGroup(
                 s.folder_path || s.file_path,
-                activeLicenseGroup
+                activeLicenseGroup,
+                s.artist
               )
             )
           : folderStageRaw;

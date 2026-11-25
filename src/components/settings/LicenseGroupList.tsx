@@ -1,5 +1,5 @@
 import React from "react";
-import { Folder, Search, X } from "lucide-react";
+import { Folder, Search, User, X } from "lucide-react";
 import { LicenseGroup } from "../../types";
 import { QuickCreatePopover } from "../QuickCreatePopover";
 
@@ -74,6 +74,14 @@ export const LicenseGroupList: React.FC<LicenseGroupListProps> = ({
             const matchedCount = countsByGroup[g.id] ?? 0;
             const folderBadgeCount =
               g.folders.length || g.rel_folders?.length || 0;
+            const artistBadgeCount = g.artists?.length ?? 0;
+            const isArtistOnly = folderBadgeCount === 0 && artistBadgeCount > 0;
+            const ruleSummary =
+              folderBadgeCount > 0 && artistBadgeCount > 0
+                ? `${folderBadgeCount} ${folderBadgeCount === 1 ? "folder" : "folders"} · ${artistBadgeCount} ${artistBadgeCount === 1 ? "artist" : "artists"}`
+                : isArtistOnly
+                ? `${artistBadgeCount} ${artistBadgeCount === 1 ? "artist" : "artists"}`
+                : `${folderBadgeCount} ${folderBadgeCount === 1 ? "folder" : "folders"}`;
             return (
               <div
                 key={g.id}
@@ -85,11 +93,14 @@ export const LicenseGroupList: React.FC<LicenseGroupListProps> = ({
                 }`}
               >
                 <div className="flex items-center space-x-2 truncate min-w-0">
-                  <Folder className="w-3.5 h-3.5 text-accent-fg shrink-0" />
+                  {isArtistOnly ? (
+                    <User className="w-3.5 h-3.5 text-accent-fg shrink-0" />
+                  ) : (
+                    <Folder className="w-3.5 h-3.5 text-accent-fg shrink-0" />
+                  )}
                   <span className="font-medium truncate text-fg">{g.name}</span>
                   <span className="text-[9px] font-mono px-1 py-0.2 rounded-xs bg-surface-2 text-fg-3 border border-line shrink-0">
-                    {folderBadgeCount}{" "}
-                    {folderBadgeCount === 1 ? "folder" : "folders"}
+                    {ruleSummary}
                   </span>
                 </div>
                 <span className="font-mono text-[9.5px] text-fg-3 shrink-0 ml-2">

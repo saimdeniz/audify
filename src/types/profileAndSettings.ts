@@ -235,6 +235,8 @@ export interface LicenseGroup {
   icon?: CollectionIconId;
   folders: string[];
   rel_folders?: string[];
+  /** Optional scanned metadata Artist names linked to this group (case-insensitive exact match). */
+  artists?: string[];
   template: string;
   quoteMode: LicenseQuoteMode;
 }

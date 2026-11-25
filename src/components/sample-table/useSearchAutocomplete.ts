@@ -41,6 +41,7 @@ export function useSearchAutocomplete({
   setSearchQuery: (q: string) => void;
 }) {
   const folderStats = useSampleStore((s) => s.folderStats);
+  const artistStats = useSampleStore((s) => s.artistStats);
   const tagFacets = useSampleStore((s) => s.tagFacets);
   const [isFocused, setIsFocused] = useState(false);
   const [cursorPos, setCursorPos] = useState(0);
@@ -66,6 +67,18 @@ export function useSearchAutocomplete({
     };
   }, [enabled, isFocused, autoMod]);
 
+  useEffect(() => {
+    if (!mayNeedAutocomplete || artistStats.length > 0) return;
+    const lower = searchQuery.toLowerCase();
+    if (
+      lower.includes("artist:") ||
+      lower.includes("author:") ||
+      lower.includes("by:")
+    ) {
+      void useSampleStore.getState().fetchArtistStats();
+    }
+  }, [mayNeedAutocomplete, artistStats.length, searchQuery]);
+
   const context = useMemo((): SearchAutocompleteContext | null => {
     if (!mayNeedAutocomplete || !autoMod) return null;
     const ctx = autoMod.getSearchAutocompleteSuggestions(
@@ -74,7 +87,8 @@ export function useSearchAutocomplete({
       tags,
       genres,
       folderStats,
-      tagFacets
+      tagFacets,
+      artistStats
     );
     if (!ctx || ctx.rawToken === dismissedToken) return null;
     return ctx;
@@ -87,6 +101,7 @@ export function useSearchAutocomplete({
     genres,
     folderStats,
     tagFacets,
+    artistStats,
     dismissedToken,
   ]);
 

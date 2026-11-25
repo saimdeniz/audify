@@ -2,6 +2,7 @@ import { LicenseGroup, LicenseQuoteMode, SampleItem } from "../types";
 import { cleanTrackTitle, isPathInsideFolder, normalizePathForMatch } from "./pathHelpers";
 
 const relFoldersCache = new WeakMap<LicenseGroup, string[]>();
+const artistsCache = new WeakMap<LicenseGroup, Set<string>>();
 
 /** Normalized (lower-case, forward-slash, no edge slashes) `rel_folders`, cached per group. */
 function getNormalizedRelFolders(group: LicenseGroup): string[] {
@@ -12,6 +13,33 @@ function getNormalizedRelFolders(group: LicenseGroup): string[] {
     .filter(Boolean);
   relFoldersCache.set(group, list);
   return list;
+}
+
+/** Normalized (trimmed lower-case) `artists` set, cached per group for O(1) lookup. */
+function getNormalizedArtists(group: LicenseGroup): Set<string> {
+  const cached = artistsCache.get(group);
+  if (cached) return cached;
+  const set = new Set<string>();
+  const raw = group.artists;
+  if (Array.isArray(raw)) {
+    for (let i = 0; i < raw.length; i++) {
+      const clean = raw[i]?.trim().toLowerCase();
+      if (clean) set.add(clean);
+    }
+  }
+  artistsCache.set(group, set);
+  return set;
+}
+
+export function findLicenseArtistMatch(
+  sampleArtist: string | null | undefined,
+  group: LicenseGroup
+): string | null {
+  if (!sampleArtist) return null;
+  const norm = sampleArtist.trim().toLowerCase();
+  if (!norm) return null;
+  const artistSet = getNormalizedArtists(group);
+  return artistSet.has(norm) ? norm : null;
 }
 
 export interface LicenseFolderMatch {
@@ -61,18 +89,24 @@ export function findLicenseFolderMatch(
 
 export function isSampleInLicenseGroup(
   samplePath: string,
-  group: LicenseGroup
+  group: LicenseGroup,
+  sampleArtist?: string | null
 ): boolean {
-  return findLicenseFolderMatch(samplePath, group) !== null;
+  return (
+    findLicenseFolderMatch(samplePath, group) !== null ||
+    findLicenseArtistMatch(sampleArtist, group) !== null
+  );
 }
 
 export function matchSampleToLicenseGroup(
   samplePath: string,
-  licenseGroups: LicenseGroup[]
+  licenseGroups: LicenseGroup[],
+  sampleArtist?: string | null
 ): LicenseGroup | null {
   let bestGroup: LicenseGroup | null = null;
   let bestScore = -1;
 
+  // Priority 1: Folder specificity (longest matched folder path wins)
   for (const group of licenseGroups) {
     const m = findLicenseFolderMatch(samplePath, group);
     if (m && m.score > bestScore) {
@@ -80,7 +114,17 @@ export function matchSampleToLicenseGroup(
       bestGroup = group;
     }
   }
-  return bestGroup;
+  if (bestGroup) return bestGroup;
+
+  // Priority 2: Exact case-insensitive Artist metadata match fallback
+  if (sampleArtist && sampleArtist.trim()) {
+    for (const group of licenseGroups) {
+      if (findLicenseArtistMatch(sampleArtist, group) !== null) {
+        return group;
+      }
+    }
+  }
+  return null;
 }
 
 export function formatLicenseGroupLine(
@@ -175,7 +219,11 @@ export function generateBatchAttributionCredits(
   let unmatchedCount = 0;
 
   for (const sample of samples) {
-    const matched = matchSampleToLicenseGroup(sample.file_path, licenseGroups);
+    const matched = matchSampleToLicenseGroup(
+      sample.file_path,
+      licenseGroups,
+      sample.artist
+    );
     if (!matched) {
       unmatchedCount++;
       continue;

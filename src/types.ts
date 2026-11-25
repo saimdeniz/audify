@@ -72,6 +72,11 @@ export interface FolderStat {
   count: number;
 }
 
+export interface ArtistStat {
+  artist: string;
+  count: number;
+}
+
 export interface SampleTagBadge {
   id: number;
   name: string;

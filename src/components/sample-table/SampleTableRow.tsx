@@ -9,6 +9,7 @@ import {
   splitFileNameAndExt,
 } from "../../utils/format";
 import { MiniWaveform, WaveformDisplayConfig } from "../MiniWaveform";
+import { toggleArtistSearchFilter } from "../../utils/search/artistSearchHelpers";
 import type { TaxonomyIndex } from "../../utils/taxonomyTree";
 import {
   renderBpmCell,
@@ -339,10 +340,27 @@ export const SampleTableRow: React.FC<SampleTableRowProps> = React.memo(
                 <div
                   key="artist"
                   style={{ width: `${colWidths.artist}px` }}
-                  className="h-full px-2 flex items-center justify-center text-center truncate text-[11.5px] text-fg-2 shrink-0 overflow-hidden border-r border-line"
-                  title={sample.artist || undefined}
+                  className="h-full px-2 flex items-center justify-center text-center text-[11.5px] text-fg-2 shrink-0 overflow-hidden border-r border-line"
                 >
-                  {sample.artist || (
+                  {sample.artist ? (
+                    <button
+                      type="button"
+                      data-tag-badge="true"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const store = useSampleStore.getState();
+                        const nextQuery = toggleArtistSearchFilter(
+                          store.searchQuery,
+                          sample.artist
+                        );
+                        store.setSearchQuery(nextQuery);
+                      }}
+                      className="max-w-full truncate text-fg-2 hover:text-accent-fg hover:underline transition-colors cursor-pointer"
+                      title={`${sample.artist} · Click to filter by artist`}
+                    >
+                      {sample.artist}
+                    </button>
+                  ) : (
                     <span className="text-fg-3 font-mono text-[10px]">
                       —
                     </span>

@@ -1,10 +1,12 @@
 pub mod folders;
+pub mod licenses;
 pub mod mtime_backfill;
 pub mod relink;
 pub mod sync;
 mod sync_commit;
 
 pub use folders::*;
+pub use licenses::*;
 pub use mtime_backfill::*;
 pub use relink::*;
 pub use sync::*;
@@ -391,23 +393,96 @@ mod tests {
             .unwrap();
         }
 
-        let explicit = folders::preview_license_group_samples_with_conn(
+        let explicit = licenses::preview_license_group_samples_with_conn(
             &conn,
             &["C:/Samples/CC_Pack/ArtistA".to_string()],
+            &[],
             &[],
             2,
         )
         .unwrap();
         assert_eq!(explicit, vec!["Hit_01.wav", "Hit_02.wav"]);
 
-        let portable = folders::preview_license_group_samples_with_conn(
+        let portable = licenses::preview_license_group_samples_with_conn(
             &conn,
             &[],
             &["ArtistA".to_string()],
+            &[],
             10,
         )
         .unwrap();
         // Should match ArtistA and ArtistA/Sub, never ArtistAB or trashed files
         assert_eq!(portable, vec!["Hit_01.wav", "Hit_02.wav", "Hit_03.wav"]);
+    }
+
+    #[test]
+    fn artist_stats_and_license_artist_matching_deduplicate_folder_union() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema_on_conn(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO libraries (path, name, is_global) VALUES ('C:/Samples/Mix', 'Mix', 1)",
+            [],
+        )
+        .unwrap();
+        let lib_id = conn.last_insert_rowid();
+
+        for (fp, name, artist, trashed) in [
+            ("C:/Samples/Mix/Kevin/Track_01.mp3", "Track_01.mp3", "Kevin MacLeod", 0),
+            ("C:/Samples/Mix/Kevin/Track_02.wav", "Track_02.wav", "", 0),
+            ("C:/Samples/Mix/Random/Track_03.mp3", "Track_03.mp3", "kevin macleod", 0),
+            ("C:/Samples/Mix/Random/Track_04.mp3", "Track_04.mp3", "KevinMacLeod", 0),
+            ("C:/Samples/Mix/Random/Track_05.mp3", "Track_05.mp3", "Scott Buckley", 0),
+            ("C:/Samples/Mix/Random/Trashed.mp3", "Trashed.mp3", "Kevin MacLeod", 1),
+        ] {
+            conn.execute(
+                "INSERT INTO samples (library_id, file_path, file_name, extension, duration_ms, artist, is_trashed)
+                 VALUES (?1, ?2, ?3, 'mp3', 1000, ?4, ?5)",
+                params![lib_id, fp, name, artist, trashed],
+            )
+            .unwrap();
+        }
+
+        let stats = licenses::get_artist_stats_with_conn(&conn).unwrap();
+        assert_eq!(stats.len(), 3);
+        assert_eq!(stats[0].artist, "Kevin MacLeod");
+        assert_eq!(stats[0].count, 2);
+        assert!(stats.iter().any(|s| s.artist == "KevinMacLeod" && s.count == 1));
+        assert!(stats.iter().any(|s| s.artist == "Scott Buckley" && s.count == 1));
+
+        let artist_preview = licenses::preview_license_group_samples_with_conn(
+            &conn,
+            &[],
+            &[],
+            &["Kevin MacLeod".to_string(), "KevinMacLeod".to_string()],
+            10,
+        )
+        .unwrap();
+        assert_eq!(
+            artist_preview,
+            vec!["Track_01.mp3", "Track_03.mp3", "Track_04.mp3"]
+        );
+
+        let counts = licenses::count_license_group_matches_with_conn(
+            &conn,
+            &[
+                crate::commands::LicenseGroupCountInput {
+                    id: "g_kevin".to_string(),
+                    folders: vec!["C:/Samples/Mix/Kevin".to_string()],
+                    rel_folders: vec![],
+                    artists: vec!["Kevin MacLeod".to_string(), "KevinMacLeod".to_string()],
+                },
+                crate::commands::LicenseGroupCountInput {
+                    id: "g_scott".to_string(),
+                    folders: vec![],
+                    rel_folders: vec![],
+                    artists: vec!["Scott Buckley".to_string()],
+                },
+            ],
+        )
+        .unwrap();
+        // Track_01 matches BOTH folder & artist -> must be counted once! Total = Track_01, 02, 03, 04 = 4
+        assert_eq!(counts.get("g_kevin"), Some(&4));
+        assert_eq!(counts.get("g_scott"), Some(&1));
     }
 }

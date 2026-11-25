@@ -20,6 +20,7 @@ export {
 } from "./pathHelpers";
 export {
   type BatchAttributionResult,
+  findLicenseArtistMatch,
   findLicenseFolderMatch,
   formatLicenseGroupLine,
   generateBatchAttributionCredits,

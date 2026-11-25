@@ -1,13 +1,14 @@
 import React, { useEffect, useRef, useState } from "react";
 import { FileCheck2, ShieldCheck } from "lucide-react";
 import { useSampleStore } from "../../store/useSampleStore";
-import { LicenseGroup, LicenseQuoteMode } from "../../types";
+import { ArtistStat, LicenseGroup, LicenseQuoteMode } from "../../types";
 import { InspectorShell } from "./InspectorShell";
 import {
   LicenseLinkedFoldersSection,
   LicensePreviewSection,
   LicenseTemplateEditorSection,
 } from "./LicenseGroupInspectorSections";
+import { LicenseLinkedArtistsSection } from "./LicenseLinkedArtistsSection";
 import { useMainFilterAction } from "./useMainFilterAction";
 
 function normalizeFolderKey(folderPath: string): string {
@@ -20,6 +21,7 @@ interface LicenseGroupInspectorProps {
     byGroup: Record<string, number>;
     byFolder: Record<string, number>;
   };
+  artistStats: readonly ArtistStat[];
   activePreviewNames: string[];
   confirmDeleteLicenseId: string | null;
   setConfirmDeleteLicenseId: (id: string | null) => void;
@@ -28,6 +30,7 @@ interface LicenseGroupInspectorProps {
 export const LicenseGroupInspector: React.FC<LicenseGroupInspectorProps> = ({
   activeLicenseGroup,
   licenseCounts,
+  artistStats,
   activePreviewNames,
   confirmDeleteLicenseId,
   setConfirmDeleteLicenseId,
@@ -218,13 +221,23 @@ export const LicenseGroupInspector: React.FC<LicenseGroupInspectorProps> = ({
                 ).toLocaleString()}
               </span>
             </div>
-            <div className="flex items-center space-x-2">
-              <span className="text-[10px] font-mono text-fg-3 uppercase tracking-wider font-semibold">
-                FOLDERS
-              </span>
-              <span className="font-mono text-[12px] font-bold text-fg tabular-nums">
-                {activeLicenseGroup.folders.length}
-              </span>
+            <div className="flex items-center space-x-3">
+              <div className="flex items-center space-x-1.5">
+                <span className="text-[10px] font-mono text-fg-3 uppercase tracking-wider font-semibold">
+                  FOLDERS
+                </span>
+                <span className="font-mono text-[12px] font-bold text-fg tabular-nums">
+                  {activeLicenseGroup.folders.length}
+                </span>
+              </div>
+              <div className="flex items-center space-x-1.5">
+                <span className="text-[10px] font-mono text-fg-3 uppercase tracking-wider font-semibold">
+                  ARTISTS
+                </span>
+                <span className="font-mono text-[12px] font-bold text-fg tabular-nums">
+                  {activeLicenseGroup.artists?.length ?? 0}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -267,6 +280,12 @@ export const LicenseGroupInspector: React.FC<LicenseGroupInspectorProps> = ({
             setManualFolderInput={setManualFolderInput}
             appendUniqueFolder={appendUniqueFolder}
             pickFolderForLicenseGroup={pickFolderForLicenseGroup}
+            updateLicenseGroup={updateLicenseGroup}
+          />
+
+          <LicenseLinkedArtistsSection
+            activeLicenseGroup={activeLicenseGroup}
+            artistStats={artistStats}
             updateLicenseGroup={updateLicenseGroup}
           />
 
