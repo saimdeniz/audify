@@ -7,37 +7,53 @@ on:
       - master
     tags:
       - "v*"
+    paths-ignore:
+      - "website/**"
+      - "docs/**"
+      - "*.md"
+      - ".github/workflows/deploy-website.yml"
   pull_request:
     branches:
       - main
       - master
+    paths-ignore:
+      - "website/**"
+      - "docs/**"
+      - "*.md"
+      - ".github/workflows/deploy-website.yml"
   workflow_dispatch:
 
+# Least privilege by default: normal pushes & PRs stay strictly read-only.
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: build-and-release-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
   build-windows:
     name: Verify & Build Portable Audify.exe
     runs-on: windows-latest
+    timeout-minutes: 35
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node.js 22 LTS
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: "npm"
 
       - name: Install Rust stable toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           components: clippy
 
       - name: Cache Rust target & Cargo registry
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: "src-tauri -> target"
 
@@ -74,7 +90,7 @@ jobs:
         shell: pwsh
 
       - name: Upload portable Audify.exe artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: Audify-Windows-x64-Portable
           path: |
@@ -83,11 +99,33 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  release:
+    name: Attest & Publish GitHub Release
+    needs: build-windows
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Download portable release artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: Audify-Windows-x64-Portable
+          path: release
+
+      - name: Generate SLSA build provenance attestation for Audify.exe
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/Audify.exe
+
       - name: Publish GitHub Release (on v* tag)
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           files: |
-            Audify.exe
-            SHA256SUMS.txt
+            release/Audify.exe
+            release/SHA256SUMS.txt
           generate_release_notes: true
