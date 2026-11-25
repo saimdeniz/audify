@@ -29,7 +29,7 @@ walkdir = "2"
 rayon = "1"
 rfd = "0.16"
 ort = { version = "2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "api-31"] }
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
 ureq = { version = "3", default-features = false, features = ["native-tls"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
