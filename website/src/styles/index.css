@@ -1,0 +1,293 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =====================================================================
+   AUDIFY SEMANTIC THEME TOKENS (1:1 mirror of Audify DESIGN.md)
+   ===================================================================== */
+
+:root,
+html[data-theme="dark"] {
+  --accent-rgb: 245 158 11;
+  --accent-fg-rgb: 245 158 11;
+  --c-accent-on: #0d0d0f;
+  --signal-accent: rgb(var(--accent-rgb));
+  --signal-accent-bg: color-mix(in srgb, rgb(var(--accent-rgb)) 15%, #141417);
+  --c-accent-hover: color-mix(in srgb, rgb(var(--accent-rgb)) 86%, #ffffff);
+
+  --c-surface-0: #0d0d0f;
+  --c-surface-1: #141417;
+  --c-surface-rail: #101013;
+  --c-surface-header: #16161a;
+  --c-surface-2: #18181c;
+  --c-surface-3: #1c1c21;
+  --c-surface-badge: #1e1e24;
+  --c-surface-hover: #1a1a1f;
+
+  --c-line: #26262c;
+  --c-line-subtle: #1b1b21;
+  --c-line-strong: #32323c;
+  --c-line-hover: #4a4a55;
+
+  --c-fg: #f4f4f8;
+  --c-fg-2: #c8c8d4;
+  --c-fg-3: #9e9eae;
+  --c-fg-head: #b8b8c6;
+  --c-fg-faint: #585866;
+
+  --ok-rgb: 16 185 129;
+  --warn-rgb: 245 158 11;
+  --info-rgb: 96 165 250;
+  --danger-rgb: 239 68 68;
+}
+
+html[data-theme="light"] {
+  --c-surface-0: #f4f5f8;
+  --c-surface-1: #eaecef;
+  --c-surface-rail: #e2e5ec;
+  --c-surface-header: #e6e8ef;
+  --c-surface-2: #fafafc;
+  --c-surface-3: #ffffff;
+  --c-surface-badge: #e7e9f0;
+  --c-surface-hover: #e3e7f2;
+
+  --c-line: #cbcdd8;
+  --c-line-subtle: #dfdfe8;
+  --c-line-strong: #b0b4c2;
+  --c-line-hover: #8c90a1;
+
+  --c-fg: #111216;
+  --c-fg-2: #363945;
+  --c-fg-3: #525666;
+  --c-fg-head: #484c5b;
+  --c-fg-faint: #8f94a4;
+
+  --signal-accent-bg: color-mix(in srgb, rgb(var(--accent-rgb)) 15%, #f4f5f8);
+  --c-accent-hover: color-mix(in srgb, rgb(var(--accent-rgb)) 88%, #000000);
+
+  --ok-rgb: 5 150 105;
+  --warn-rgb: 180 83 9;
+  --info-rgb: 37 99 235;
+  --danger-rgb: 220 38 38;
+}
+
+html[data-theme="contrast"] {
+  --c-surface-0: #000000;
+  --c-surface-1: #050505;
+  --c-surface-rail: #000000;
+  --c-surface-header: #0a0a0a;
+  --c-surface-2: #0a0a0a;
+  --c-surface-3: #121212;
+  --c-surface-badge: #141414;
+  --c-surface-hover: #1a1a1a;
+
+  --c-line: #525252;
+  --c-line-subtle: #262626;
+  --c-line-strong: #737373;
+  --c-line-hover: #a3a3a3;
+
+  --c-fg: #ffffff;
+  --c-fg-2: #e0e0e0;
+  --c-fg-3: #b0b0b0;
+  --c-fg-head: #d4d4d4;
+  --c-fg-faint: #777777;
+
+  --c-accent-on: #000000;
+  --signal-accent-bg: color-mix(in srgb, rgb(var(--accent-rgb)) 22%, #000000);
+  --c-accent-hover: color-mix(in srgb, rgb(var(--accent-rgb)) 82%, #ffffff);
+
+  --ok-rgb: 52 211 153;
+  --warn-rgb: 250 204 21;
+  --info-rgb: 56 189 248;
+  --danger-rgb: 239 68 68;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    scroll-padding-top: 84px;
+    background-color: var(--c-surface-0);
+    color: var(--c-fg);
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  * {
+    border-color: var(--c-line);
+  }
+
+  .font-mono {
+    font-variant-numeric: tabular-nums;
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible {
+    outline: 1px solid rgb(var(--accent-rgb));
+    outline-offset: 2px;
+  }
+}
+
+/* Slim studio scrollbar matching Audify */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-track {
+  background: var(--c-surface-1);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--c-line-strong);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--accent-rgb));
+}
+::-webkit-scrollbar-corner {
+  background: var(--c-surface-1);
+}
+
+/* Audify Studio Rectangular-Thumb Range Sliders */
+input[type="range"].studio-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 3px;
+  background: var(--c-line-strong);
+  border-radius: 1px;
+  outline: none;
+  cursor: pointer;
+}
+input[type="range"].studio-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 6px;
+  height: 12px;
+  border-radius: 1.5px;
+  background: rgb(var(--accent-rgb));
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+input[type="range"].studio-slider::-moz-range-thumb {
+  width: 6px;
+  height: 12px;
+  border-radius: 1.5px;
+  background: rgb(var(--accent-rgb));
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+
+/* Frosted surfaces that keep AAA legibility over ASCII atmosphere */
+.surface-glass {
+  background-color: color-mix(in srgb, var(--c-surface-1) 82%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+.surface-glass-strong {
+  background-color: color-mix(in srgb, var(--c-surface-1) 92%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+.surface-card-soft {
+  background-color: color-mix(in srgb, var(--c-surface-2) 86%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* Global architectural container rail (enforces identical edges across EVERY section) */
+.page-rail {
+  width: 100%;
+  max-width: 1200px;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 1.25rem;
+  padding-right: 1.25rem;
+}
+@media (min-width: 640px) {
+  .page-rail {
+    padding-left: 2rem;
+    padding-right: 2rem;
+  }
+}
+
+/* Kinetic Scroll Reveal */
+.reveal-item {
+  opacity: 0;
+  transform: translateY(18px);
+  transition:
+    opacity 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform;
+}
+.reveal-item[data-visible="true"] {
+  opacity: 1;
+  transform: translateY(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal-item {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
+/* Cursor border spotlight effect */
+.spotlight-card {
+  position: relative;
+  overflow: hidden;
+}
+.spotlight-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  background: radial-gradient(
+    320px circle at var(--mx, 50%) var(--my, 50%),
+    rgb(var(--accent-rgb) / 0.11),
+    transparent 65%
+  );
+}
+.spotlight-card:hover::before {
+  opacity: 1;
+}
+
+/* Infinite seamless studio marquee */
+@keyframes marquee-scroll {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+.marquee-track {
+  display: flex;
+  width: max-content;
+  animation: marquee-scroll 34s linear infinite;
+}
+.marquee-track:hover {
+  animation-play-state: paused;
+}
+@media (prefers-reduced-motion: reduce) {
+  .marquee-track {
+    animation: none;
+  }
+}
+
+/* Focus-frame subtle pulse for Feature Tour */
+@keyframes focus-reticle-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgb(var(--accent-rgb) / 0.95),
+      0 0 24px rgb(var(--accent-rgb) / 0.25);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px rgb(var(--accent-rgb) / 1),
+      0 0 34px rgb(var(--accent-rgb) / 0.42);
+  }
+}
+.focus-frame-ring {
+  animation: focus-reticle-pulse 2.6s ease-in-out infinite;
+}

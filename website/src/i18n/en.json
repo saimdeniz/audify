@@ -1,0 +1,364 @@
+{
+  "meta": {
+    "localeName": "English",
+    "code": "en"
+  },
+  "nav": {
+    "overview": "Overview",
+    "demo": "Live Demo",
+    "features": "Feature Tour",
+    "workflow": "Portable",
+    "docs": "Docs",
+    "faq": "FAQ",
+    "download": "Download",
+    "themeLabel": "Theme",
+    "accentLabel": "Accent",
+    "asciiLabel": "ASCII",
+    "asciiDisabledContrast": "Disabled in High Contrast for legibility"
+  },
+  "ascii": {
+    "label": "ASCII",
+    "presets": {
+      "isobars": "Isobars",
+      "spectrum": "Spectrum",
+      "horizon": "Horizon"
+    }
+  },
+  "hero": {
+    "eyebrow": "WINDOWS 10/11 · PORTABLE SINGLE-EXE · ZERO TELEMETRY",
+    "titleLine1": "Every sound in your library,",
+    "titleAccent": "playable in 0.2 ms.",
+    "subtitle": "Audify is a local-first desktop audio & SFX manager built with Rust, SQLite FTS5, and Tauri v2. Audition, slice, pitch, tag, find acoustically similar hits offline, and drag directly into DaVinci Resolve, Premiere Pro, or Ableton.",
+    "ctaPrimary": "Download Portable .exe",
+    "ctaSecondary": "Try Interactive Demo",
+    "metaPortable": "Creates ./user/ beside Audify.exe",
+    "metaOffline": "100% Offline AI & SQLite WAL",
+    "metaScale": "Built for 50,000+ sample vaults",
+    "previewCaption": "Live capture from Audify — switches automatically with the website theme.",
+    "previewTabs": {
+      "dark": "Dark",
+      "light": "Light",
+      "contrast": "Contrast",
+      "ascii": "ASCII Theme",
+      "collapsed": "Compact Rail"
+    },
+    "zoomHint": "Inspect full resolution"
+  },
+  "marquee": {
+    "label": "BUILT FOR REAL STUDIO PIPELINES",
+    "items": [
+      "DaVinci Resolve Fairlight",
+      "Adobe Premiere Pro",
+      "Ableton Live",
+      "FL Studio",
+      "REAPER",
+      "After Effects",
+      "WAV / Broadcast BWF",
+      "FLAC / OGG / MP3 / AIFF",
+      "WASAPI Shared & Exclusive",
+      "SQLite FTS5 + WAL",
+      "Offline YAMNet ONNX AI",
+      "Win32 Edge-Peek Mini Dock"
+    ]
+  },
+  "demo": {
+    "eyebrow": "INTERACTIVE REPLICA · REAL CC0 AUDIO",
+    "title": "Experience Audify right in your browser.",
+    "subtitle": "A faithful replica of Audify's actual studio interface powered by 12 real CC0 Public Domain audio files. Click any row to audition, drag across the waveform deck to slice, shift pitch live, or run AI similarity matching.",
+    "hintControls": "Space: Play/Pause · ↑/↓: Navigate · Drag waveform: Slice · Shift+Enter: Find Similar",
+    "searchPlaceholder": "Search samples, tags, genres...",
+    "dockButton": "DOCK",
+    "dockActive": "DOCK OPEN",
+    "sliceHint": "Drag waveform to slice · I / O mark",
+    "sliceActive": "SLICE",
+    "fullMode": "FULL",
+    "clearSlice": "Clear slice",
+    "allFiles": "All Files",
+    "favorites": "Favorites",
+    "similarityMode": "Similar",
+    "clearSimilarity": "Exit similarity",
+    "similarityBanner": "Acoustic Similarity",
+    "anchorBadge": "ANCHOR",
+    "columns": {
+      "class": "CLASS",
+      "fileName": "FILE NAME",
+      "waveform": "WAVEFORM",
+      "genre": "GENRE",
+      "tags": "TAGS",
+      "time": "TIME"
+    },
+    "statusReady": "Ready · Profile: Studio Demo · CC0 Public Domain Audio",
+    "miniDockTitle": "Audify Mini Dock",
+    "miniDockHint": "Always-on-top companion · Drag any row to NLE",
+    "noMatches": "No samples match the current search or filter.",
+    "resetFilters": "Reset filters"
+  },
+  "features": {
+    "eyebrow": "CODE-DRIVEN FOCUS TOUR",
+    "title": "Real screenshots. Zero fluff.",
+    "subtitle": "Every highlight below frames the exact region inside real captures of Audify — click any chapter to glide the spotlight across the interface.",
+    "inspectFull": "Full Screen",
+    "stepLabel": "Interactive State",
+    "items": [
+      {
+        "id": "deck",
+        "code": "01",
+        "title": "Zero-Latency Deck & Slicing",
+        "shortDesc": "Sub-millisecond transport, live semitone pitch shift, and non-destructive right-drag waveform slicing.",
+        "detail": "Audition thousands of files instantaneously with keyboard scrubbing, live -12st to +12st pitch preview, and right-drag slice markers (I / O). Dragging a slice into your NLE exports a clean cropped WAV without ever touching the original file.",
+        "badge": "TRANSPORT + WAVEFORM DECK",
+        "subModes": [
+          { "id": "waveform", "label": "Waveform & Slice Ruler" },
+          { "id": "transport", "label": "Transport & Pitch" }
+        ]
+      },
+      {
+        "id": "search",
+        "code": "02",
+        "title": "Instant FTS5 Search & Waveforms",
+        "shortDesc": "Filter 50,000+ samples at 60fps with virtualized mini waveforms and quick tag chips.",
+        "detail": "Powered by SQLite FTS5 + WAL in Rust. Search across file names, folders, genres, BPM, keys, and custom tags while virtualized 34px rows stream precomputed waveform envelopes with zero UI stutter.",
+        "badge": "FTS5 SEARCH + VIRTUAL TABLE",
+        "subModes": [
+          { "id": "table", "label": "Virtualized Sample Table" },
+          { "id": "searchbar", "label": "Search & Tag Cloud" }
+        ]
+      },
+      {
+        "id": "similarity",
+        "code": "03",
+        "title": "Offline AI Acoustic Similarity",
+        "shortDesc": "Drop any audio clip onto the window to rank acoustically similar hits in 0.2 ms — 100% locally.",
+        "detail": "Audify runs an optional local YAMNet ONNX embedding model right on your CPU with zero cloud calls. Drop an external reference sound or trigger similarity from any row to surface matching impacts, swooshes, or textures in fractions of a millisecond.",
+        "badge": "OFFLINE YAMNET ONNX · 0.2 MS",
+        "subModes": [
+          { "id": "drop", "label": "1. Drop Any Reference Audio" },
+          { "id": "results", "label": "2. Ranked Matches (0.2 ms)" }
+        ]
+      },
+      {
+        "id": "taxonomy",
+        "code": "04",
+        "title": "Faceted Tags & Genre Taxonomy",
+        "shortDesc": "Organize SFX and music with color-coded facets, rule-based auto-tagging, and instant filter drawers.",
+        "detail": "Keep massive libraries tidy with structured tag facets (Action & Combat, Voice & Music, Nature & Ambience) and Genre/Mood drawers. Every color swatch follows a unified studio palette across Dark, Light, and Contrast themes.",
+        "badge": "STRUCTURED FILTER DRAWER",
+        "subModes": [
+          { "id": "tags", "label": "Faceted Tags Drawer" },
+          { "id": "genre", "label": "Genre & Mood Drawer" }
+        ]
+      },
+      {
+        "id": "minidock",
+        "code": "05",
+        "title": "Mini Dock & Edge-Peek Companion",
+        "shortDesc": "Collapse Audify into a compact always-on-top dock (Ctrl+M) or let it rest silently at the edge of your monitor.",
+        "detail": "Built for single- and dual-monitor editors alike. Use Mini Dock standalone over DaVinci Resolve or Premiere Pro, or enable the optional Win32 Edge-Peek strip so it rests unobtrusively at your screen edge and expands on hover.",
+        "badge": "MINI DOCK · EDGE-PEEK",
+        "subModes": [
+          { "id": "idle", "label": "1. Edge-Peek" },
+          { "id": "open", "label": "2. Mini Dock" }
+        ]
+      },
+      {
+        "id": "settings",
+        "code": "06",
+        "title": "WASAPI Audio & Deep Control",
+        "shortDesc": "Output device routing, normalization, loudness targets, custom themes, and Protected Vault safety.",
+        "detail": "Choose your exact Windows audio output device, configure LUFS loudness normalization, sync multi-window themes seamlessly, and enable Protected Vault locks so your master archive can never be renamed or deleted by mistake.",
+        "badge": "STUDIO SETTINGS · WASAPI",
+        "subModes": [
+          { "id": "audio", "label": "Audio & Routing Engine" }
+        ]
+      }
+    ]
+  },
+  "workflow": {
+    "eyebrow": "TRUE PORTABLE ARCHITECTURE",
+    "title": "Drop one .exe anywhere. Take your entire studio with you.",
+    "subtitle": "Audify requires zero installers and writes zero Windows Registry entries. Put Audify.exe on an internal SSD or external NVMe drive — your index, peaks, tags, and settings live cleanly inside ./user/ right beside it.",
+    "steps": [
+      {
+        "num": "01",
+        "title": "Place Audify.exe",
+        "desc": "Download the single portable executable and drop it into any writable folder or external sample SSD."
+      },
+      {
+        "num": "02",
+        "title": "Auto-Creates ./user/",
+        "desc": "On first launch, Audify initializes a self-contained ./user/ directory for its SQLite WAL index, waveform cache, and profiles."
+      },
+      {
+        "num": "03",
+        "title": "Index & Tag Locally",
+        "desc": "Point Audify at your SFX & music roots. Protected Vault mode ensures Audify never mutates your original audio files."
+      },
+      {
+        "num": "04",
+        "title": "Drag Into Any NLE",
+        "desc": "Use Main Window or Edge-Peek Mini Dock to audition, slice, and drag full clips or cropped regions straight onto timelines."
+      }
+    ],
+    "fallbackNote": "Launched from a read-only directory like Program Files? Audify automatically falls back to %APPDATA%\\Audify without breaking."
+  },
+  "docs": {
+    "eyebrow": "QUICK GUIDE & REFERENCE",
+    "title": "Documentation & Studio Reference",
+    "subtitle": "Concise, practical reference for portable setup, FTS5 search operators, slicing, shortcuts, and offline AI.",
+    "tabs": [
+      {
+        "id": "portable",
+        "code": "01",
+        "label": "Portable Setup",
+        "heading": "Portable Folder Layout & Profiles",
+        "badge": "ARCHITECTURE",
+        "summary": "Audify operates in Portable-First mode out of the box. Everything needed to move your workstation between machines stays inside one folder.",
+        "codeTitle": "DIRECTORY STRUCTURE",
+        "codeLines": [
+          "D:\\AudioTools\\Audify\\",
+          "├── Audify.exe                 # Single native Tauri v2 + Rust binary",
+          "└── user\\                      # Auto-created beside Audify.exe",
+          "    ├── profiles\\              # Isolated studio profiles (SFX, Music, Client)",
+          "    ├── samples.db             # SQLite FTS5 + WAL index & metadata",
+          "    ├── peaks\\                 # Precomputed waveform envelope cache",
+          "    ├── models\\                # Optional offline YAMNet ONNX weights",
+          "    └── settings.json          # Themes, WASAPI device, custom rules"
+        ],
+        "notes": [
+          "Move the folder to another PC or USB-C NVMe drive and launch immediately — zero re-indexing.",
+          "If launched from a write-protected path (e.g. C:\\Program Files), Audify safely falls back to %APPDATA%\\Audify."
+        ]
+      },
+      {
+        "id": "search",
+        "code": "02",
+        "label": "Smart Search",
+        "heading": "FTS5 Search Syntax & Filtering",
+        "badge": "QUERY ENGINE",
+        "summary": "Combine natural keywords, exact phrases, tags, and exclusions in the top search bar — results update live on every keystroke.",
+        "rows": [
+          { "syntax": "whoosh air", "desc": "Matches samples containing both 'whoosh' and 'air' across filename, folder, genre, and tags." },
+          { "syntax": "\"glass shatter\"", "desc": "Exact phrase match in file name or folder path." },
+          { "syntax": "impact -explosion", "desc": "Include 'impact' while excluding any sample matching 'explosion'." },
+          { "syntax": "bpm:120..140", "desc": "Filter musical loops within a BPM range using the bottom filter drawer." },
+          { "syntax": "#Whoosh + Ambient", "desc": "Combine top tag cloud swatches with Genre & Mood facet chips simultaneously." }
+        ]
+      },
+      {
+        "id": "slicing",
+        "code": "03",
+        "label": "Slicing & Loudness",
+        "heading": "Non-Destructive Slicing & LUFS Playback",
+        "badge": "AUDIO ENGINE",
+        "summary": "Extract the exact hit from a 20-second SFX recording without opening an external wave editor.",
+        "bullets": [
+          { "title": "Right-Drag or I / O Markers", "body": "Right-drag directly on the top Waveform Deck — or tap I (In) and O (Out) while auditioning — to isolate any region." },
+          { "title": "Live Pitch Preview (-12st to +12st)", "body": "Audition impacts deeper or risers higher in real time using the deck's semitone stepper before committing to your timeline." },
+          { "title": "Zero Mutation of Source Files", "body": "Dragging an active slice into DaVinci Resolve, Premiere, or Ableton writes a clean temporary cropped WAV while keeping your source library 100% untouched." },
+          { "title": "EBU R128 Loudness Awareness", "body": "Consistent audition levels across quiet foley recordings and loud mastered trailer hits via optional playback normalization." }
+        ]
+      },
+      {
+        "id": "shortcuts",
+        "code": "04",
+        "label": "Shortcuts",
+        "heading": "Studio Keyboard Cheatsheet",
+        "badge": "WORKFLOW",
+        "summary": "Keep one hand on the keyboard and the other on your NLE timeline. Every core action is one keystroke away.",
+        "shortcuts": [
+          { "action": "Play / Pause Audition", "keys": "Space" },
+          { "action": "Navigate & Multi-Select", "keys": "↑ / ↓ · Shift+↑/↓" },
+          { "action": "Scrub Playhead (±0.5s / ±0.1s)", "keys": "← / → · Shift" },
+          { "action": "Mark Slice In / Out Point", "keys": "I / O" },
+          { "action": "Nudge Active Slice Bounds", "keys": "Alt+← / Alt+→" },
+          { "action": "Find Acoustically Similar (AI)", "keys": "Shift+Enter" },
+          { "action": "Toggle Edge-Peek Mini Dock", "keys": "Ctrl+M" },
+          { "action": "Inline / Batch Rename Studio", "keys": "F2" },
+          { "action": "Copy Formatted License Credits", "keys": "Ctrl+Shift+C" },
+          { "action": "Atomic Undo / Redo File Ops", "keys": "Ctrl+Z / Ctrl+Y" }
+        ]
+      },
+      {
+        "id": "ai",
+        "code": "05",
+        "label": "Offline AI Setup",
+        "heading": "100% Local YAMNet ONNX Audio Intelligence",
+        "badge": "PRIVACY-FIRST AI",
+        "summary": "Acoustic similarity and AI auto-tagging run strictly on your own CPU — no API keys, no subscriptions, and zero audio ever leaves your machine.",
+        "bullets": [
+          { "title": "Optional Local Model", "body": "Audify works completely without AI out of the box. Enable the local YAMNet ONNX model in Settings → AI when you want acoustic embeddings." },
+          { "title": "0.2 ms Vector Retrieval", "body": "Once indexed locally, finding the 50 closest sounds to any library file — or any external WAV/MP3 dropped onto the window — completes in sub-millisecond time." },
+          { "title": "Human-in-the-Loop Tagging", "body": "AI tag suggestions appear with distinct confidence styling so you can approve or dismiss them cleanly without polluting manual tags." },
+          { "title": "Strict Offline CSP", "body": "Audify ships with a locked-down Content Security Policy and zero analytics or background phone-home requests." }
+        ]
+      }
+    ]
+  },
+  "faq": {
+    "eyebrow": "QUESTIONS",
+    "title": "Frequently Asked Questions",
+    "subtitle": "Clear, honest answers before you download.",
+    "leftColumn": [
+      {
+        "q": "Does Audify require installation or write to the Windows Registry?",
+        "a": "No. Audify is a portable single executable. Drop Audify.exe into any folder and it stores its SQLite database, waveform cache, and settings inside ./user/ right beside the binary. Uninstall is simply deleting the folder."
+      },
+      {
+        "q": "Does the AI tagger or similarity search send audio to the cloud?",
+        "a": "Never. Audify enforces an offline-first architecture with zero telemetry. The optional YAMNet ONNX model executes 100% locally on your CPU, and external audio drops are analyzed strictly on your machine."
+      },
+      {
+        "q": "Can Audify accidentally delete or rename my master sample library?",
+        "a": "Enable Protected Vault on any library root to make it strictly read-only inside Audify. Even on writable roots, deletions require two-step confirmation, route to quarantine/Recycle Bin, and support atomic undo."
+      },
+      {
+        "q": "How much RAM does Audify use on 50,000+ sample libraries?",
+        "a": "Because Audify pairs a Rust/SQLite WAL backend with virtualized table rendering and compact peak envelopes, typical memory usage stays lean — far below Electron-based browsers."
+      }
+    ],
+    "rightColumn": [
+      {
+        "q": "Why might Windows SmartScreen appear on first launch?",
+        "a": "Independent portable Windows builds without a costly EV code-signing certificate can trigger a first-run SmartScreen prompt. Click 'More info → Run anyway' and verify the SHA-256 checksum published on the release page."
+      },
+      {
+        "q": "What happens if my external sample drive changes drive letters?",
+        "a": "Audify includes smart root relinking and portable path handling so if your NVMe drive shifts from D: to E:, you can relink the root in one step without losing tags, favorites, or waveform caches."
+      },
+      {
+        "q": "Which audio formats and NLE/DAW apps are supported?",
+        "a": "Audify natively decodes WAV (including Broadcast WAV metadata), FLAC, MP3, OGG, AIFF, and M4A/AAC, and uses native Windows OLE drag-and-drop compatible with DaVinci Resolve, Premiere Pro, After Effects, Ableton Live, FL Studio, and REAPER."
+      },
+      {
+        "q": "Is a macOS or Linux build available?",
+        "a": "Audify is currently engineered specifically for Windows 10/11 (leveraging native Win32 Edge-Peek and WASAPI). Cross-platform builds may be explored after the Windows feature roadmap matures."
+      }
+    ]
+  },
+  "download": {
+    "eyebrow": "GET AUDIFY",
+    "title": "Ready in ten seconds. Zero installer.",
+    "subtitle": "Download the latest portable Windows build, drop it in your studio tools folder, and point it at your sound library.",
+    "cardTitle": "Audify Portable for Windows",
+    "cardBadge": "SINGLE .EXE · SELF-CONTAINED",
+    "ctaDownload": "Download Audify.exe",
+    "ctaGithub": "View Release Notes on GitHub",
+    "checksumLabel": "SHA-256",
+    "copyChecksum": "Copy",
+    "copied": "Copied",
+    "highlights": [
+      "Zero installer · zero Windows Registry footprint",
+      "Auto-creates ./user/ next to Audify.exe",
+      "100% offline · zero accounts · zero telemetry",
+      "Includes Dark, Light, High Contrast & ASCII themes"
+    ]
+  },
+  "footer": {
+    "tagline": "Local-first desktop audio & SFX library manager engineered with Rust, SQLite FTS5, and Tauri v2.",
+    "colProduct": "Product",
+    "colResources": "Reference",
+    "colAudio": "Open Source",
+    "demoAudioShort": "Demo Audio (CC0 1.0)",
+    "copyright": "Audify · Licensed under GPL-3.0."
+  }
+}
