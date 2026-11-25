@@ -33,7 +33,7 @@ sha2 = "0.10"
 hex = "0.4"
 ureq = { version = "3", default-features = false, features = ["native-tls"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
-notify = "8"
+notify = "9"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 dunce = "1"
