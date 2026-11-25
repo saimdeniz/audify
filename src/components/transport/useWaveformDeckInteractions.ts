@@ -5,6 +5,7 @@ import type { SampleItem, SliceRange } from "../../types";
 import { startNativeSliceDrag } from "../../utils/drag";
 import { isSlicePreviewSample } from "../../utils/slicePreview";
 import {
+  computeWheelZoomFactor,
   panWaveformViewportByScreenDelta,
   screenRatioToTrackRatio,
   trackRatioToScreenRatio,
@@ -28,9 +29,9 @@ interface UseWaveformDeckInteractionsParams {
   containerRef: React.RefObject<HTMLDivElement | null>;
   containerRectRef: React.MutableRefObject<{ left: number; width: number }>;
   viewportRef: React.MutableRefObject<WaveformViewport>;
-  setViewport: (next: WaveformViewport) => void;
+  setViewport: (next: WaveformViewport, interactive?: boolean) => void;
   hoverRatioRef: React.MutableRefObject<number | null>;
-  drawWaveformRef: React.MutableRefObject<() => void>;
+  scheduleDraw: () => void;
 }
 
 export function useWaveformDeckInteractions({
@@ -43,7 +44,7 @@ export function useWaveformDeckInteractions({
   viewportRef,
   setViewport,
   hoverRatioRef,
-  drawWaveformRef,
+  scheduleDraw,
 }: UseWaveformDeckInteractionsParams) {
   const addSamplesToBin = useSampleStore((s) => s.addSamplesToBin);
   const recordSliceExport = useSampleStore((s) => s.recordSliceExport);
@@ -117,9 +118,12 @@ export function useWaveformDeckInteractions({
 
     const handleWheel = (e: WheelEvent) => {
       if (!selectedSampleRef.current) return;
-      const box = container.getBoundingClientRect();
-      containerRectRef.current = { left: box.left, width: box.width };
-      const rect = containerRectRef.current;
+      let rect = containerRectRef.current;
+      if (rect.width <= 0) {
+        const box = container.getBoundingClientRect();
+        rect = { left: box.left, width: box.width };
+        containerRectRef.current = rect;
+      }
       if (rect.width <= 0) return;
 
       const curVp = viewportRef.current;
@@ -133,14 +137,13 @@ export function useWaveformDeckInteractions({
           curVp,
           (deltaPx / rect.width) * 0.45
         );
-        viewportRef.current = nextVp;
-        setViewport(nextVp);
+        if (nextVp.startRatio === curVp.startRatio) return;
         const screenRatio = Math.max(
           0,
           Math.min(1, (e.clientX - rect.left) / rect.width)
         );
         hoverRatioRef.current = screenRatioToTrackRatio(screenRatio, nextVp);
-        drawWaveformRef.current();
+        setViewport(nextVp, true);
         return;
       }
 
@@ -150,7 +153,7 @@ export function useWaveformDeckInteractions({
         0,
         Math.min(1, (e.clientX - rect.left) / rect.width)
       );
-      const zoomFactor = e.deltaY < 0 ? 1.28 : 1 / 1.28;
+      const zoomFactor = computeWheelZoomFactor(e.deltaY, e.deltaMode);
       const nextVp = zoomWaveformViewportAt(
         curVp,
         cursorScreenRatio,
@@ -162,13 +165,11 @@ export function useWaveformDeckInteractions({
       ) {
         return;
       }
-      viewportRef.current = nextVp;
-      setViewport(nextVp);
       hoverRatioRef.current = screenRatioToTrackRatio(
         cursorScreenRatio,
         nextVp
       );
-      drawWaveformRef.current();
+      setViewport(nextVp, true);
     };
 
     container.addEventListener("wheel", handleWheel, { passive: false });
@@ -179,7 +180,6 @@ export function useWaveformDeckInteractions({
     viewportRef,
     setViewport,
     hoverRatioRef,
-    drawWaveformRef,
   ]);
 
   const beginWindowPanDrag = (startClientX: number) => {
@@ -200,10 +200,8 @@ export function useWaveformDeckInteractions({
         if (rect.width <= 0) return;
         const dxScreenRatio = -(moveEvt.clientX - startClientX) / rect.width;
         const nextVp = panWaveformViewportByScreenDelta(startVp, dxScreenRatio);
-        viewportRef.current = nextVp;
-        setViewport(nextVp);
         hoverRatioRef.current = clientXToTrackRatio(moveEvt.clientX, rect);
-        drawWaveformRef.current();
+        setViewport(nextVp, true);
       },
       (cleanup) => {
         cleanup();
@@ -256,7 +254,7 @@ export function useWaveformDeckInteractions({
           latestRange = { startSec: latestRange.startSec, endSec: nextEnd };
           setSliceRange(latestRange);
         }
-        drawWaveformRef.current();
+        scheduleDraw();
       },
       (cleanup) => {
         cleanup();
@@ -297,7 +295,7 @@ export function useWaveformDeckInteractions({
         hoverRatioRef.current = curRatio;
         latestSec = curRatio * dur;
         resetPlayheadClock(latestSec);
-        drawWaveformRef.current();
+        scheduleDraw();
 
         const now = performance.now();
         if (now - lastSeekMs >= 24 && Math.abs(latestSec - lastDispatchedSec) >= 0.005) {
@@ -458,7 +456,7 @@ export function useWaveformDeckInteractions({
     const mouseX = e.clientX - rect.left;
     const ratio = clientXToTrackRatio(e.clientX, rect);
     hoverRatioRef.current = ratio;
-    drawWaveformRef.current();
+    scheduleDraw();
 
     if (sliceRange && sliceRange.endSec - sliceRange.startSec > 0.03) {
       const sx = secToScreenX(sliceRange.startSec, rect.width);
@@ -483,7 +481,7 @@ export function useWaveformDeckInteractions({
     if (dragMode !== "none") return;
     hoverRatioRef.current = null;
     setHoverZone("none");
-    drawWaveformRef.current();
+    scheduleDraw();
   };
 
   return {

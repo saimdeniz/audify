@@ -1,4 +1,6 @@
 export const MAX_WAVEFORM_ZOOM = 32;
+const WHEEL_NOTCH_PX = 100;
+const WHEEL_NOTCH_FACTOR = 1.28;
 
 export interface WaveformViewport {
   zoom: number;
@@ -9,6 +11,26 @@ export const DEFAULT_WAVEFORM_VIEWPORT: WaveformViewport = {
   zoom: 1,
   startRatio: 0,
 };
+
+/**
+ * Converts a browser `WheelEvent` (`deltaY`, `deltaMode`) into a smooth exponential
+ * zoom factor. Standard 100px mouse notches keep the crisp 1.28x step while high-frequency
+ * precision touchpads scale proportionally instead of jumping to max zoom.
+ */
+export function computeWheelZoomFactor(
+  deltaY: number,
+  deltaMode = 0
+): number {
+  if (!Number.isFinite(deltaY) || Math.abs(deltaY) < 0.01) return 1;
+  let deltaPx = deltaY;
+  if (deltaMode === 1) {
+    deltaPx = deltaY * (WHEEL_NOTCH_PX / 3);
+  } else if (deltaMode === 2) {
+    deltaPx = deltaY * 240;
+  }
+  const clampedPx = Math.max(-300, Math.min(300, deltaPx));
+  return Math.pow(WHEEL_NOTCH_FACTOR, -clampedPx / WHEEL_NOTCH_PX);
+}
 
 export function clampWaveformViewport(
   zoom: number,

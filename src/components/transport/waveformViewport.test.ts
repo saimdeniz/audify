@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  computeWheelZoomFactor,
   DEFAULT_WAVEFORM_VIEWPORT,
   MAX_WAVEFORM_ZOOM,
   panWaveformViewportByScreenDelta,
@@ -44,5 +45,21 @@ describe("waveformViewport", () => {
 
     const track = screenRatioToTrackRatio(0.6, zoomed);
     expect(trackRatioToScreenRatio(track, zoomed)).toBeCloseTo(0.6, 5);
+  });
+
+  it("scales wheel zoom smoothly for precision touchpads while keeping 1.28x per standard notch", () => {
+    expect(computeWheelZoomFactor(-100, 0)).toBeCloseTo(1.28, 5);
+    expect(computeWheelZoomFactor(100, 0)).toBeCloseTo(1 / 1.28, 5);
+    expect(computeWheelZoomFactor(-3, 1)).toBeCloseTo(1.28, 5);
+
+    // Ten tiny -10px touchpad ticks equal one standard 100px mouse notch instead of 1.28^10
+    const tinyStep = computeWheelZoomFactor(-10, 0);
+    expect(tinyStep).toBeGreaterThan(1);
+    expect(tinyStep).toBeLessThan(1.05);
+    expect(Math.pow(tinyStep, 10)).toBeCloseTo(1.28, 5);
+
+    // Extreme outlier spikes clamp safely
+    expect(computeWheelZoomFactor(-5000, 0)).toBeCloseTo(Math.pow(1.28, 3), 5);
+    expect(computeWheelZoomFactor(0, 0)).toBe(1);
   });
 });
