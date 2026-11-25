@@ -1,11 +1,18 @@
 pub mod default_rules;
+mod migration_v17;
+mod migration_v19;
 mod migrations;
 mod schema;
+pub mod taxonomy;
 
 pub use default_rules::{
     default_auto_tag_rules, deterministic_color_for_name, STUDIO_COLOR_PALETTE,
 };
 pub use schema::{ensure_column, init_schema_on_conn, SAMPLE_TAGS_FTS_TRIGGERS_SQL};
+pub use taxonomy::{
+    ensure_taxonomy_tag, prune_orphan_auto_tags, rebuild_fts_tags_for_samples,
+    sync_primary_genre_for_samples, sync_primary_genre_for_tag, FTS_TAGS_TEXT_SUBQUERY_SQL,
+};
 
 use rusqlite::config::DbConfig;
 use rusqlite::{params, params_from_iter, Connection, OpenFlags};
@@ -88,10 +95,27 @@ impl Drop for PooledReadConn {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct SnapshotTagMeta {
+    pub name: String,
+    pub color: String,
+    pub facet_slug: String,
+    pub parent_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AutoTagUndoSnapshot {
+    pub profile_id: i64,
+    pub tag_meta_by_id: std::collections::HashMap<i64, SnapshotTagMeta>,
+    pub prev_sample_tags: Vec<(i64, i64, String)>,
+    pub prev_loop_flags: Vec<(i64, bool)>,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
     pub user_dir: PathBuf,
+    pub last_auto_tag_undo: Arc<Mutex<Option<AutoTagUndoSnapshot>>>,
     read_pool: Arc<ReadConnPool>,
 }
 
@@ -101,6 +125,7 @@ impl AppState {
         Self {
             db: Arc::new(Mutex::new(conn)),
             user_dir,
+            last_auto_tag_undo: Arc::new(Mutex::new(None)),
             read_pool,
         }
     }
@@ -179,6 +204,10 @@ pub struct AutoTagRule {
     pub min_duration_ms: Option<i64>,
     #[serde(default)]
     pub max_duration_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facet_slug: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_tag_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

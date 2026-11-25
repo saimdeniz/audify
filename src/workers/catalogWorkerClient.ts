@@ -1,5 +1,10 @@
-import { Collection, SampleItem } from "../types";
+import { Collection, SampleItem, Tag, TagFacet } from "../types";
 import { getCachedSampleByIdMap } from "../utils/sampleLookup";
+import { setSmartSearchTaxonomy } from "../utils/search/sampleIndex";
+import {
+  serializeTaxonomyForWorker,
+  type TaxonomyWorkerIndex,
+} from "../utils/taxonomyTree";
 import {
   CATALOG_WORKER_THRESHOLD,
   type CatalogFilterQueryParams,
@@ -14,6 +19,9 @@ let workerInstance: Worker | null = null;
 let workerFailed = false;
 let currentPoolEpoch = 0;
 let lastPoolRef: SampleItem[] | null = null;
+let lastTagsRef: readonly Tag[] | null = null;
+let lastFacetsRef: readonly TagFacet[] | undefined = undefined;
+let cachedTaxonomyIndex: TaxonomyWorkerIndex | null = null;
 
 let filterSeqCounter = 0;
 let countsSeqCounter = 0;
@@ -89,6 +97,13 @@ function ensureCatalogWorker(): Worker | null {
       }
     };
     workerInstance = w;
+    if (cachedTaxonomyIndex) {
+      const taxMsg: CatalogWorkerRequest = {
+        type: "set_taxonomy",
+        taxonomy: cachedTaxonomyIndex,
+      };
+      w.postMessage(taxMsg);
+    }
     return w;
   } catch {
     workerFailed = true;
@@ -126,6 +141,37 @@ export function clearCatalogWorkerPool(): void {
     };
     workerInstance.postMessage(msg);
   }
+}
+
+export function syncCatalogWorkerTaxonomy(
+  tags: readonly Tag[],
+  facets?: readonly TagFacet[]
+): TaxonomyWorkerIndex | null {
+  if (tags === lastTagsRef && facets === lastFacetsRef) {
+    return cachedTaxonomyIndex;
+  }
+  lastTagsRef = tags;
+  lastFacetsRef = facets;
+  cachedTaxonomyIndex =
+    tags.length > 0 || Boolean(facets && facets.length > 0)
+      ? serializeTaxonomyForWorker(tags, facets)
+      : null;
+  setSmartSearchTaxonomy(cachedTaxonomyIndex);
+  if (workerInstance) {
+    const msg: CatalogWorkerRequest = {
+      type: "set_taxonomy",
+      taxonomy: cachedTaxonomyIndex,
+    };
+    workerInstance.postMessage(msg);
+  }
+  return cachedTaxonomyIndex;
+}
+
+export function getCachedTaxonomyWorkerIndex(
+  tags: readonly Tag[],
+  facets?: readonly TagFacet[]
+): TaxonomyWorkerIndex | null {
+  return syncCatalogWorkerTaxonomy(tags, facets);
 }
 
 export function clearCatalogWorkerSearchCache(): void {

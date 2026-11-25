@@ -1,5 +1,6 @@
 import { foldSearchText } from "../format";
 import { getHarmonicCamelotNeighbors, normalizeMusicalOrCamelotKey } from "./musicalKey";
+import { getKnownCustomFacetSlugs } from "./sampleIndex";
 import {
   applyTechnicalOperatorToken,
   type TechnicalFilterCriteria,
@@ -22,6 +23,12 @@ export interface ParsedSearchQuery extends TechnicalFilterCriteria {
   excludeTagTerms: string[];
   genreTerms: string[];
   excludeGenreTerms: string[];
+  moodTerms: string[];
+  excludeMoodTerms: string[];
+  sourceTerms: string[];
+  excludeSourceTerms: string[];
+  customFacetTerms: Record<string, string[]>;
+  excludeCustomFacetTerms: Record<string, string[]>;
   folderTerms: string[];
   excludeFolderTerms: string[];
   extTerms: string[];
@@ -184,6 +191,12 @@ export function parseSmartSearchQuery(rawQuery: string): ParsedSearchQuery {
     excludeTagTerms: [],
     genreTerms: [],
     excludeGenreTerms: [],
+    moodTerms: [],
+    excludeMoodTerms: [],
+    sourceTerms: [],
+    excludeSourceTerms: [],
+    customFacetTerms: {},
+    excludeCustomFacetTerms: {},
     folderTerms: [],
     excludeFolderTerms: [],
     extTerms: [],
@@ -313,14 +326,15 @@ export function parseSmartSearchQuery(rawQuery: string): ParsedSearchQuery {
         if (key === "tag" || key === "t") {
           if (isNegated) result.excludeTagTerms.push(val);
           else result.tagTerms.push(val);
-        } else if (
-          key === "genre" ||
-          key === "g" ||
-          key === "mood" ||
-          key === "style"
-        ) {
+        } else if (key === "genre" || key === "g" || key === "style") {
           if (isNegated) result.excludeGenreTerms.push(val);
           else result.genreTerms.push(val);
+        } else if (key === "mood" || key === "m") {
+          if (isNegated) result.excludeMoodTerms.push(val);
+          else result.moodTerms.push(val);
+        } else if (key === "source" || key === "src") {
+          if (isNegated) result.excludeSourceTerms.push(val);
+          else result.sourceTerms.push(val);
         } else if (
           key === "folder" ||
           key === "in" ||
@@ -408,7 +422,16 @@ export function parseSmartSearchQuery(rawQuery: string): ParsedSearchQuery {
             handledOperator = false;
           }
         } else if (!applyTechnicalOperatorToken(key, val, isNegated, result)) {
-          handledOperator = false;
+          if (getKnownCustomFacetSlugs().has(key)) {
+            const targetMap = isNegated
+              ? result.excludeCustomFacetTerms
+              : result.customFacetTerms;
+            const list = targetMap[key] ?? [];
+            list.push(val);
+            targetMap[key] = list;
+          } else {
+            handledOperator = false;
+          }
         }
         if (handledOperator) {
           mergeNextWithOr = false;

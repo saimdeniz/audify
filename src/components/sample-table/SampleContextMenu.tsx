@@ -159,6 +159,14 @@ export const SampleContextMenu: React.FC<SampleContextMenuProps> = ({
     shortcuts.showInFolder ?? DEFAULT_SHORTCUTS.showInFolder,
     { compact: true }
   );
+  const openTagShortcutLabel = formatShortcutDisplay(
+    shortcuts.openTagPicker ?? DEFAULT_SHORTCUTS.openTagPicker ?? "",
+    { compact: true }
+  );
+  const openGenreShortcutLabel = formatShortcutDisplay(
+    shortcuts.openGenrePicker ?? DEFAULT_SHORTCUTS.openGenrePicker ?? "",
+    { compact: true }
+  );
 
   const menuContent = (
     <div
@@ -280,12 +288,20 @@ export const SampleContextMenu: React.FC<SampleContextMenuProps> = ({
             ? `Assign Tag (${contextMenu.targetIds.length})`
             : "Assign Tag"
         }
+        rightSlot={
+          openTagShortcutLabel ? (
+            <span className="font-mono text-[9.5px] text-fg-3">
+              {openTagShortcutLabel}
+            </span>
+          ) : undefined
+        }
       >
         <ContextMenuTagSubmenu
           submenuPositionClass={submenuPositionClass}
           targetIds={contextMenu.targetIds}
           isMultiContext={isMultiContext}
           activeContextSample={activeContextSample}
+          targetSamplesList={targetSamplesList}
           setContextMenu={setContextMenu}
         />
       </SubmenuTriggerItem>
@@ -300,12 +316,20 @@ export const SampleContextMenu: React.FC<SampleContextMenuProps> = ({
             ? `Assign Genre (${contextMenu.targetIds.length})`
             : "Assign Genre"
         }
+        rightSlot={
+          openGenreShortcutLabel ? (
+            <span className="font-mono text-[9.5px] text-fg-3">
+              {openGenreShortcutLabel}
+            </span>
+          ) : undefined
+        }
       >
         <ContextMenuGenreSubmenu
           submenuPositionClass={submenuPositionClass}
           targetIds={contextMenu.targetIds}
           isMultiContext={isMultiContext}
           activeContextSample={activeContextSample}
+          targetSamplesList={targetSamplesList}
           setContextMenu={setContextMenu}
         />
       </SubmenuTriggerItem>

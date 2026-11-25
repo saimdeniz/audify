@@ -36,6 +36,8 @@ pub struct EmbeddedAudioMeta {
     pub artist: String,
     pub album: String,
     pub year: String,
+    /// Detected canonical `(facet_slug, tag_name)` pairs across both `genre` and `mood` facets.
+    pub genre_mood_tags: Vec<(String, String)>,
 }
 
 /// Deterministic 64-bit FNV-1a hash across byte slices.

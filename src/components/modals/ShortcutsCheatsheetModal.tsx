@@ -56,6 +56,7 @@ export const ShortcutsCheatsheetModal: React.FC<ShortcutsCheatsheetModalProps> =
       rows: [
         ["Mini Dock Mode", fmt("toggleMiniDock")],
         ["Toggle Favorite", fmt("toggleFavorite")],
+        ["Assign Tags / Genres", `${fmt("openTagPicker")} / ${fmt("openGenrePicker")}`],
         ["Add to Session Bin", fmt("addToBin")],
         ["Mark Slice In / Out", `${fmt("markSliceIn")} / ${fmt("markSliceOut")}`],
         ["Save Active Slice", fmt("saveSlice")],
@@ -63,7 +64,7 @@ export const ShortcutsCheatsheetModal: React.FC<ShortcutsCheatsheetModalProps> =
         ["Find Similar Audio (AI)", fmt("findSimilar")],
         ["Rename / Batch Rename", "F2"],
         ["Undo / Redo File Op", "Ctrl + Z / Ctrl + Y"],
-        ["Quick Tag 1–9", "1 – 9"],
+        ["Exclude Tag / Mood Filter", "Alt + Click"],
         ["Copy Path / Reveal", `${fmt("copyFilePath")} / ${fmt("showInFolder")}`],
         ["Settings", "Ctrl + ,"],
       ],

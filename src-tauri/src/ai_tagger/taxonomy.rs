@@ -1,4 +1,8 @@
-use crate::db::deterministic_color_for_name;
+use crate::db::taxonomy::facet_domain_in_db;
+use crate::db::{
+    deterministic_color_for_name, ensure_taxonomy_tag, sync_primary_genre_for_samples,
+};
+use crate::taxonomy_catalog::lookup_canonical_by_name;
 use rusqlite::{params, Connection};
 use std::collections::{HashMap, HashSet};
 
@@ -26,7 +30,6 @@ fn raw_yamnet_labels() -> &'static Vec<String> {
             if trimmed.is_empty() {
                 continue;
             }
-            // Format: index,mid,display_name (possibly quoted)
             let mut parts = trimmed.splitn(3, ',');
             let _idx = parts.next();
             let _mid = parts.next();
@@ -38,75 +41,85 @@ fn raw_yamnet_labels() -> &'static Vec<String> {
     })
 }
 
-/// Maps AudioSet class indices into crisp Audify SFX/production tags aligned with
-/// `default_auto_tag_rules`. Returns `None` for uninformative room/silence filler classes.
+/// Maps all 521 AudioSet/YAMNet class indices directly into Audify's fine 2-level taxonomy
+/// (Category sub-tags, Genres, and Moods). Suppresses uninformative silence/room/broad filler classes
+/// so broad buckets like `Animals` or `Music` never bloat the library.
 pub fn map_audioset_class_to_audify_tag(class_idx: usize) -> Option<&'static str> {
     match class_idx {
-        // Silence / generic recording artifacts to suppress
-        494 | 498 | 500..=502 | 507 | 508 | 518..=520 => None,
+        // Silence / generic recording artifacts / overly broad parent buckets to suppress
+        67 | 68 | 494 | 498 | 500..=502 | 507 | 508 | 518..=520 => None,
 
-        // Speech & Human Vocal
-        0..=5 => Some("Vocal"),
-        6..=12 => Some("Vocal"),
-        13..=18 => Some("Voice"),
-        19..=23 => Some("Voice"),
-        24..=32 => Some("Vocal"),
-        33..=45 => Some("Voice"),
+        // Speech & Human Vocal (unified under `Vocal` — no more Vocal/Voice duplication)
+        0..=45 | 249..=250 => Some("Vocal"),
 
-        // Footsteps & Body Foley
+        // Footsteps & Body / Crowd Foley
         46..=48 => Some("Footsteps"),
         49..=55 => Some("Foley"),
-        56..=58 => Some("Clap"),
-        59..=60 => Some("Heartbeat"),
-        61..=66 => Some("Crowd"),
+        56..=66 => Some("Body & Crowd"),
 
-        // Creatures & Animals
-        67..=131 => Some("Animals"),
+        // Fine 2-level Animals species (parent: `Animals`)
+        69..=75 | 117 => Some("Dog"),
+        76..=80 => Some("Cat"),
+        82..=84 => Some("Horse"),
+        104..=105 => Some("Monster"),
+        106..=116 => Some("Bird"),
+        121..=126 => Some("Insect"),
+        81 | 85..=103 | 118..=120 | 127..=131 => Some("Wildlife"),
 
-        // Musical Categories & Instruments
+        // Musical Instruments (parent: `Voice & Music`)
         132..=134 => Some("Music"),
         135..=136 | 138..=146 => Some("Guitar"),
         137 | 189 => Some("Bass"),
         147..=152 | 155 => Some("Piano"),
         153..=154 => Some("Synth"),
-        156..=159 | 161..=162 | 164..=165 => Some("Drums"),
-        160 => Some("Snare"),
-        163 => Some("Kick"),
-        166 | 172 => Some("Cymbal"),
-        167 => Some("Hi-Hat"),
-        168..=171 | 173..=178 => Some("Percussion"),
+        156..=178 => Some("Drums"),
         179..=188 | 190..=194 => Some("Orchestra"),
         195..=202 | 209 => Some("Bell"),
-        203..=208 => Some("Instrument"),
-        210..=276 => Some("Music"),
+        203..=208 => Some("Music"),
 
-        // Nature, Weather, Water, Fire
+        // Music Genres & Moods (`210..=276` routed directly to `Genre` & `Mood` facets!)
+        211 | 231 | 269 => Some("Pop"),
+        212..=213 => Some("Hip-Hop"),
+        214..=220 => Some("Rock"),
+        221..=223 | 225 | 227 | 230 | 246 => Some("Jazz"),
+        224 | 226 | 228 => Some("Acoustic"),
+        232..=233 => Some("Classical"),
+        234..=240 | 242 => Some("Electronic"),
+        241 | 248 => Some("Ambient"),
+        262..=265 | 267 => Some("Soundtrack"),
+        271 => Some("Upbeat"),
+        272..=273 => Some("Sad"),
+        274..=275 => Some("Action"),
+        276 => Some("Horror"),
+        210 | 229 | 243..=245 | 247 | 251..=261 | 266 | 268 | 270 => Some("Music"),
+
+        // Nature, Weather, Water, Fire (parent: `Nature & Ambience`)
         277..=281 => Some("Weather"),
         282..=291 | 438..=450 => Some("Water"),
         292..=293 | 484 => Some("Fire"),
 
-        // Vehicles & Mechanical
+        // Vehicles, Alarms & Mechanical (parent: `Sci-Fi & Tech`)
         294..=347 => Some("Vehicles"),
-        348..=381 => Some("Foley"),
         382..=397 => Some("Alarm"),
-        398..=419 => Some("Mechanical"),
+        398..=419 | 479 | 487 => Some("Mechanical"),
 
-        // Combat, Weapons, Explosion
-        420 | 426..=430 => Some("Explosion"),
-        421..=425 => Some("Weapons"),
-
-        // Wood, Glass & Material Impacts
+        // Foley Sub-materials (parent: `Foley`)
+        348..=357 => Some("Door"),
+        358..=359 | 373..=375 | 478 => Some("Metal"),
+        372 | 473..=474 | 481 => Some("Cloth"),
         431..=434 => Some("Wood"),
         435..=437 => Some("Glass"),
+        360..=371 | 376..=381 | 459 | 468..=472 | 480 | 482..=483 | 488..=493 => Some("Foley"),
 
-        // Whoosh, Impact & Transitions
-        451 | 475..=477 | 485..=486 => Some("UI"),
+        // Action & Combat (parent: `Action & Combat`)
+        420 | 426..=430 => Some("Explosion"),
+        421..=425 => Some("Gunshot"),
         452..=453 | 466..=467 => Some("Whoosh"),
         454..=455 | 460..=465 => Some("Impact"),
+
+        // UI, Synth, Ambience & Noise
+        451 | 475..=477 | 485..=486 => Some("UI"),
         456..=458 | 495..=497 | 499 => Some("Synth"),
-        459 => Some("Foley"),
-        468..=474 | 480..=483 | 488..=493 => Some("Foley"),
-        478..=479 | 487 => Some("Mechanical"),
         503..=506 => Some("Ambience"),
         509..=517 => Some("Noise"),
 
@@ -115,7 +128,7 @@ pub fn map_audioset_class_to_audify_tag(class_idx: usize) -> Option<&'static str
 }
 
 /// Converts raw 521-class model predictions into up to `max_tags` deduplicated Audify tags
-/// passing `min_confidence` (`0.0..=1.0`).
+/// passing `min_confidence` (`0.0..=1.0`) with calibrated activation floor (`0.58x`).
 pub fn extract_mapped_tags_from_scores(
     class_scores: &[f32],
     min_confidence: f32,
@@ -125,27 +138,20 @@ pub fn extract_mapped_tags_from_scores(
         return Vec::new();
     }
 
-    // Calibrated threshold: AudioSet softmax/sigmoid scores distribute across siblings, so we map
-    // UI slider percentage (e.g. 0.72) monotonically onto effective YAMNet activation floor.
-    let effective_floor = (min_confidence.clamp(0.25, 0.98) * 0.42).clamp(0.10, 0.65);
+    let clamped_min = min_confidence.clamp(0.25, 0.98);
+    let effective_floor = (clamped_min * 0.58).clamp(0.18, 0.72);
 
     let mut best_by_tag: HashMap<String, f32> = HashMap::new();
 
     for (idx, &raw_score) in class_scores.iter().enumerate() {
-        if !raw_score.is_finite() || raw_score <= 0.0 {
-            continue;
-        }
-        // Normalize raw YAMNet activation to user-facing 0..1 confidence scale
-        let display_conf = (raw_score / 0.55).min(0.99);
-        if raw_score < effective_floor {
+        if !raw_score.is_finite() || raw_score < effective_floor {
             continue;
         }
         let Some(tag) = map_audioset_class_to_audify_tag(idx) else {
             continue;
         };
-        let mapped_name = tag.to_string();
-
-        let entry = best_by_tag.entry(mapped_name).or_insert(0.0);
+        let display_conf = (raw_score / 0.62).min(0.99);
+        let entry = best_by_tag.entry(tag.to_string()).or_insert(0.0);
         if display_conf > *entry {
             *entry = display_conf;
         }
@@ -153,7 +159,7 @@ pub fn extract_mapped_tags_from_scores(
 
     let mut ranked: Vec<MappedAiTag> = best_by_tag
         .into_iter()
-        .filter(|(_, conf)| *conf >= min_confidence.clamp(0.25, 0.98))
+        .filter(|(_, conf)| *conf >= clamped_min)
         .map(|(tag_name, confidence)| MappedAiTag {
             tag_name,
             confidence,
@@ -168,6 +174,31 @@ pub fn extract_mapped_tags_from_scores(
     });
     ranked.truncate(max_tags);
     ranked
+}
+
+fn resolve_or_create_ai_tag_id(conn: &Connection, tag_name: &str) -> Result<i64, String> {
+    if let Ok(id) = conn.query_row::<i64, _, _>(
+        "SELECT id FROM tags WHERE LOWER(name) = LOWER(?1) LIMIT 1",
+        [tag_name],
+        |r| r.get(0),
+    ) {
+        return Ok(id);
+    }
+
+    // Use full taxonomy helper when v17 columns exist, with fallback for minimal unit-test tables.
+    if let Ok(id) = ensure_taxonomy_tag(conn, tag_name, None, None, None, false) {
+        return Ok(id);
+    }
+
+    let color = lookup_canonical_by_name(tag_name)
+        .map(|s| s.color)
+        .unwrap_or_else(|| deterministic_color_for_name(tag_name));
+    conn.execute(
+        "INSERT INTO tags (name, color, is_manual) VALUES (?1, ?2, 0)",
+        params![tag_name, color],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(conn.last_insert_rowid())
 }
 
 /// Persists AI tag outputs for one sample inside an active SQLite transaction while strictly
@@ -210,6 +241,7 @@ pub fn persist_ai_tags_for_sample(
 
     let mut suggestions_added = 0usize;
     let mut tags_applied = 0usize;
+    let mut touched_genre_or_mood = false;
 
     for item in mapped {
         let lower = item.tag_name.to_lowercase();
@@ -218,26 +250,7 @@ pub fn persist_ai_tags_for_sample(
         }
 
         if auto_apply {
-            let tag_id: i64 = {
-                let mut find_tag = conn
-                    .prepare_cached("SELECT id FROM tags WHERE LOWER(name) = LOWER(?1) LIMIT 1")
-                    .map_err(|e| e.to_string())?;
-                match find_tag.query_row([&item.tag_name], |r| r.get(0)) {
-                    Ok(id) => id,
-                    Err(_) => {
-                        let color = deterministic_color_for_name(&item.tag_name);
-                        let mut ins_tag = conn
-                            .prepare_cached(
-                                "INSERT INTO tags (name, color, is_manual) VALUES (?1, ?2, 0)",
-                            )
-                            .map_err(|e| e.to_string())?;
-                        ins_tag
-                            .execute(params![item.tag_name, color])
-                            .map_err(|e| e.to_string())?;
-                        conn.last_insert_rowid()
-                    }
-                }
-            };
+            let tag_id = resolve_or_create_ai_tag_id(conn, &item.tag_name)?;
             let inserted = {
                 let mut ins_st = conn
                     .prepare_cached(
@@ -250,6 +263,15 @@ pub fn persist_ai_tags_for_sample(
             };
             if inserted > 0 {
                 tags_applied += 1;
+                if let Ok(fid) = conn.query_row::<i64, _, _>(
+                    "SELECT COALESCE(facet_id, 1) FROM tags WHERE id = ?1",
+                    params![tag_id],
+                    |r| r.get(0),
+                ) {
+                    if facet_domain_in_db(conn, fid) == "genres" {
+                        touched_genre_or_mood = true;
+                    }
+                }
             }
             let mut ins_app = conn
                 .prepare_cached(
@@ -282,6 +304,10 @@ pub fn persist_ai_tags_for_sample(
                 suggestions_added += 1;
             }
         }
+    }
+
+    if touched_genre_or_mood {
+        let _ = sync_primary_genre_for_samples(conn, &[sample_id]);
     }
 
     Ok((suggestions_added, tags_applied))

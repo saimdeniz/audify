@@ -21,7 +21,7 @@ interface DropOverlayEventDetail {
 }
 
 const SIDEBAR_RAIL_WIDTH_PX = 40;
-const SIDEBAR_FLYOUT_WIDTH_PX = 256;
+const SIDEBAR_FLYOUT_WIDTH_PX = 280;
 const MIN_FULL_OVERLAY_STAGE_WIDTH_PX = 320;
 
 interface DragDropFeedbackOverlayProps {

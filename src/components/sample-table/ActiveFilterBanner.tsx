@@ -24,6 +24,7 @@ import {
   removeSearchPrefixTokens,
 } from "../../utils/searchPrefixHelpers";
 import { formatTrashOpLabel } from "../../utils/trashStatusFormat";
+import { ActiveTaxonomyChips } from "./ActiveTaxonomyChips";
 
 export {
   extractSearchPrefixValues,
@@ -77,7 +78,10 @@ export const ActiveFilterBanner: React.FC = () => {
   const selectedGenre = useSampleStore((s) => s.selectedGenre);
   const genres = useSampleStore((s) => s.genres);
   const selectedTagIds = useSampleStore((s) => s.selectedTagIds);
+  const excludedTagIds = useSampleStore((s) => s.excludedTagIds);
+  const tagMatchMode = useSampleStore((s) => s.tagMatchMode);
   const tags = useSampleStore((s) => s.tags);
+  const tagFacets = useSampleStore((s) => s.tagFacets);
   const searchQuery = useSampleStore((s) => s.searchQuery);
   const similaritySession = useSampleStore((s) => s.similaritySession);
   const aiSuggestionsBySampleId = useSampleStore(
@@ -101,6 +105,10 @@ export const ActiveFilterBanner: React.FC = () => {
   const setSrFilter = useSampleStore((s) => s.setSrFilter);
   const setSelectedGenre = useSampleStore((s) => s.setSelectedGenre);
   const toggleTagFilter = useSampleStore((s) => s.toggleTagFilter);
+  const toggleExcludeTagFilter = useSampleStore(
+    (s) => s.toggleExcludeTagFilter
+  );
+  const toggleTagMatchMode = useSampleStore((s) => s.toggleTagMatchMode);
   const setSearchQuery = useSampleStore((s) => s.setSearchQuery);
   const resetAllFilters = useSampleStore((s) => s.resetAllFilters);
   const setAiSimilarityMinScore = useSampleStore(
@@ -144,14 +152,6 @@ export const ActiveFilterBanner: React.FC = () => {
     [genres, selectedGenre]
   );
 
-  const activeTags = useMemo(() => {
-    if (selectedTagIds.length === 0) return [];
-    const map = new Map(tags.map((t) => [t.id, t]));
-    return selectedTagIds
-      .map((id) => map.get(id))
-      .filter((t): t is NonNullable<typeof t> => Boolean(t));
-  }, [tags, selectedTagIds]);
-
   const bpmTokens = useMemo(
     () => extractSearchPrefixValues(searchQuery, "bpm:"),
     [searchQuery]
@@ -186,7 +186,8 @@ export const ActiveFilterBanner: React.FC = () => {
     typeFilter !== "all" ||
     srFilter !== null ||
     Boolean(selectedGenre) ||
-    activeTags.length > 0 ||
+    selectedTagIds.length > 0 ||
+    excludedTagIds.length > 0 ||
     bpmTokens.length > 0 ||
     keyTokens.length > 0;
 
@@ -502,26 +503,16 @@ export const ActiveFilterBanner: React.FC = () => {
             </span>
           )}
 
-          {activeTags.map((tag) => (
-            <span
-              key={tag.id}
-              className="inline-flex items-center gap-1.5 h-[20px] pl-1.5 pr-1 rounded-[3px] border border-accent/50 bg-accent-soft text-accent-fg text-[11px]"
-            >
-              <span
-                className="w-2 h-2 rounded-[2px] shrink-0"
-                style={{ backgroundColor: tag.color }}
-              />
-              <span>{tag.name}</span>
-              <button
-                type="button"
-                onClick={() => toggleTagFilter(tag.id)}
-                className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-fg hover:bg-surface-3"
-                title={`Remove ${tag.name} tag filter`}
-              >
-                <X className="w-2.5 h-2.5" />
-              </button>
-            </span>
-          ))}
+          <ActiveTaxonomyChips
+            tags={tags}
+            tagFacets={tagFacets}
+            selectedTagIds={selectedTagIds}
+            excludedTagIds={excludedTagIds}
+            tagMatchMode={tagMatchMode}
+            onToggleMatchMode={toggleTagMatchMode}
+            onRemoveSelected={toggleTagFilter}
+            onRemoveExcluded={toggleExcludeTagFilter}
+          />
 
           {bpmTokens.map((bpmVal) => (
             <span

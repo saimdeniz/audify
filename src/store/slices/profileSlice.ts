@@ -55,7 +55,10 @@ export function createProfileSlice(
   | "updateAutoTagRule"
   | "deleteAutoTagRule"
   | "resetAutoTagRules"
+  | "upgradeLegacyAutoTagRules"
   | "reapplyAutoTagRules"
+  | "refreshAutoTagImpactPreview"
+  | "undoLastAutoTagApply"
   | "setAutoTagCategoryPaths"
   | "addAutoTagCategory"
   | "renameAutoTagCategory"
@@ -485,8 +488,14 @@ export function createProfileSlice(
       (await loadAutoTagActions()).deleteAutoTagRule(ruleId),
     resetAutoTagRules: async () =>
       (await loadAutoTagActions()).resetAutoTagRules(),
+    upgradeLegacyAutoTagRules: async () =>
+      (await loadAutoTagActions()).upgradeLegacyAutoTagRules(),
     reapplyAutoTagRules: async () =>
       (await loadAutoTagActions()).reapplyAutoTagRules(),
+    refreshAutoTagImpactPreview: async () =>
+      (await loadAutoTagActions()).refreshAutoTagImpactPreview(),
+    undoLastAutoTagApply: async () =>
+      (await loadAutoTagActions()).undoLastAutoTagApply(),
     setAutoTagCategoryPaths: async (
       categoryName: string,
       includePaths: string[],

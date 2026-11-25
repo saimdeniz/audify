@@ -9,6 +9,7 @@ import {
   AsciiMagicLook,
   AsciiPresetId,
   AutoTagCategoryConfig,
+  AutoTagImpactPreview,
   AutoTagRule,
   BackupFileInfo,
   BpmKeyProgressPayload,
@@ -40,6 +41,7 @@ import {
   SortDir,
   SortKey,
   Tag,
+  TagFacet,
   ThemeMode,
   TrashViewTab,
   TypeFilter,
@@ -69,6 +71,7 @@ export interface SampleStoreDataState {
   samples: SampleItem[];
   favoritesCount: number;
   knownSampleIds: ReadonlySet<number>;
+  tagFacets: TagFacet[];
   tags: Tag[];
   genres: Genre[];
   collections: Collection[];
@@ -83,6 +86,8 @@ export interface SampleStoreDataState {
   recentOnly: boolean;
   recentSampleIds: number[];
   selectedTagIds: number[];
+  excludedTagIds: number[];
+  tagMatchMode: import("../types").TagMatchMode;
   selectedGenre: string | null;
   isDetectingGenres: boolean;
   selectedCollectionId: number | null;
@@ -201,6 +206,8 @@ export interface SampleStoreDataState {
   autoTagRules: AutoTagRule[];
   autoTagCategories: AutoTagCategoryConfig[];
   autoTagRulesDirty: boolean;
+  autoTagImpactPreview: AutoTagImpactPreview | null;
+  canUndoAutoTagApply: boolean;
   localBackups: BackupFileInfo[];
   pendingSnapshotRestore: PendingSnapshotRestore | null;
   enableLicensesSystem: boolean;
@@ -251,7 +258,11 @@ export interface SampleFilterAndPlaybackActions {
   clearRecentSamples: () => void;
   toggleTagFilter: (tagId: number) => void;
   selectOrToggleTagFilter: (tagId: number, append: boolean) => void;
-  clearTagFilters: () => void;
+  toggleExcludeTagFilter: (tagId: number) => void;
+  setTagMatchMode: (mode: import("../types").TagMatchMode) => void;
+  toggleTagMatchMode: () => void;
+  clearExcludedTagFilters: () => void;
+  clearTagFilters: (facetSlugs?: readonly import("../types").TaxonomyFacetSlug[]) => void;
   setSelectedGenre: (genre: string | null) => void;
   setCollectionFilter: (collectionId: number | null) => void;
   setTypeFilter: (type: TypeFilter) => void;

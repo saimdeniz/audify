@@ -15,13 +15,22 @@ export function createCatalogMutationSlice(
   | "toggleSampleLoop"
   | "toggleFavoritesBatch"
   | "ensureFavorite"
+  | "createTagFacet"
+  | "updateTagFacet"
+  | "deleteTagFacet"
+  | "reorderTagFacets"
+  | "reorderTaxonomyItems"
+  | "harmonizeTaxonomyColors"
   | "createTag"
   | "assignTag"
   | "unassignTag"
   | "assignTagBatch"
+  | "unassignTagBatch"
   | "clearSampleTags"
   | "renameTag"
   | "updateTagColor"
+  | "updateTagTaxonomy"
+  | "mergeTags"
   | "deleteTag"
   | "createGenre"
   | "renameGenre"
@@ -37,6 +46,7 @@ export function createCatalogMutationSlice(
   | "addAutoRoutedSamplesToCollection"
   | "removeSamplesFromCollection"
   | "renameCollection"
+  | "reparentCollection"
   | "deleteCollection"
   | "addCollectionTemplate"
   | "updateCollectionTemplate"
@@ -407,24 +417,52 @@ export function createCatalogMutationSlice(
       }
     },
 
-    createTag: async (name, color) =>
-      (await loadTaxonomyActions()).createTag(name, color),
+    createTagFacet: async (name, domain, color, allowNesting) =>
+      (await loadTaxonomyActions()).createTagFacet(
+        name,
+        domain,
+        color,
+        allowNesting
+      ),
+    updateTagFacet: async (facetId, patch) =>
+      (await loadTaxonomyActions()).updateTagFacet(facetId, patch),
+    deleteTagFacet: async (facetId) =>
+      (await loadTaxonomyActions()).deleteTagFacet(facetId),
+    reorderTagFacets: async (orderedFacetIds) =>
+      (await loadTaxonomyActions()).reorderTagFacets(orderedFacetIds),
+    reorderTaxonomyItems: async (orderedTagIds) =>
+      (await loadTaxonomyActions()).reorderTaxonomyItems(orderedTagIds),
+
+    harmonizeTaxonomyColors: async (opts) =>
+      (await loadTaxonomyActions()).harmonizeTaxonomyColors(opts),
+    createTag: async (name, color, opts) =>
+      (await loadTaxonomyActions()).createTag(name, color, opts),
     assignTag: async (sampleId, tagId) =>
       (await loadTaxonomyActions()).assignTag(sampleId, tagId),
     unassignTag: async (sampleId, tagId) =>
       (await loadTaxonomyActions()).unassignTag(sampleId, tagId),
     assignTagBatch: async (sampleIds, tagId) =>
       (await loadTaxonomyActions()).assignTagBatch(sampleIds, tagId),
-    clearSampleTags: async (sampleIds) =>
-      (await loadTaxonomyActions()).clearSampleTags(sampleIds),
+    unassignTagBatch: async (sampleIds, tagId) =>
+      (await loadTaxonomyActions()).unassignTagBatch(sampleIds, tagId),
+    clearSampleTags: async (sampleIds, facetSlugs) =>
+      (await loadTaxonomyActions()).clearSampleTags(sampleIds, facetSlugs),
     renameTag: async (tagId, newName) =>
       (await loadTaxonomyActions()).renameTag(tagId, newName),
     updateTagColor: async (tagId, newColor) =>
       (await loadTaxonomyActions()).updateTagColor(tagId, newColor),
+    updateTagTaxonomy: async (tagId, patch) =>
+      (await loadTaxonomyActions()).updateTagTaxonomy(tagId, patch),
+    mergeTags: async (sourceTagId, targetTagId, addSourceAsAlias) =>
+      (await loadTaxonomyActions()).mergeTags(
+        sourceTagId,
+        targetTagId,
+        addSourceAsAlias
+      ),
     deleteTag: async (tagId) =>
       (await loadTaxonomyActions()).deleteTag(tagId),
-    createGenre: async (name, color) =>
-      (await loadTaxonomyActions()).createGenre(name, color),
+    createGenre: async (name, color, facetSlug) =>
+      (await loadTaxonomyActions()).createGenre(name, color, facetSlug),
     renameGenre: async (genreId, newName) =>
       (await loadTaxonomyActions()).renameGenre(genreId, newName),
     updateGenreColor: async (genreId, newColor) =>
@@ -486,6 +524,11 @@ export function createCatalogMutationSlice(
         newIcon,
         newRulePath,
         newSmartQuery
+      ),
+    reparentCollection: async (collectionId, newParentId) =>
+      (await loadCollectionActions()).reparentCollection(
+        collectionId,
+        newParentId
       ),
     deleteCollection: async (collectionId) =>
       (await loadCollectionActions()).deleteCollection(collectionId),

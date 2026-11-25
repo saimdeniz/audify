@@ -414,10 +414,6 @@ fn handle_cmd(ctx: &mut ControllerCtx, cmd: EngineCmd, latest_load_seq: &AtomicU
             }
         }
 
-        EngineCmd::GetSnapshot { reply } => {
-            let _ = reply.send(ctx.build_snapshot("snapshot", None));
-        }
-
         EngineCmd::TrimCaches => {
             ctx.decode_cache.clear();
         }

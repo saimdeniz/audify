@@ -245,6 +245,16 @@ pub(super) fn sanitize_nested_metadata(map: &mut Map<String, Value>) {
             sanitize_text_field(r_obj, "id", 128, false);
             sanitize_text_field(r_obj, "tag_name", 128, false);
             sanitize_text_field(r_obj, "category", 128, false);
+            sanitize_text_field(r_obj, "parent_tag_name", 64, false);
+            if let Some(fval) = r_obj.get("facet_slug") {
+                let valid = fval
+                    .as_str()
+                    .map(|s| matches!(s, "category" | "genre" | "mood" | "source"))
+                    .unwrap_or(false);
+                if !valid {
+                    r_obj.remove("facet_slug");
+                }
+            }
             let clean_color = r_obj
                 .get("tag_color")
                 .and_then(|v| v.as_str())

@@ -8,6 +8,7 @@ import type {
   SimilaritySession,
 } from "../../types";
 import type { WaveformDisplayConfig } from "../MiniWaveform";
+import type { TaxonomyIndex } from "../../utils/taxonomyTree";
 import { SampleTableRow } from "./SampleTableRow";
 import type {
   ColumnId,
@@ -35,11 +36,13 @@ interface SampleTableRowsPaneProps {
   setHoverOverflowTags: React.Dispatch<
     React.SetStateAction<RowPopoverPosition | null>
   >;
+  onTableScroll?: () => void;
   columnOrder: ColumnId[];
   visibleCols: VisibleColumnsState;
   colWidths: Record<ResizableColKey, number>;
   totalTableWidth: number;
   genreColorMap: ReadonlyMap<string, string>;
+  taxonomyIndex: TaxonomyIndex;
   waveformDisplay: WaveformDisplayConfig;
   favoriteShortcutLabel: string;
   onRowClick: (e: React.MouseEvent, sample: SampleItem, index: number) => void;
@@ -75,11 +78,13 @@ export const SampleTableRowsPane: React.FC<SampleTableRowsPaneProps> =
   activeTagPopoverSampleId,
   activeGenrePopoverSampleId,
   setHoverOverflowTags,
+  onTableScroll,
   columnOrder,
   visibleCols,
   colWidths,
   totalTableWidth,
   genreColorMap,
+  taxonomyIndex,
   waveformDisplay,
   favoriteShortcutLabel,
   onRowClick,
@@ -117,7 +122,11 @@ export const SampleTableRowsPane: React.FC<SampleTableRowsPaneProps> =
         if (headerRef.current) {
           headerRef.current.scrollLeft = e.currentTarget.scrollLeft;
         }
-        setHoverOverflowTags((prev) => (prev ? null : prev));
+        if (onTableScroll) {
+          onTableScroll();
+        } else {
+          setHoverOverflowTags((prev) => (prev ? null : prev));
+        }
       }}
       className="flex-1 overflow-auto relative outline-none"
       tabIndex={0}
@@ -210,6 +219,7 @@ export const SampleTableRowsPane: React.FC<SampleTableRowsPaneProps> =
               selectedGenre={selectedGenre}
               selectedTagSet={selectedTagSet}
               genreColorMap={genreColorMap}
+              taxonomyIndex={taxonomyIndex}
               waveformDisplay={waveformDisplay}
               favoriteShortcutLabel={favoriteShortcutLabel}
               onRowClick={onRowClick}

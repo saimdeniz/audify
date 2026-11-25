@@ -8,6 +8,7 @@ import {
   SampleItem,
   SliceTrashSummary,
   Tag,
+  TagFacet,
   TrashStatusInfo,
 } from "../../types";
 import { onError } from "../../utils/errors";
@@ -94,7 +95,9 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
       const initSettingsTab = get().settingsTab;
       const quickStatIds = Array.from(new Set([...initRecentIds, ...initBinIds]));
 
-      const needTagsImmediately = standaloneSettings && initSettingsTab === "tags";
+      const needTagsImmediately =
+        standaloneSettings &&
+        (initSettingsTab === "tags" || initSettingsTab === "genres");
       const needGenresImmediately =
         standaloneSettings && initSettingsTab === "genres";
       const needCollectionsImmediately = !standaloneSettings
@@ -105,6 +108,7 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
         const [
           profiles,
           libraries,
+          tagFacets,
           tags,
           genres,
           collections,
@@ -114,6 +118,9 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
         ] = await Promise.all([
           invoke<Profile[]>("get_profiles").catch(() => [] as Profile[]),
           invoke<Library[]>("get_libraries").catch(() => [] as Library[]),
+          needTagsImmediately
+            ? invoke<TagFacet[]>("get_tag_facets").catch(() => [] as TagFacet[])
+            : Promise.resolve([] as TagFacet[]),
           needTagsImmediately
             ? invoke<Tag[]>("get_tags").catch(() => [] as Tag[])
             : Promise.resolve([] as Tag[]),
@@ -238,6 +245,7 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
           libraries,
           favoritesCount: quickStats.favorites_count,
           knownSampleIds: nextKnownIds,
+          ...(tagFacets.length > 0 ? { tagFacets } : {}),
           tags,
           genres,
           collections,
@@ -288,6 +296,7 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
         const [
           profiles,
           libraries,
+          tagFacets,
           tags,
           genres,
           collections,
@@ -297,6 +306,7 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
         ] = await Promise.all([
           invoke<Profile[]>("get_profiles"),
           invoke<Library[]>("get_libraries"),
+          invoke<TagFacet[]>("get_tag_facets").catch(() => [] as TagFacet[]),
           invoke<Tag[]>("get_tags"),
           invoke<Genre[]>("get_genres").catch(() => [] as Genre[]),
           invoke<Collection[]>("get_collections"),
@@ -311,6 +321,7 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
         }
         const safeProfiles = Array.isArray(profiles) ? profiles : [];
         const safeLibraries = Array.isArray(libraries) ? libraries : [];
+        const safeTagFacets = Array.isArray(tagFacets) ? tagFacets : [];
         const safeTags = Array.isArray(tags) ? tags : [];
         const safeGenres = Array.isArray(genres) ? genres : [];
         const safeCollections = Array.isArray(collections) ? collections : [];
@@ -328,6 +339,7 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
             profiles: safeProfiles,
             activeProfile,
             libraries: safeLibraries,
+            ...(safeTagFacets.length > 0 ? { tagFacets: safeTagFacets } : {}),
             tags: safeTags,
             genres: safeGenres,
             collections: safeCollections,
@@ -456,13 +468,21 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
 
         const internRes = internSamplePoolWithStatus(allSamples, get().tags);
         if (internRes.hadMissingTagIds) {
-          const freshTags = await invoke<Tag[]>("get_tags").catch(() => null);
+          const [freshTags, freshFacets] = await Promise.all([
+            invoke<Tag[]>("get_tags").catch(() => null),
+            invoke<TagFacet[]>("get_tag_facets").catch(() => null),
+          ]);
           if (epoch !== getProfileEpoch() || reqSeq !== reloadProfileSeq) return;
-          if (freshTags && freshTags.length > 0) {
-            set({ tags: freshTags });
-            internSamplePoolWithStatus(allSamples, freshTags, {
-              onlyUnresolvedTagIds: true,
+          if ((freshTags && freshTags.length > 0) || (freshFacets && freshFacets.length > 0)) {
+            set({
+              ...(freshTags && freshTags.length > 0 ? { tags: freshTags } : {}),
+              ...(freshFacets && freshFacets.length > 0 ? { tagFacets: freshFacets } : {}),
             });
+            if (freshTags && freshTags.length > 0) {
+              internSamplePoolWithStatus(allSamples, freshTags, {
+                onlyUnresolvedTagIds: true,
+              });
+            }
           }
         }
 

@@ -74,26 +74,31 @@ pub(crate) fn resolve_or_create_auto_tag(
         }
     }
 
-    let raw_col = rules
+    let matching_rule = rules
         .iter()
-        .find(|r| r.tag_name.trim().eq_ignore_ascii_case(trimmed))
-        .map(|r| r.tag_color.as_str())
-        .unwrap_or("");
-    let fallback_col = crate::db::deterministic_color_for_name(trimmed);
-    let col = crate::security::sanitize_hex_color_or_default(raw_col, fallback_col);
+        .find(|r| r.tag_name.trim().eq_ignore_ascii_case(trimmed));
+    let raw_col = matching_rule.map(|r| r.tag_color.as_str()).unwrap_or("");
+    let rule_facet = matching_rule.and_then(|r| r.facet_slug.as_deref());
+    let rule_parent = matching_rule.and_then(|r| r.parent_tag_name.as_deref());
+    let valid_rule_col = crate::security::validate_hex_color(raw_col).ok();
+    let canonical = crate::taxonomy_catalog::lookup_canonical_by_name(trimmed);
+    // For canonical sub-tags inheriting family color, let canonical hierarchy control color inheritance
+    // unless a custom non-canonical rule color was explicitly configured.
+    let color_override = if canonical.is_some_and(|spec| spec.color_inherited) {
+        None
+    } else {
+        valid_rule_col.as_deref()
+    };
 
-    // Preserve any existing manual/auto tag color on conflict or case collision.
-    let _ = tx.execute(
-        "INSERT OR IGNORE INTO tags (name, color, is_manual) VALUES (?1, ?2, 0)",
-        params![trimmed, col],
-    );
-    let tid: i64 = tx
-        .query_row(
-            "SELECT id FROM tags WHERE LOWER(name) = LOWER(?1) OR name = ?2 LIMIT 1",
-            params![&lower, trimmed],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
+    let tid = crate::db::ensure_taxonomy_tag(
+        tx,
+        trimmed,
+        rule_facet,
+        rule_parent,
+        color_override,
+        false,
+    )
+    .unwrap_or(0);
     if tid > 0 {
         tag_map.insert(lower, tid);
     }
@@ -271,29 +276,32 @@ pub(crate) fn query_sample_tags(
     conn: &Connection,
     sample_id: i64,
 ) -> Result<Vec<SampleTagBadge>, String> {
+    let all_tags = crate::commands::taxonomy::query_tags_with_conn(conn)?;
+    let by_id: HashMap<i64, &Tag> = all_tags.iter().map(|t| (t.id, t)).collect();
+
     let mut stmt = conn
         .prepare(
-            "SELECT t.id, t.name, t.color
+            "SELECT st.tag_id
              FROM sample_tags st
              INNER JOIN tags t ON t.id = st.tag_id
              WHERE st.sample_id = ?1
-             ORDER BY t.name COLLATE NOCASE ASC",
+             ORDER BY t.facet_id ASC, t.sort_order ASC, t.name COLLATE NOCASE ASC",
         )
         .map_err(|e| format!("Query prepare error: {}", e))?;
 
     let rows = stmt
-        .query_map(params![sample_id], |row| {
-            Ok(SampleTagBadge {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                color: row.get(2)?,
-            })
-        })
+        .query_map(params![sample_id], |row| row.get::<_, i64>(0))
         .map_err(|e| format!("Query execution error: {}", e))?;
 
     let mut out = Vec::new();
-    for r in rows.flatten() {
-        out.push(r);
+    for tid in rows.flatten() {
+        if let Some(tag) = by_id.get(&tid) {
+            out.push(SampleTagBadge {
+                id: tag.id,
+                name: tag.name.clone(),
+                color: tag.effective_color.clone(),
+            });
+        }
     }
     Ok(out)
 }

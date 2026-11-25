@@ -10,6 +10,7 @@ import {
   SampleRateFilter,
   SliceTrashSummary,
   Tag,
+  TagFacet,
   TrashStatusInfo,
   TypeFilter,
 } from "../../types";
@@ -182,7 +183,8 @@ export function scheduleStartupBackgroundStages(
           fetchCollections
             ? invoke<Collection[]>("get_collections").catch(() => null)
             : Promise.resolve(null),
-        ]).then(([bgTags, bgGenres, bgCollections]) => {
+          invoke<TagFacet[]>("get_tag_facets").catch(() => null),
+        ]).then(([bgTags, bgGenres, bgCollections, bgFacets]) => {
           if (bootEpoch !== getProfileEpoch()) return;
           set((state) => ({
             ...(bgTags !== null && state.tags.length === 0
@@ -193,6 +195,9 @@ export function scheduleStartupBackgroundStages(
               : {}),
             ...(bgCollections !== null && state.collections.length === 0
               ? { collections: bgCollections }
+              : {}),
+            ...(bgFacets !== null && state.tagFacets.length === 0
+              ? { tagFacets: bgFacets }
               : {}),
           }));
         });
@@ -259,6 +264,7 @@ export function buildSidebarRefreshState(
     profiles: Profile[];
     activeProfile: Profile | null;
     libraries: Library[];
+    tagFacets?: TagFacet[];
     tags: Tag[];
     genres: Genre[];
     collections: Collection[];
@@ -271,6 +277,7 @@ export function buildSidebarRefreshState(
     profiles,
     activeProfile,
     libraries,
+    tagFacets,
     tags,
     genres,
     collections,
@@ -284,6 +291,9 @@ export function buildSidebarRefreshState(
   const validCollectionIds = new Set(collections.map((c) => c.id));
 
   const prunedTagIds = state.selectedTagIds.filter((id) => validTagIds.has(id));
+  const prunedExcludedTagIds = state.excludedTagIds.filter((id) =>
+    validTagIds.has(id)
+  );
   const nextGenre =
     state.selectedGenre &&
     validGenresLower.has(state.selectedGenre.toLowerCase())
@@ -312,11 +322,13 @@ export function buildSidebarRefreshState(
     profiles,
     activeProfile,
     libraries,
+    ...(tagFacets ? { tagFacets } : {}),
     tags,
     genres,
     collections,
     folderStats: folderStats ?? state.folderStats,
     selectedTagIds: prunedTagIds,
+    excludedTagIds: prunedExcludedTagIds,
     selectedGenre: nextGenre,
     selectedCollectionId: nextColId,
     ...(trashStatus

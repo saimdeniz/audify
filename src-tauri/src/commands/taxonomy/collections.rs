@@ -491,6 +491,96 @@ pub async fn rename_collection(
     .await
 }
 
+pub(crate) fn reparent_collection_with_conn(
+    conn: &Connection,
+    collection_id: i64,
+    new_parent_id: Option<i64>,
+) -> Result<Collection, String> {
+    let active_id = get_active_profile_id(conn);
+    ensure_collection_in_active_profile(conn, collection_id, active_id)?;
+    let current = query_collection_by_id(conn, collection_id)?;
+    if current
+        .smart_query
+        .as_deref()
+        .is_some_and(|q| !q.trim().is_empty())
+    {
+        return Err("Smart collections must remain top-level collections.".to_string());
+    }
+    if current.parent_id == new_parent_id {
+        return Ok(current);
+    }
+
+    if let Some(pid) = new_parent_id {
+        if pid == collection_id {
+            return Err("A collection cannot be nested inside itself.".to_string());
+        }
+        ensure_collection_in_active_profile(conn, pid, active_id)?;
+        if is_collection_smart(conn, pid, active_id)? {
+            return Err("Smart collections cannot contain sub-collections.".to_string());
+        }
+        let target_parent_of_parent: Option<i64> = conn
+            .query_row(
+                "SELECT parent_id FROM collections WHERE id = ?1 AND profile_id = ?2",
+                params![pid, active_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(None);
+        if target_parent_of_parent.is_some() {
+            return Err("Collections can only be nested 2 levels deep.".to_string());
+        }
+        let has_children: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM collections WHERE parent_id = ?1 AND profile_id = ?2)",
+                params![collection_id, active_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        if has_children {
+            return Err(
+                "Move or remove sub-collections before nesting this collection inside another."
+                    .to_string(),
+            );
+        }
+    }
+
+    let sibling_conflict: bool = conn
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM collections
+                WHERE profile_id = ?1
+                  AND COALESCE(parent_id, 0) = ?2
+                  AND LOWER(name) = LOWER(?3)
+                  AND id != ?4
+            )",
+            params![active_id, new_parent_id.unwrap_or(0), current.name, collection_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(false);
+    if sibling_conflict {
+        return Err("A collection with that name already exists at the target level.".to_string());
+    }
+
+    conn.execute(
+        "UPDATE collections SET parent_id = ?1 WHERE id = ?2 AND profile_id = ?3",
+        params![new_parent_id, collection_id, active_id],
+    )
+    .map_err(|e| format!("Failed to move collection: {}", e))?;
+
+    query_collection_by_id(conn, collection_id)
+}
+
+#[tauri::command]
+pub async fn reparent_collection(
+    state: State<'_, AppState>,
+    collection_id: i64,
+    new_parent_id: Option<i64>,
+) -> Result<Collection, String> {
+    crate::db::run_write_op(&state, move |conn| {
+        reparent_collection_with_conn(conn, collection_id, new_parent_id)
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn delete_collection(
     state: State<'_, AppState>,
@@ -656,5 +746,31 @@ mod tests {
             remove_samples_from_collection_with_conn(&mut conn, parent.id, vec![101]).unwrap();
         assert_eq!(after_parent_rm.sample_count, 0);
         assert_eq!(query_collection_by_id(&conn, child_sfx.id).unwrap().sample_count, 0);
+    }
+
+    #[test]
+    fn reparent_collection_nests_promotes_and_guards_smart_and_depth() {
+        let conn = test_conn();
+        let parent = create_collection_with_conn(&conn, "SFX Pack".into(), None, None, None, None, None).unwrap();
+        let child = create_collection_with_conn(&conn, "Whooshes".into(), None, None, None, None, None).unwrap();
+        let third = create_collection_with_conn(&conn, "Deep".into(), None, None, None, None, None).unwrap();
+        let smart = create_collection_with_conn(&conn, "SmartLoops".into(), None, None, None, None, Some("is:loop".into())).unwrap();
+
+        // Nest manual child under parent
+        let nested = reparent_collection_with_conn(&conn, child.id, Some(parent.id)).expect("nest collection");
+        assert_eq!(nested.parent_id, Some(parent.id));
+
+        // Reject 3rd level nesting (parent already has parent) and nesting a parent with children
+        assert!(reparent_collection_with_conn(&conn, third.id, Some(child.id)).is_err());
+        assert!(reparent_collection_with_conn(&conn, parent.id, Some(third.id)).is_err());
+        assert!(reparent_collection_with_conn(&conn, child.id, Some(child.id)).is_err());
+
+        // Reject smart collection as source or parent
+        assert!(reparent_collection_with_conn(&conn, smart.id, Some(parent.id)).is_err());
+        assert!(reparent_collection_with_conn(&conn, third.id, Some(smart.id)).is_err());
+
+        // Promote child back to top-level root
+        let promoted = reparent_collection_with_conn(&conn, child.id, None).expect("promote collection");
+        assert_eq!(promoted.parent_id, None);
     }
 }

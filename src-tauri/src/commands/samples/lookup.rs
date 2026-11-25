@@ -119,19 +119,19 @@ pub(super) fn hydrate_sample_tags(
     out: &mut [SampleItem],
 ) {
     let mut tag_dict: HashMap<i64, (usize, SampleTagBadge)> = HashMap::new();
-    if let Ok(mut t_stmt) =
-        conn.prepare("SELECT id, name, color FROM tags ORDER BY name COLLATE NOCASE ASC")
-    {
-        if let Ok(t_rows) = t_stmt.query_map([], |r| {
-            Ok(SampleTagBadge {
-                id: r.get(0)?,
-                name: r.get(1)?,
-                color: r.get(2)?,
-            })
-        }) {
-            for (rank, badge) in t_rows.flatten().enumerate() {
-                tag_dict.insert(badge.id, (rank, badge));
-            }
+    if let Ok(all_tags) = crate::commands::taxonomy::query_tags_with_conn(conn) {
+        for (rank, t) in all_tags.into_iter().enumerate() {
+            tag_dict.insert(
+                t.id,
+                (
+                    rank,
+                    SampleTagBadge {
+                        id: t.id,
+                        name: t.name,
+                        color: t.effective_color,
+                    },
+                ),
+            );
         }
     }
 

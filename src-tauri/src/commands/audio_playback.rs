@@ -159,13 +159,3 @@ pub async fn audio_engine_release_handle(
     .await
     .unwrap_or(false))
 }
-
-#[tauri::command]
-pub async fn audio_engine_get_state(
-    engine: State<'_, AudioEngineState>,
-) -> Result<AudioSyncPayload, String> {
-    let engine_owned = engine.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || engine_owned.snapshot())
-        .await
-        .map_err(|e| format!("Audio snapshot task error: {}", e))?
-}

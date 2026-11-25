@@ -9,6 +9,7 @@ import {
   splitFileNameAndExt,
 } from "../../utils/format";
 import { MiniWaveform, WaveformDisplayConfig } from "../MiniWaveform";
+import type { TaxonomyIndex } from "../../utils/taxonomyTree";
 import {
   renderBpmCell,
   renderDateCell,
@@ -57,6 +58,7 @@ interface SampleTableRowProps {
   selectedGenre: string | null;
   selectedTagSet: ReadonlySet<number>;
   genreColorMap: ReadonlyMap<string, string>;
+  taxonomyIndex?: TaxonomyIndex;
   waveformDisplay: WaveformDisplayConfig;
   favoriteShortcutLabel?: string;
   onRowClick: (e: React.MouseEvent, sample: SampleItem, index: number) => void;
@@ -99,6 +101,7 @@ export const SampleTableRow: React.FC<SampleTableRowProps> = React.memo(
     selectedGenre,
     selectedTagSet,
     genreColorMap,
+    taxonomyIndex,
     waveformDisplay,
     favoriteShortcutLabel,
     onRowClick,
@@ -123,6 +126,7 @@ export const SampleTableRow: React.FC<SampleTableRowProps> = React.memo(
     return (
       <div
         role="row"
+        data-sample-row-id={sample.id}
         aria-selected={isRowSelected}
         aria-rowindex={rowIndex + 1}
         aria-label={sample.file_name}
@@ -384,8 +388,11 @@ export const SampleTableRow: React.FC<SampleTableRowProps> = React.memo(
                 sample,
                 width: colWidths.genre,
                 selectedGenre,
+                selectedTagSet,
                 isGenrePopoverOpen,
                 genreColorMap,
+                taxonomyIndex,
+                pendingAiTags,
                 onOpenGenrePopover,
               });
 
@@ -403,6 +410,7 @@ export const SampleTableRow: React.FC<SampleTableRowProps> = React.memo(
                 sample,
                 width: colWidths.tags,
                 selectedTagSet,
+                taxonomyIndex,
                 pendingAiTags,
                 isTagPopoverOpen,
                 onOpenTagPopover,

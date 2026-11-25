@@ -1,9 +1,18 @@
-import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { ChevronDown, ChevronUp, SlidersHorizontal } from "lucide-react";
 import { AUDIFY_STORAGE_KEYS } from "../../constants/storageKeys";
 import { safeGetItem, safeSetItem } from "../../store/storageHelpers";
 import { useSampleStore } from "../../store/useSampleStore";
 import { extractSearchPrefixValues } from "../../utils/searchPrefixHelpers";
+import { getSharedTaxonomyIndex } from "../../utils/taxonomyTree";
 import type { FilterDrawerTabId } from "./FilterDrawerPanels";
 
 const LazyFilterDrawerPanel = lazy(() =>
@@ -14,6 +23,41 @@ const LazyFilterDrawerPanel = lazy(() =>
 
 const DRAWER_OPEN_KEY = AUDIFY_STORAGE_KEYS.filterDrawerOpen;
 const DRAWER_TAB_KEY = AUDIFY_STORAGE_KEYS.filterDrawerTab;
+const DRAWER_HEIGHT_KEY = AUDIFY_STORAGE_KEYS.filterDrawerHeight;
+const DRAWER_COMPACT_HEIGHT_KEY = AUDIFY_STORAGE_KEYS.filterDrawerCompactHeight;
+
+const DEFAULT_DRAWER_HEIGHT = 88;
+const MIN_DRAWER_HEIGHT = 76;
+const MAX_DRAWER_HEIGHT = 260;
+
+const DEFAULT_COMPACT_DRAWER_HEIGHT = 74;
+const MIN_COMPACT_DRAWER_HEIGHT = 68;
+const MAX_COMPACT_DRAWER_HEIGHT = 220;
+
+function clampDrawerHeight(raw: number, compact: boolean): number {
+  const minH = compact ? MIN_COMPACT_DRAWER_HEIGHT : MIN_DRAWER_HEIGHT;
+  const maxH = compact ? MAX_COMPACT_DRAWER_HEIGHT : MAX_DRAWER_HEIGHT;
+  const viewportCap =
+    typeof window !== "undefined" && window.innerHeight > 0
+      ? Math.max(
+          compact ? 100 : 120,
+          Math.floor(window.innerHeight * (compact ? 0.42 : 0.38))
+        )
+      : maxH;
+  const maxAllowed = Math.min(maxH, viewportCap);
+  return Math.max(minH, Math.min(maxAllowed, Math.round(raw)));
+}
+
+function loadInitialDrawerHeight(compact: boolean): number {
+  const key = compact ? DRAWER_COMPACT_HEIGHT_KEY : DRAWER_HEIGHT_KEY;
+  const minH = compact ? MIN_COMPACT_DRAWER_HEIGHT : MIN_DRAWER_HEIGHT;
+  const defH = compact ? DEFAULT_COMPACT_DRAWER_HEIGHT : DEFAULT_DRAWER_HEIGHT;
+  const saved = Number(safeGetItem(key));
+  if (Number.isFinite(saved) && saved >= minH) {
+    return clampDrawerHeight(saved, compact);
+  }
+  return defH;
+}
 
 const VALID_TABS: readonly FilterDrawerTabId[] = [
   "general",
@@ -38,6 +82,7 @@ export function useActiveDrawerFilterCount(): number {
   const srFilter = useSampleStore((s) => s.srFilter);
   const selectedGenre = useSampleStore((s) => s.selectedGenre);
   const selectedTagIds = useSampleStore((s) => s.selectedTagIds);
+  const excludedTagIds = useSampleStore((s) => s.excludedTagIds);
   const searchQuery = useSampleStore((s) => s.searchQuery);
 
   return useMemo(() => {
@@ -51,7 +96,7 @@ export function useActiveDrawerFilterCount(): number {
     if (typeFilter !== "all") count++;
     if (srFilter !== null) count++;
     if (selectedGenre !== null) count++;
-    count += selectedTagIds.length;
+    count += selectedTagIds.length + excludedTagIds.length;
     count += extractSearchPrefixValues(searchQuery, "bpm:").length;
     count += extractSearchPrefixValues(searchQuery, "key:").length;
     return count;
@@ -66,6 +111,7 @@ export function useActiveDrawerFilterCount(): number {
     srFilter,
     selectedGenre,
     selectedTagIds.length,
+    excludedTagIds.length,
     searchQuery,
   ]);
 }
@@ -87,6 +133,9 @@ export const FilterDrawer: React.FC<FilterDrawerProps> = React.memo(({
   const srFilter = useSampleStore((s) => s.srFilter);
   const selectedGenre = useSampleStore((s) => s.selectedGenre);
   const selectedTagIds = useSampleStore((s) => s.selectedTagIds);
+  const excludedTagIds = useSampleStore((s) => s.excludedTagIds);
+  const tags = useSampleStore((s) => s.tags);
+  const tagFacets = useSampleStore((s) => s.tagFacets);
   const searchQuery = useSampleStore((s) => s.searchQuery);
 
   const isContextualToolsView = trashFilterActive || binFilterActive;
@@ -100,6 +149,55 @@ export const FilterDrawer: React.FC<FilterDrawerProps> = React.memo(({
     const saved = safeGetItem(DRAWER_TAB_KEY) as FilterDrawerTabId | null;
     return saved && VALID_TABS.includes(saved) ? saved : "general";
   });
+
+  const [drawerHeight, setDrawerHeight] = useState<number>(() =>
+    loadInitialDrawerHeight(compact)
+  );
+  const [isResizing, setIsResizing] = useState(false);
+  const drawerHeightRef = useRef<number>(drawerHeight);
+  drawerHeightRef.current = drawerHeight;
+
+  useEffect(() => {
+    setDrawerHeight(loadInitialDrawerHeight(compact));
+  }, [compact]);
+
+  const handleResizePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const startY = e.clientY;
+      const startHeight = drawerHeightRef.current;
+      let latestHeight = startHeight;
+      const storageKey = compact ? DRAWER_COMPACT_HEIGHT_KEY : DRAWER_HEIGHT_KEY;
+      setIsResizing(true);
+
+      const onPointerMove = (ev: PointerEvent) => {
+        const deltaY = startY - ev.clientY;
+        latestHeight = clampDrawerHeight(startHeight + deltaY, compact);
+        setDrawerHeight(latestHeight);
+      };
+      const onPointerUp = () => {
+        setIsResizing(false);
+        safeSetItem(storageKey, String(latestHeight));
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", onPointerUp);
+        window.removeEventListener("pointercancel", onPointerUp);
+      };
+
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", onPointerUp);
+      window.addEventListener("pointercancel", onPointerUp);
+    },
+    [compact]
+  );
+
+  const handleResetDrawerHeight = useCallback(() => {
+    const defH = compact ? DEFAULT_COMPACT_DRAWER_HEIGHT : DEFAULT_DRAWER_HEIGHT;
+    const storageKey = compact ? DRAWER_COMPACT_HEIGHT_KEY : DRAWER_HEIGHT_KEY;
+    setDrawerHeight(defH);
+    safeSetItem(storageKey, String(defH));
+  }, [compact]);
 
   const prevContextualActiveRef = useRef<boolean>(isContextualToolsView);
   const preContextualDrawerStateRef = useRef<{
@@ -161,6 +259,22 @@ export const FilterDrawer: React.FC<FilterDrawerProps> = React.memo(({
     [searchQuery]
   );
 
+  const { hasGenreActive, hasTagsActive } = useMemo(() => {
+    const taxonomy = getSharedTaxonomyIndex(tags, tagFacets);
+    let genreHit = selectedGenre !== null;
+    let tagHit = false;
+    const checkId = (id: number) => {
+      if (taxonomy.domainByTagId.get(id) === "genres") {
+        genreHit = true;
+      } else {
+        tagHit = true;
+      }
+    };
+    for (let i = 0; i < selectedTagIds.length; i++) checkId(selectedTagIds[i]);
+    for (let i = 0; i < excludedTagIds.length; i++) checkId(excludedTagIds[i]);
+    return { hasGenreActive: genreHit, hasTagsActive: tagHit };
+  }, [tags, tagFacets, selectedGenre, selectedTagIds, excludedTagIds]);
+
   const tabs: Array<{
     id: FilterDrawerTabId;
     label: string;
@@ -193,13 +307,13 @@ export const FilterDrawer: React.FC<FilterDrawerProps> = React.memo(({
       id: "genre",
       label: "Genre",
       shortLabel: "Genre",
-      hasActive: selectedGenre !== null,
+      hasActive: hasGenreActive,
     },
     {
       id: "tags",
       label: "Tags",
       shortLabel: "Tags",
-      hasActive: selectedTagIds.length > 0,
+      hasActive: hasTagsActive,
     },
     {
       id: "bpm",
@@ -225,7 +339,27 @@ export const FilterDrawer: React.FC<FilterDrawerProps> = React.memo(({
   };
 
   return (
-    <div className="border-t border-line bg-surface-1 shrink-0 select-none">
+    <div className="relative border-t border-line bg-surface-1 shrink-0 select-none">
+      {isOpen && (
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize filter drawer"
+          data-testid="filter-drawer-resize-handle"
+          onPointerDown={handleResizePointerDown}
+          onDoubleClick={handleResetDrawerHeight}
+          title="Drag to resize filter drawer (double-click to reset)"
+          className="group absolute -top-[3px] left-0 right-0 h-[6px] cursor-ns-resize z-20 flex items-center"
+        >
+          <div
+            className={`w-full h-[2px] transition-colors ${
+              isResizing
+                ? "bg-accent"
+                : "bg-transparent group-hover:bg-accent/60"
+            }`}
+          />
+        </div>
+      )}
       <div className="h-[28px] px-2 flex items-center gap-0.5 text-[11.5px] text-fg-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <span
           className={`inline-flex items-center gap-1.5 ${
@@ -289,17 +423,14 @@ export const FilterDrawer: React.FC<FilterDrawerProps> = React.memo(({
 
       {isOpen && (
         <div
-          className={`border-t border-line-subtle bg-surface-1 overflow-y-auto ${
-            compact
-              ? "h-[74px] px-2 py-1.5"
-              : `px-3 py-2 ${
-                  activeTab === "general" &&
-                  (slicesFilterActive ||
-                    duplicatesFilterActive ||
-                    trashFilterActive)
-                    ? "min-h-[88px] max-h-[126px]"
-                    : "h-[88px]"
-                }`
+          data-testid="filter-drawer-body"
+          style={{ height: `${drawerHeight}px` }}
+          className={`border-t border-line-subtle bg-surface-1 ${
+            compact ? "px-2 py-1.5" : "px-3 py-2"
+          } ${
+            activeTab === "tags" || activeTab === "genre"
+              ? "overflow-hidden"
+              : "overflow-y-auto"
           }`}
         >
           <Suspense fallback={null}>

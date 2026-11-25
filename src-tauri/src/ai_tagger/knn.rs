@@ -29,6 +29,8 @@ pub struct LabeledEmbeddingEntry {
     pub sample_id: i64,
     pub vector: [f32; AI_EMBEDDING_DIM],
     pub tag_names: Vec<String>,
+    /// Per-tag provenance weight (`1.0` for `'manual'`, `0.75` for `'ai_approved'`).
+    pub tag_weights: Vec<f32>,
 }
 
 #[derive(Debug, Default)]
@@ -39,6 +41,7 @@ pub struct KnnLabeledIndex {
 impl KnnLabeledIndex {
     /// Loads all non-trashed samples inside the active profile that have BOTH an embedding
     /// for `model_id` and at least one manual/approved tag (`sample_tags.is_manual = 1`).
+    /// Hand-authored `'manual'` labels receive higher voting weight (`1.0`) than bulk `'ai_approved'` (`0.75`).
     pub fn load_from_db(
         conn: &Connection,
         profile_id: i64,
@@ -46,7 +49,7 @@ impl KnnLabeledIndex {
     ) -> Result<Self, String> {
         let mut stmt = conn
             .prepare(
-                "SELECT s.id, e.vector, t.name
+                "SELECT s.id, e.vector, t.name, COALESCE(st.source, 'manual')
                  FROM samples s
                  JOIN sample_embeddings e
                    ON e.sample_id = s.id AND e.model_id = ?2
@@ -55,6 +58,7 @@ impl KnnLabeledIndex {
                  JOIN tags t
                    ON t.id = st.tag_id
                  WHERE COALESCE(s.is_trashed, 0) = 0
+                   AND COALESCE(t.facet_id, 1) != ?3
                    AND s.library_id IN (
                        SELECT l.id FROM libraries l
                        WHERE l.is_global = 1
@@ -65,11 +69,14 @@ impl KnnLabeledIndex {
             .map_err(|e| format!("Failed preparing k-NN labeled query: {}", e))?;
 
         let rows = stmt
-            .query_map(params![profile_id, model_id], |r| {
+            .query_map(
+                params![profile_id, model_id, crate::taxonomy_catalog::FACET_SOURCE_ID],
+                |r| {
                 Ok((
                     r.get::<_, i64>(0)?,
                     r.get::<_, Vec<u8>>(1)?,
                     r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
                 ))
             })
             .map_err(|e| format!("Failed querying k-NN labeled samples: {}", e))?;
@@ -78,11 +85,12 @@ impl KnnLabeledIndex {
         let mut index_by_sample: HashMap<i64, usize> = HashMap::new();
 
         for row in rows.flatten() {
-            let (sample_id, blob, tag_name) = row;
+            let (sample_id, blob, tag_name, source) = row;
             let trimmed = tag_name.trim();
             if trimmed.is_empty() {
                 continue;
             }
+            let weight = if source == "ai_approved" { 0.75 } else { 1.0 };
             if let Some(&idx) = index_by_sample.get(&sample_id) {
                 if !entries[idx]
                     .tag_names
@@ -90,6 +98,7 @@ impl KnnLabeledIndex {
                     .any(|existing| existing.eq_ignore_ascii_case(trimmed))
                 {
                     entries[idx].tag_names.push(trimmed.to_string());
+                    entries[idx].tag_weights.push(weight);
                 }
                 continue;
             }
@@ -100,6 +109,7 @@ impl KnnLabeledIndex {
                     sample_id,
                     vector,
                     tag_names: vec![trimmed.to_string()],
+                    tag_weights: vec![weight],
                 });
             }
         }
@@ -182,7 +192,10 @@ impl KnnLabeledIndex {
 
         let mut votes: HashMap<String, VoteAcc> = HashMap::new();
         for &(sim, entry_idx) in &neighbors {
-            for tag in &self.entries[entry_idx].tag_names {
+            let entry = &self.entries[entry_idx];
+            for (tag_idx, tag) in entry.tag_names.iter().enumerate() {
+                let provenance_weight = entry.tag_weights.get(tag_idx).copied().unwrap_or(1.0);
+                let weighted_sim = sim * provenance_weight;
                 let key = tag.to_lowercase();
                 let acc = votes.entry(key).or_insert_with(|| VoteAcc {
                     canonical_name: tag.clone(),
@@ -190,9 +203,9 @@ impl KnnLabeledIndex {
                     max_sim: 0.0,
                     support_count: 0,
                 });
-                acc.sim_sum += sim;
-                if sim > acc.max_sim {
-                    acc.max_sim = sim;
+                acc.sim_sum += weighted_sim;
+                if weighted_sim > acc.max_sim {
+                    acc.max_sim = weighted_sim;
                 }
                 acc.support_count += 1;
             }
@@ -472,6 +485,7 @@ mod tests {
                 sample_id: i,
                 vector: make_unit_vec(0, 1, 0.1 * (i as f32)),
                 tag_names: vec!["Custom_Rumble".to_string()],
+                tag_weights: vec![1.0],
             });
         }
         // Query sample ID 1 closely matches sample 2 & 3, and shouldn't vote using itself
@@ -491,11 +505,13 @@ mod tests {
             sample_id: 10,
             vector: make_unit_vec(0, 2, 0.8),
             tag_names: vec!["NoiseFluke".to_string()],
+            tag_weights: vec![1.0],
         };
         let near_dupe = LabeledEmbeddingEntry {
             sample_id: 11,
             vector: make_unit_vec(5, 6, 0.05),
             tag_names: vec!["BossLayer".to_string()],
+            tag_weights: vec![1.0],
         };
         let index = KnnLabeledIndex::from_entries(vec![weak_neighbor, near_dupe]);
 
@@ -562,6 +578,57 @@ mod tests {
         let index = KnnLabeledIndex::load_from_db(&conn, profile_id, "yamnet-v1").unwrap();
         assert_eq!(index.labeled_count(), 1);
         assert_eq!(index.entries[0].tag_names, vec!["UserCustom".to_string()]);
+    }
+
+    #[test]
+    fn knn_db_loader_excludes_source_pack_facet_tags() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema_on_conn(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO libraries (path, name, is_global) VALUES ('F:/Lib', 'Lib', 1)",
+            [],
+        )
+        .unwrap();
+        let lib_id = conn.last_insert_rowid();
+
+        let vec_blob = vec_to_blob(&make_unit_vec(7, 1, 0.0));
+        conn.execute(
+            "INSERT INTO samples (library_id, file_path, file_name, extension, duration_ms)
+             VALUES (?1, 'F:/Lib/pika.wav', 'pika.wav', 'wav', 300)",
+            [lib_id],
+        )
+        .unwrap();
+        let s1 = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO sample_embeddings (sample_id, model_id, dim, vector) VALUES (?1, 'yamnet-v1', 128, ?2)",
+            params![s1, vec_blob],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO tags (name, color, is_manual, facet_id) VALUES ('Pokemon', '#64748B', 1, 4)",
+            [],
+        )
+        .unwrap();
+        let source_tag = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO tags (name, color, is_manual, facet_id) VALUES ('Synthwave', '#8B5CF6', 1, 2)",
+            [],
+        )
+        .unwrap();
+        let genre_tag = conn.last_insert_rowid();
+
+        conn.execute(
+            "INSERT INTO sample_tags (sample_id, tag_id, is_manual, source) VALUES (?1, ?2, 1, 'manual'), (?1, ?3, 1, 'manual')",
+            params![s1, source_tag, genre_tag],
+        )
+        .unwrap();
+
+        let profile_id = crate::db::get_active_profile_id(&conn);
+        let index = KnnLabeledIndex::load_from_db(&conn, profile_id, "yamnet-v1").unwrap();
+        assert_eq!(index.labeled_count(), 1);
+        assert_eq!(index.entries[0].tag_names, vec!["Synthwave".to_string()]);
     }
 
     #[test]

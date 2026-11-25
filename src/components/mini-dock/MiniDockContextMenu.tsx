@@ -23,6 +23,7 @@ import { useSampleStore } from "../../store/useSampleStore";
 import { SampleItem } from "../../types";
 import { formatShortcutDisplay } from "../../utils/shortcuts";
 import { handleContextMenuKeyDown, MenuItem } from "../common/MenuItem";
+import { TaxonomyPicker } from "../taxonomy/TaxonomyPicker";
 
 export interface MiniContextMenuState {
   sample: SampleItem;
@@ -46,6 +47,7 @@ export const MiniDockContextMenu: React.FC<MiniDockContextMenuProps> = ({
   const trashFilterActive = useSampleStore((s) => s.trashFilterActive);
   const shortcuts = useSampleStore((s) => s.shortcuts);
   const collections = useSampleStore((s) => s.collections);
+  const samples = useSampleStore((s) => s.samples);
   const tags = useSampleStore((s) => s.tags);
   const genres = useSampleStore((s) => s.genres);
 
@@ -56,10 +58,6 @@ export const MiniDockContextMenu: React.FC<MiniDockContextMenuProps> = ({
   const addSamplesToCollectionBatch = useSampleStore(
     (s) => s.addSamplesToCollectionBatch
   );
-  const assignTag = useSampleStore((s) => s.assignTag);
-  const assignTagBatch = useSampleStore((s) => s.assignTagBatch);
-  const assignGenre = useSampleStore((s) => s.assignGenre);
-  const assignGenreBatch = useSampleStore((s) => s.assignGenreBatch);
   const copyAttributionForSamples = useSampleStore(
     (s) => s.copyAttributionForSamples
   );
@@ -236,28 +234,18 @@ export const MiniDockContextMenu: React.FC<MiniDockContextMenuProps> = ({
             }
           />
           {expandedSub === "tag" && (
-            <div className="mx-1.5 my-0.5 py-0.5 rounded-xs bg-surface-1 border border-line max-h-[120px] overflow-y-auto">
-              {tags.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => {
-                    if (targetIds.length > 1) {
-                      void assignTagBatch(targetIds, t.id);
-                    } else {
-                      void assignTag(menu.sample.id, t.id);
-                    }
-                    onClose();
-                  }}
-                  className="w-full h-[22px] px-2 flex items-center gap-1.5 text-left text-[10.5px] text-fg-2 hover:text-fg hover:bg-accent-soft transition-colors truncate"
-                >
-                  <span
-                    className="w-2 h-2 rounded-[2px] shrink-0"
-                    style={{ backgroundColor: t.color }}
-                  />
-                  <span className="truncate">{t.name}</span>
-                </button>
-              ))}
+            <div className="mx-1.5 my-1 p-1.5 rounded-xs bg-surface-1 border border-line">
+              <TaxonomyPicker
+                mode="tags"
+                compact
+                allowCreate={false}
+                sampleIds={targetIds}
+                samples={
+                  targetIds.length > 1
+                    ? samples.filter((s) => targetIds.includes(s.id))
+                    : [samples.find((s) => s.id === menu.sample.id) ?? menu.sample]
+                }
+              />
             </div>
           )}
         </div>
@@ -269,7 +257,7 @@ export const MiniDockContextMenu: React.FC<MiniDockContextMenuProps> = ({
             tone="accent"
             compactHeight
             icon={<Music className="w-3.5 h-3.5 text-accent-fg" />}
-            label="Assign Genre"
+            label="Genres & Moods"
             rightSlot={
               <ChevronRight
                 className={`w-3 h-3 text-fg-3 transition-transform ${
@@ -282,28 +270,18 @@ export const MiniDockContextMenu: React.FC<MiniDockContextMenuProps> = ({
             }
           />
           {expandedSub === "genre" && (
-            <div className="mx-1.5 my-0.5 py-0.5 rounded-xs bg-surface-1 border border-line max-h-[120px] overflow-y-auto">
-              {genres.map((g) => (
-                <button
-                  key={g.id}
-                  type="button"
-                  onClick={() => {
-                    if (targetIds.length > 1) {
-                      void assignGenreBatch(targetIds, g.name);
-                    } else {
-                      void assignGenre(menu.sample.id, g.name);
-                    }
-                    onClose();
-                  }}
-                  className="w-full h-[22px] px-2 flex items-center gap-1.5 text-left text-[10.5px] text-fg-2 hover:text-fg hover:bg-accent-soft transition-colors truncate"
-                >
-                  <span
-                    className="w-2 h-2 rounded-[2px] shrink-0"
-                    style={{ backgroundColor: g.color }}
-                  />
-                  <span className="truncate">{g.name}</span>
-                </button>
-              ))}
+            <div className="mx-1.5 my-1 p-1.5 rounded-xs bg-surface-1 border border-line">
+              <TaxonomyPicker
+                mode="genres"
+                compact
+                allowCreate={false}
+                sampleIds={targetIds}
+                samples={
+                  targetIds.length > 1
+                    ? samples.filter((s) => targetIds.includes(s.id))
+                    : [samples.find((s) => s.id === menu.sample.id) ?? menu.sample]
+                }
+              />
             </div>
           )}
         </div>

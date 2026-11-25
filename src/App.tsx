@@ -1,6 +1,5 @@
 import React, { Suspense, useEffect, useState } from "react";
 import { Z_INDEX } from "./constants/zIndex";
-import { AppAtmosphereViewport } from "./components/AppAtmosphereViewport";
 import { AudioEngine } from "./components/AudioEngine";
 import { GlobalTooltip } from "./components/GlobalTooltip";
 import { LeftSidebar } from "./components/LeftSidebar";
@@ -14,6 +13,12 @@ import {
 } from "./store/storageHelpers";
 import { useSampleStore } from "./store/useSampleStore";
 import { attachBodyAriaTitleMirror } from "./utils/domBodyObserver";
+
+const AppAtmosphereViewport = React.lazy(() =>
+  import("./components/AppAtmosphereViewport").then((m) => ({
+    default: m.AppAtmosphereViewport,
+  }))
+);
 
 const SettingsModal = React.lazy(() =>
   import("./components/SettingsModal").then((m) => ({
@@ -77,18 +82,19 @@ export const App: React.FC = () => {
     void useSampleStore.getState().initialize();
   }, []);
 
+  const hasBackdrop =
+    themeMode !== "contrast" &&
+    hasActiveVisualBackdrop(wallpaperKind, customBgImage, asciiMagicSlug);
+
   // Sync data-has-bg attribute on root html when any image or ASCII backdrop is active
   useEffect(() => {
     const root = document.documentElement;
-    const isActive =
-      themeMode !== "contrast" &&
-      hasActiveVisualBackdrop(wallpaperKind, customBgImage, asciiMagicSlug);
-    if (isActive) {
+    if (hasBackdrop) {
       root.setAttribute("data-has-bg", "true");
     } else {
       root.removeAttribute("data-has-bg");
     }
-  }, [wallpaperKind, customBgImage, asciiMagicSlug, themeMode]);
+  }, [hasBackdrop]);
 
   // Surface otherwise-silent async failures in the status bar instead of the dev console only.
   useEffect(() => {
@@ -142,10 +148,14 @@ export const App: React.FC = () => {
         </Suspense>
 
         {statusNotice && (
-          <StatusNoticeToast
-            notice={statusNotice}
-            onDismiss={clearStatusNotice}
-          />
+          <Suspense fallback={null}>
+            <StatusNoticeToast
+              notice={statusNotice}
+              onDismiss={clearStatusNotice}
+              onPause={pauseStatusNotice}
+              onResume={resumeStatusNotice}
+            />
+          </Suspense>
         )}
 
         <GlobalTooltip />
@@ -160,7 +170,11 @@ export const App: React.FC = () => {
     >
       <AudioEngine />
 
-      <AppAtmosphereViewport />
+      {hasBackdrop && (
+        <Suspense fallback={null}>
+          <AppAtmosphereViewport />
+        </Suspense>
+      )}
 
       {/* Main UI Content Layer */}
       <div className="relative z-10 flex flex-col h-full w-full overflow-hidden">

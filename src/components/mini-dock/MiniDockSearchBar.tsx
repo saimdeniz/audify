@@ -3,11 +3,14 @@ import { Search, SlidersHorizontal, Sparkles, X, Zap } from "lucide-react";
 import { useSampleStore } from "../../store/useSampleStore";
 import { getMatchingSynonymsForQuery } from "../../utils/sfxThesaurus";
 import { QuickCreatePopover } from "../QuickCreatePopover";
-import {
-  SmartSearchAutocomplete,
-  useSearchAutocomplete,
-} from "../sample-table/SmartSearchAutocomplete";
+import { useSearchAutocomplete } from "../sample-table/useSearchAutocomplete";
 import { MiniDockSortDropdown } from "./MiniDockSortDropdown";
+
+const SmartSearchAutocomplete = lazy(() =>
+  import("../sample-table/SmartSearchAutocomplete").then((m) => ({
+    default: m.SmartSearchAutocomplete,
+  }))
+);
 
 const SmartSearchHelperPopover = lazy(() =>
   import("../sample-table/SmartSearchHelperPopover").then((m) => ({
@@ -235,13 +238,15 @@ export const MiniDockSearchBar: React.FC<MiniDockSearchBarProps> = React.memo(
           )}
 
           {autocomplete.context && autocomplete.context.items.length > 0 && (
-            <SmartSearchAutocomplete
-              context={autocomplete.context}
-              activeIndex={autocomplete.activeIndex}
-              anchorRef={searchBoxRef}
-              onHoverIndex={autocomplete.setActiveIndex}
-              onSelect={autocomplete.accept}
-            />
+            <Suspense fallback={null}>
+              <SmartSearchAutocomplete
+                context={autocomplete.context}
+                activeIndex={autocomplete.activeIndex}
+                anchorRef={searchBoxRef}
+                onHoverIndex={autocomplete.setActiveIndex}
+                onSelect={autocomplete.accept}
+              />
+            </Suspense>
           )}
 
           {showSearchHelper && (

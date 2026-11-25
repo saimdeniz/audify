@@ -5,6 +5,7 @@ import { Z_INDEX } from "../../constants/zIndex";
 import { useSampleStore } from "../../store/useSampleStore";
 import { Collection, SampleItem } from "../../types";
 import { CollectionIcon } from "../CollectionIcon";
+import { TaxonomyPicker } from "../taxonomy/TaxonomyPicker";
 import { QuickCollectionForm } from "./QuickCollectionForm";
 
 export interface BatchPopoverCoords {
@@ -32,8 +33,6 @@ export const SampleBatchPopovers: React.FC<SampleBatchPopoversProps> = ({
   childrenByParentId,
   onClose,
 }) => {
-  const tags = useSampleStore((s) => s.tags);
-  const genres = useSampleStore((s) => s.genres);
   const autoRouteCollectionDrops = useSampleStore(
     (s) => s.autoRouteCollectionDrops
   );
@@ -43,8 +42,6 @@ export const SampleBatchPopovers: React.FC<SampleBatchPopoversProps> = ({
   const addAutoRoutedSamplesToCollection = useSampleStore(
     (s) => s.addAutoRoutedSamplesToCollection
   );
-  const assignTagBatch = useSampleStore((s) => s.assignTagBatch);
-  const assignGenreBatch = useSampleStore((s) => s.assignGenreBatch);
 
   const [collapsedMenuColIds, setCollapsedMenuColIds] = useState<
     Record<number, boolean>
@@ -194,88 +191,36 @@ export const SampleBatchPopovers: React.FC<SampleBatchPopoversProps> = ({
     );
   }
 
-  if (batchPopover === "tag") {
+  if (batchPopover === "tag" || batchPopover === "genre") {
+    const mode = batchPopover === "tag" ? "tags" : "genres";
     return createPortal(
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={
+          mode === "tags" ? "Batch assign tags" : "Batch assign genres and moods"
+        }
         data-context-menu-portal="true"
         data-popover-portal="true"
         data-mica-overlay="true"
         onClick={(e) => e.stopPropagation()}
         style={sharedStyle}
-        className="fixed w-[210px] bg-surface-2 audify-overlay-surface border border-line-strong rounded-md p-2 flex flex-col gap-1.5 shadow-2xl overflow-hidden"
+        className="fixed w-[264px] bg-surface-2 audify-overlay-surface border border-line-strong rounded-md p-2.5 shadow-2xl overflow-hidden"
       >
-        <div className="text-[10px] font-mono uppercase tracking-wider text-fg-head px-1 shrink-0">
-          ASSIGN TAG ({selectedSampleIds.length})
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto space-y-0.5">
-          {tags.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={async () => {
-                await assignTagBatch(selectedSampleIds, t.id);
-                onClose();
-              }}
-              className="w-full text-left px-2 py-1 text-[11.5px] text-fg hover:bg-accent-soft hover:text-accent-fg flex items-center space-x-2 rounded-xs"
-            >
-              <span
-                className="w-2.5 h-2.5 rounded-[3px] inline-block shrink-0"
-                style={{ backgroundColor: t.color }}
-              />
-              <span className="truncate">{t.name}</span>
-            </button>
-          ))}
-        </div>
+        <TaxonomyPicker
+          mode={mode}
+          sampleIds={selectedSampleIds}
+          samples={selectedSampleObjects}
+          title={
+            mode === "tags"
+              ? `ASSIGN TAGS (${selectedSampleIds.length})`
+              : `GENRES & MOODS (${selectedSampleIds.length})`
+          }
+          onClose={onClose}
+        />
       </div>,
       document.body
     );
   }
-
-  return createPortal(
-    <div
-      data-context-menu-portal="true"
-      data-popover-portal="true"
-      data-mica-overlay="true"
-      onClick={(e) => e.stopPropagation()}
-      style={sharedStyle}
-      className="fixed w-[210px] bg-surface-2 audify-overlay-surface border border-line-strong rounded-md p-2 flex flex-col gap-1.5 shadow-2xl overflow-hidden"
-    >
-      <div className="flex items-center justify-between px-1 shrink-0">
-        <span className="text-[10px] font-mono uppercase tracking-wider text-fg-head">
-          ASSIGN GENRE ({selectedSampleIds.length})
-        </span>
-        <button
-          type="button"
-          onClick={async () => {
-            await assignGenreBatch(selectedSampleIds, "");
-            onClose();
-          }}
-          className="text-[10px] font-mono text-fg-3 hover:text-accent-fg"
-          title="Clear genre on selected"
-        >
-          Clear
-        </button>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto space-y-0.5">
-        {genres.map((g) => (
-          <button
-            key={g.id}
-            type="button"
-            onClick={async () => {
-              await assignGenreBatch(selectedSampleIds, g.name);
-              onClose();
-            }}
-            className="w-full text-left px-2 py-1 text-[11.5px] text-fg hover:bg-accent-soft hover:text-accent-fg flex items-center space-x-2 rounded-xs"
-          >
-            <span
-              className="w-2.5 h-2.5 rounded-[3px] inline-block shrink-0"
-              style={{ backgroundColor: g.color }}
-            />
-            <span className="truncate">{g.name}</span>
-          </button>
-        ))}
-      </div>
-    </div>,
-    document.body
-  );
+  return null;
 };

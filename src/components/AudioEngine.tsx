@@ -1,4 +1,11 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   computeInterpolatedPlayheadSec,
   isTauriNativeAudioRuntime,
@@ -24,7 +31,12 @@ import {
   subscribeAppActivity,
 } from "../utils/appFocusMonitor";
 import { normalizePathForMatch } from "../utils/pathHelpers";
-import { HtmlAudioFallbackEngine } from "./HtmlAudioFallbackEngine";
+
+const LazyHtmlAudioFallbackEngine = lazy(() =>
+  import("./HtmlAudioFallbackEngine").then((m) => ({
+    default: m.HtmlAudioFallbackEngine,
+  }))
+);
 
 const DEFAULT_ANCHOR: PlayheadAnchor = {
   positionSec: 0,
@@ -52,7 +64,11 @@ export const AudioEngine: React.FC = React.memo(() => {
   }, []);
 
   if (!useNative) {
-    return <HtmlAudioFallbackEngine />;
+    return (
+      <Suspense fallback={null}>
+        <LazyHtmlAudioFallbackEngine />
+      </Suspense>
+    );
   }
 
   return <NativeRustAudioBridge onFallback={handleFallback} />;

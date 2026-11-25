@@ -1,6 +1,10 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { CopyCheck, Scissors, X } from "lucide-react";
 import { DuplicateGeneralControls } from "./DuplicateGeneralControls";
+import {
+  FilterDrawerGenrePanel,
+  FilterDrawerTagsPanel,
+} from "./FilterDrawerTaxonomyPanels";
 import { SessionBinGeneralControls } from "./SessionBinGeneralControls";
 import { SliceGeneralControls } from "./SliceGeneralControls";
 import { TrashGeneralControls } from "./TrashGeneralControls";
@@ -52,10 +56,6 @@ export const FilterDrawerPanel: React.FC<FilterDrawerPanelProps> = ({
   const trashFilterActive = useSampleStore((s) => s.trashFilterActive);
   const typeFilter = useSampleStore((s) => s.typeFilter);
   const srFilter = useSampleStore((s) => s.srFilter);
-  const selectedGenre = useSampleStore((s) => s.selectedGenre);
-  const genres = useSampleStore((s) => s.genres);
-  const selectedTagIds = useSampleStore((s) => s.selectedTagIds);
-  const tags = useSampleStore((s) => s.tags);
   const searchQuery = useSampleStore((s) => s.searchQuery);
 
   const setDuplicatesFilterActive = useSampleStore(
@@ -66,8 +66,6 @@ export const FilterDrawerPanel: React.FC<FilterDrawerPanelProps> = ({
   );
   const setTypeFilter = useSampleStore((s) => s.setTypeFilter);
   const setSrFilter = useSampleStore((s) => s.setSrFilter);
-  const setSelectedGenre = useSampleStore((s) => s.setSelectedGenre);
-  const toggleTagFilter = useSampleStore((s) => s.toggleTagFilter);
   const setSearchQuery = useSampleStore((s) => s.setSearchQuery);
 
   const currentBpmToken = bpmTokens[0] || "";
@@ -147,27 +145,6 @@ export const FilterDrawerPanel: React.FC<FilterDrawerPanelProps> = ({
       : `~${activeCamelotCode}`;
     setSearchQuery(upsertSearchPrefixToken(searchQuery, "key:", nextToken));
   };
-
-  const selectedTagSet = useMemo(
-    () => new Set(selectedTagIds),
-    [selectedTagIds]
-  );
-
-  const sortedGenres = useMemo(
-    () =>
-      [...genres].sort(
-        (a, b) => b.sample_count - a.sample_count || a.name.localeCompare(b.name)
-      ),
-    [genres]
-  );
-
-  const sortedTags = useMemo(
-    () =>
-      [...tags].sort(
-        (a, b) => b.sample_count - a.sample_count || a.name.localeCompare(b.name)
-      ),
-    [tags]
-  );
 
   switch (activeTab) {
     case "general":
@@ -290,72 +267,10 @@ export const FilterDrawerPanel: React.FC<FilterDrawerPanelProps> = ({
       );
 
     case "genre":
-      return sortedGenres.length === 0 ? (
-        <span className="text-[11px] text-fg-3">No genres available.</span>
-      ) : (
-        <div className="flex items-center gap-1.5 flex-wrap content-start">
-          {sortedGenres.map((g) => {
-            const active =
-              selectedGenre !== null &&
-              selectedGenre.toLowerCase() === g.name.toLowerCase();
-            return (
-              <button
-                key={g.id}
-                type="button"
-                onClick={() => setSelectedGenre(g.name)}
-                className={`h-[23px] px-2 rounded-[3px] border font-medium text-[11px] inline-flex items-center gap-1.5 transition-colors ${
-                  active
-                    ? "bg-accent-soft border-accent text-accent-fg"
-                    : "bg-surface-3 border-line text-fg-2 hover:text-fg hover:border-line-strong"
-                }`}
-                title={`${g.name} (${g.sample_count.toLocaleString()})`}
-              >
-                <span
-                  className="w-2 h-2 rounded-[2px] shrink-0"
-                  style={{ backgroundColor: g.color }}
-                />
-                <span>{g.name}</span>
-                <span className="text-[10px] font-mono text-fg-3">
-                  {g.sample_count.toLocaleString()}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      );
+      return <FilterDrawerGenrePanel compact={compact} />;
 
     case "tags":
-      return sortedTags.length === 0 ? (
-        <span className="text-[11px] text-fg-3">No tags available.</span>
-      ) : (
-        <div className="flex items-center gap-1.5 flex-wrap content-start">
-          {sortedTags.map((t) => {
-            const active = selectedTagSet.has(t.id);
-            return (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => toggleTagFilter(t.id)}
-                className={`h-[23px] px-2 rounded-[3px] border font-medium text-[11px] inline-flex items-center gap-1.5 transition-colors ${
-                  active
-                    ? "bg-accent-soft border-accent text-accent-fg"
-                    : "bg-surface-3 border-line text-fg-2 hover:text-fg hover:border-line-strong"
-                }`}
-                title={`${t.name} (${t.sample_count.toLocaleString()})`}
-              >
-                <span
-                  className="w-2 h-2 rounded-[2px] shrink-0"
-                  style={{ backgroundColor: t.color }}
-                />
-                <span>{t.name}</span>
-                <span className="text-[10px] font-mono text-fg-3">
-                  {t.sample_count.toLocaleString()}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      );
+      return <FilterDrawerTagsPanel compact={compact} />;
 
     case "bpm":
       return (

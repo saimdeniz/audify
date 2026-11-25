@@ -1,5 +1,10 @@
 import type { AiSimilarityScope, AiTaggingMode } from "./aiAndSearch";
 
+export type BuiltInFacetSlug = "category" | "genre" | "mood" | "source";
+export type TaxonomyFacetSlug = BuiltInFacetSlug | (string & {});
+export type TaxonomyDomain = "tags" | "genres";
+export type TagMatchMode = "all" | "any";
+
 export type CollectionIconId =
   | "layers"
   | "folder"
@@ -207,6 +212,8 @@ export interface KeyboardShortcuts {
   toggleAutoPreview: string;
   toggleMute: string;
   toggleFavorite: string;
+  openTagPicker?: string;
+  openGenrePicker?: string;
   markSliceIn?: string;
   markSliceOut?: string;
   saveSlice?: string;
@@ -253,11 +260,20 @@ export interface AutoTagRule {
   rel_exclude_paths?: string[];
   min_duration_ms?: number;
   max_duration_ms?: number;
+  facet_slug?: TaxonomyFacetSlug;
+  parent_tag_name?: string;
 }
 
 export interface AutoTagPreviewResult {
   match_count: number;
   sample_names: string[];
+}
+
+export interface AutoTagImpactPreview {
+  affected_samples: number;
+  added_links: number;
+  removed_links: number;
+  can_undo: boolean;
 }
 
 export interface ProfileSettings {

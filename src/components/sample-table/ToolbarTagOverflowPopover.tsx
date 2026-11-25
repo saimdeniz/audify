@@ -8,6 +8,9 @@ export interface SuggestedTagEntry {
   tag: Tag;
   matchCount: number;
   isSelected: boolean;
+  isSource?: boolean;
+  color?: string;
+  breadcrumb?: string;
 }
 
 interface ToolbarTagOverflowPopoverProps {
@@ -15,7 +18,7 @@ interface ToolbarTagOverflowPopoverProps {
   pos: { top: number; right: number };
   overflowTags: SuggestedTagEntry[];
   onToggleTag: (tagId: number) => void;
-  onSelectOrToggleTag: (tagId: number, multi: boolean) => void;
+  onExcludeTag: (tagId: number) => void;
   onClose: () => void;
 }
 
@@ -26,7 +29,7 @@ export const ToolbarTagOverflowPopover: React.FC<
   pos,
   overflowTags,
   onToggleTag,
-  onSelectOrToggleTag,
+  onExcludeTag,
   onClose,
 }) =>
   createPortal(
@@ -58,35 +61,42 @@ export const ToolbarTagOverflowPopover: React.FC<
       </div>
 
       <div className="flex flex-wrap gap-1.5 max-h-[180px] overflow-y-auto pr-0.5">
-        {overflowTags.map(({ tag, matchCount, isSelected }) => (
-          <button
-            key={tag.id}
-            type="button"
-            onClick={(e) => {
-              if (e.ctrlKey || e.metaKey) {
-                onToggleTag(tag.id);
-              } else {
-                onSelectOrToggleTag(tag.id, false);
-                onClose();
-              }
-            }}
-            className={`h-[23px] px-2 rounded-[3px] border text-[11px] inline-flex items-center gap-1.5 transition-colors ${
-              isSelected
-                ? "bg-accent-soft border-accent text-accent-fg font-medium"
-                : "bg-surface-3 border-line text-fg-2 hover:text-fg hover:border-line-strong"
-            }`}
-            title={`${tag.name} (${matchCount.toLocaleString()} in current view) — Click to filter, Ctrl+Click for multi-tag`}
-          >
-            <span
-              className="w-2 h-2 rounded-[2px] shrink-0"
-              style={{ backgroundColor: tag.color }}
-            />
-            <span className="truncate max-w-[130px]">{tag.name}</span>
-            <span className="font-mono tabular-nums text-[9.5px] text-fg-3">
-              {matchCount.toLocaleString()}
-            </span>
-          </button>
-        ))}
+        {overflowTags.map(
+          ({ tag, matchCount, isSelected, isSource, color, breadcrumb }) => (
+            <button
+              key={tag.id}
+              type="button"
+              onClick={(e) => {
+                if (e.altKey) {
+                  onExcludeTag(tag.id);
+                } else {
+                  onToggleTag(tag.id);
+                }
+              }}
+              className={`h-[23px] px-2 rounded-[3px] border text-[11px] inline-flex items-center gap-1.5 transition-colors ${
+                isSelected
+                  ? "bg-accent-soft border-accent text-accent-fg font-medium"
+                  : "bg-surface-3 border-line text-fg-2 hover:text-fg hover:border-line-strong"
+              }`}
+              title={`${breadcrumb ?? tag.name} (${matchCount.toLocaleString()} in current view) — Click to refine filter · Alt+Click to exclude`}
+            >
+              {isSource ? (
+                <span className="font-mono text-[10px] opacity-80 shrink-0">
+                  #
+                </span>
+              ) : (
+                <span
+                  className="w-2 h-2 rounded-[2px] shrink-0"
+                  style={{ backgroundColor: color ?? tag.color }}
+                />
+              )}
+              <span className="truncate max-w-[130px]">{tag.name}</span>
+              <span className="font-mono tabular-nums text-[9.5px] text-fg-3">
+                {matchCount.toLocaleString()}
+              </span>
+            </button>
+          )
+        )}
       </div>
     </div>,
     document.body

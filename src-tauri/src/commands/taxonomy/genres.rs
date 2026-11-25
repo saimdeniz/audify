@@ -1,114 +1,46 @@
+use super::manage::delete_tag_with_conn;
+use super::tags::{create_tag_with_options_conn, query_facets_with_conn, query_tags_with_conn};
 use crate::audio::extract_embedded_meta_batch;
 use crate::commands::Genre;
+use crate::db::taxonomy::{facet_domain_in_db, resolve_facet_id_in_db};
 use crate::db::{
-    deterministic_color_for_name, get_active_profile_id, is_sample_visible_in_profile,
-    run_read_query, visible_sample_ids_in_profile, AppState,
+    ensure_taxonomy_tag, get_active_profile_id, is_sample_visible_in_profile, run_read_query,
+    sync_primary_genre_for_samples, sync_primary_genre_for_tag, visible_sample_ids_in_profile,
+    AppState,
 };
 use crate::security::validate_hex_color;
+use crate::taxonomy_catalog::{is_canonical_mood_name, sanitize_id3_genre_or_mood_typo};
 use rusqlite::{params, Connection};
-use std::collections::HashMap;
+use std::collections::HashSet;
 use tauri::State;
 
-fn query_genre_by_id_for_profile(
-    conn: &Connection,
-    genre_id: i64,
-    active_id: i64,
-) -> Result<Genre, String> {
-    conn.query_row(
-        "SELECT g.id, g.name, g.color,
-                (SELECT COUNT(*)
-                 FROM samples s
-                 INNER JOIN libraries l ON l.id = s.library_id
-                 WHERE COALESCE(s.is_trashed, 0) = 0
-                   AND s.genre = g.name COLLATE NOCASE
-                   AND (
-                       l.is_global = 1
-                       OR EXISTS (
-                           SELECT 1 FROM profile_libraries pl
-                           WHERE pl.profile_id = ?2 AND pl.library_id = l.id
-                       )
-                   )) AS sample_count
-         FROM genres g
-         WHERE g.id = ?1",
-        params![genre_id, active_id],
-        |row| {
-            Ok(Genre {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                color: row.get(2)?,
-                sample_count: row.get(3)?,
-            })
-        },
-    )
-    .map_err(|e| format!("Failed to retrieve genre: {}", e))
-}
-
-fn ensure_manual_genre(
-    conn: &Connection,
-    trimmed: &str,
-    resolved_color: &str,
-) -> Result<i64, String> {
-    if let Ok(existing_id) = conn.query_row::<i64, _, _>(
-        "SELECT id FROM genres WHERE name = ?1 COLLATE NOCASE LIMIT 1",
-        params![trimmed],
-        |r| r.get(0),
-    ) {
-        conn.execute(
-            "UPDATE genres SET is_manual = 1 WHERE id = ?1",
-            params![existing_id],
-        )
-        .map_err(|e| format!("Failed to update genre flag: {}", e))?;
-        return Ok(existing_id);
+fn tag_to_genre(tag: crate::commands::Tag) -> Genre {
+    Genre {
+        id: tag.id,
+        name: tag.name,
+        color: tag.effective_color,
+        sample_count: tag.sample_count,
+        facet_slug: tag.facet_slug,
     }
-
-    conn.execute(
-        "INSERT INTO genres (name, color, is_manual) VALUES (?1, ?2, 1)",
-        params![trimmed, resolved_color],
-    )
-    .map_err(|e| format!("Failed to create genre: {}", e))?;
-    Ok(conn.last_insert_rowid())
 }
 
 fn query_genres_with_conn(conn: &Connection) -> Result<Vec<Genre>, String> {
-    let active_id = get_active_profile_id(conn);
-    let mut stmt = conn
-        .prepare(
-            "SELECT g.id, g.name, g.color, COALESCE(c.cnt, 0) AS sample_count
-             FROM genres g
-             LEFT JOIN (
-                 SELECT s.genre AS genre_key, COUNT(*) AS cnt
-                 FROM samples s
-                 INNER JOIN libraries l ON l.id = s.library_id
-                 WHERE COALESCE(s.is_trashed, 0) = 0
-                   AND s.genre != ''
-                   AND (
-                       l.is_global = 1
-                       OR EXISTS (
-                           SELECT 1 FROM profile_libraries pl
-                           WHERE pl.profile_id = ?1 AND pl.library_id = l.id
-                       )
-                   )
-                 GROUP BY s.genre COLLATE NOCASE
-             ) c ON c.genre_key = g.name COLLATE NOCASE
-             ORDER BY sample_count DESC, g.name COLLATE NOCASE ASC",
-        )
-        .map_err(|e| format!("Query prepare error: {}", e))?;
-
-    let rows = stmt
-        .query_map(params![active_id], |row| {
-            Ok(Genre {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                color: row.get(2)?,
-                sample_count: row.get(3)?,
-            })
-        })
-        .map_err(|e| format!("Query execution error: {}", e))?;
-
-    let mut genres = Vec::new();
-    for r in rows {
-        genres.push(r.map_err(|e| e.to_string())?);
-    }
+    let genre_facet_ids: HashSet<i64> = query_facets_with_conn(conn)?
+        .into_iter()
+        .filter(|f| f.domain == "genres")
+        .map(|f| f.id)
+        .collect();
+    let tags = query_tags_with_conn(conn)?;
+    let mut genres: Vec<Genre> = tags
+        .into_iter()
+        .filter(|t| genre_facet_ids.contains(&t.facet_id))
+        .map(tag_to_genre)
+        .collect();
+    genres.sort_by(|a, b| {
+        b.sample_count
+            .cmp(&a.sample_count)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
     Ok(genres)
 }
 
@@ -122,20 +54,47 @@ pub async fn create_genre(
     state: State<'_, AppState>,
     name: String,
     color: String,
+    facet_slug: Option<String>,
 ) -> Result<Genre, String> {
     let trimmed = name.trim().to_string();
     if trimmed.is_empty() {
         return Err("Genre name cannot be empty".to_string());
     }
-    let resolved_color = if color.trim().is_empty() {
-        deterministic_color_for_name(&trimmed).to_string()
-    } else {
-        validate_hex_color(&color)?
-    };
     crate::db::run_write_op(&state, move |conn| {
-        let active_id = get_active_profile_id(conn);
-        let genre_id = ensure_manual_genre(conn, &trimmed, &resolved_color)?;
-        query_genre_by_id_for_profile(conn, genre_id, active_id)
+        let target_facet_owned = match facet_slug
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(slug) => {
+                if let Some(fid) = resolve_facet_id_in_db(conn, slug) {
+                    if facet_domain_in_db(conn, fid) == "genres" {
+                        slug.to_string()
+                    } else {
+                        "genre".to_string()
+                    }
+                } else {
+                    "genre".to_string()
+                }
+            }
+            None => {
+                if is_canonical_mood_name(&trimmed) {
+                    "mood".to_string()
+                } else {
+                    "genre".to_string()
+                }
+            }
+        };
+        let tag = create_tag_with_options_conn(
+            conn,
+            &trimmed,
+            &color,
+            Some(&target_facet_owned),
+            None,
+            Some(false),
+            None,
+        )?;
+        Ok(tag_to_genre(tag))
     })
     .await
 }
@@ -151,47 +110,33 @@ pub async fn rename_genre(
         return Err("Genre name cannot be empty".to_string());
     }
     crate::db::run_write_op(&state, move |conn| {
-        let active_id = get_active_profile_id(conn);
-
         let tx = conn
             .transaction()
             .map_err(|e| format!("Failed to start transaction: {}", e))?;
 
-        let old_name: String = tx
-            .query_row(
-                "SELECT name FROM genres WHERE id = ?1",
-                params![genre_id],
-                |r| r.get(0),
-            )
-            .map_err(|e| format!("Genre not found: {}", e))?;
-
         let conflict: bool = tx
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM genres WHERE id != ?1 AND name = ?2 COLLATE NOCASE)",
+                "SELECT EXISTS(SELECT 1 FROM tags WHERE id != ?1 AND LOWER(name) = LOWER(?2))",
                 params![genre_id, trimmed],
                 |r| r.get(0),
             )
             .unwrap_or(false);
         if conflict {
-            return Err("A genre with that name already exists".to_string());
+            return Err("A genre or tag with that name already exists".to_string());
         }
 
         tx.execute(
-            "UPDATE genres SET name = ?1 WHERE id = ?2",
+            "UPDATE tags SET name = ?1 WHERE id = ?2",
             params![trimmed, genre_id],
         )
         .map_err(|e| format!("Failed to rename genre: {}", e))?;
 
-        tx.execute(
-            "UPDATE samples SET genre = ?1 WHERE genre = ?2 COLLATE NOCASE",
-            params![trimmed, old_name],
-        )
-        .map_err(|e| format!("Failed to update sample genres: {}", e))?;
-
+        sync_primary_genre_for_tag(&tx, genre_id)?;
         tx.commit()
             .map_err(|e| format!("Failed to commit genre rename: {}", e))?;
 
-        query_genre_by_id_for_profile(conn, genre_id, active_id)
+        let tag = super::tags::query_tag_by_id_for_profile(conn, genre_id)?;
+        Ok(tag_to_genre(tag))
     })
     .await
 }
@@ -207,41 +152,21 @@ pub async fn update_genre_color(
     }
     let clean_color = validate_hex_color(&new_color)?;
     crate::db::run_write_op(&state, move |conn| {
-        let active_id = get_active_profile_id(conn);
         conn.execute(
-            "UPDATE genres SET color = ?1 WHERE id = ?2",
+            "UPDATE tags SET color = ?1, color_inherited = 0 WHERE id = ?2",
             params![clean_color, genre_id],
         )
         .map_err(|e| format!("Failed to update genre color: {}", e))?;
 
-        query_genre_by_id_for_profile(conn, genre_id, active_id)
+        let tag = super::tags::query_tag_by_id_for_profile(conn, genre_id)?;
+        Ok(tag_to_genre(tag))
     })
     .await
 }
 
 #[tauri::command]
 pub async fn delete_genre(state: State<'_, AppState>, genre_id: i64) -> Result<(), String> {
-    crate::db::run_write_op(&state, move |conn| {
-        let tx = conn
-            .transaction()
-            .map_err(|e| format!("Failed to start transaction: {}", e))?;
-        if let Ok(name) = tx.query_row::<String, _, _>(
-            "SELECT name FROM genres WHERE id = ?1",
-            params![genre_id],
-            |r| r.get(0),
-        ) {
-            tx.execute(
-                "UPDATE samples SET genre = '', genre_is_manual = 0 WHERE genre = ?1 COLLATE NOCASE",
-                params![name],
-            )
-            .map_err(|e| format!("Failed to clear sample genres: {}", e))?;
-        }
-        tx.execute("DELETE FROM genres WHERE id = ?1", params![genre_id])
-            .map_err(|e| format!("Failed to delete genre: {}", e))?;
-        tx.commit()
-            .map_err(|e| format!("Failed to commit genre deletion: {}", e))
-    })
-    .await
+    crate::db::run_write_op(&state, move |conn| delete_tag_with_conn(conn, genre_id)).await
 }
 
 #[tauri::command]
@@ -256,17 +181,53 @@ pub async fn assign_sample_genre(
         if !is_sample_visible_in_profile(conn, active_id, sample_id) {
             return Err("Sample not found in active profile".to_string());
         }
-        if !trimmed.is_empty() {
-            let color = deterministic_color_for_name(&trimmed);
-            let _ = ensure_manual_genre(conn, &trimmed, color);
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Failed to start genre assignment transaction: {}", e))?;
+
+        if trimmed.is_empty() {
+            tx.execute(
+                "DELETE FROM sample_tags
+                 WHERE sample_id = ?1
+                   AND tag_id IN (
+                       SELECT t.id FROM tags t
+                       INNER JOIN tag_facets f ON f.id = t.facet_id
+                       WHERE f.domain = 'genres'
+                   )",
+                params![sample_id],
+            )
+            .map_err(|e| format!("Failed to clear genre tags: {}", e))?;
+            sync_primary_genre_for_samples(&tx, &[sample_id])?;
+            tx.commit().map_err(|e| e.to_string())?;
+            return Ok(String::new());
         }
-        let is_manual = !trimmed.is_empty();
-        conn.execute(
-            "UPDATE samples SET genre = ?1, genre_is_manual = ?2 WHERE id = ?3",
-            params![trimmed, is_manual, sample_id],
+
+        let (facet_slug, resolved_name) = match sanitize_id3_genre_or_mood_typo(&trimmed) {
+            Some((f, canonical)) => (f, canonical.to_string()),
+            None => (
+                if is_canonical_mood_name(&trimmed) {
+                    "mood"
+                } else {
+                    "genre"
+                },
+                trimmed.clone(),
+            ),
+        };
+        let tag_id = ensure_taxonomy_tag(&tx, &resolved_name, Some(facet_slug), None, None, true)?;
+        tx.execute(
+            "INSERT INTO sample_tags (sample_id, tag_id, is_manual, source)
+             VALUES (?1, ?2, 1, 'manual')
+             ON CONFLICT(sample_id, tag_id) DO UPDATE SET is_manual = 1, source = 'manual'",
+            params![sample_id, tag_id],
         )
-        .map_err(|e| format!("Failed to assign genre: {}", e))?;
-        Ok(trimmed)
+        .map_err(|e| format!("Failed assigning genre tag: {}", e))?;
+        sync_primary_genre_for_samples(&tx, &[sample_id])?;
+        tx.commit().map_err(|e| e.to_string())?;
+
+        let primary: String = conn
+            .query_row("SELECT COALESCE(genre, '') FROM samples WHERE id = ?1", params![sample_id], |r| r.get(0))
+            .unwrap_or(resolved_name);
+        Ok(primary)
     })
     .await
 }
@@ -296,31 +257,59 @@ pub async fn assign_sample_genre_batch(
             .transaction()
             .map_err(|e| format!("Failed to start database transaction: {}", e))?;
 
-        if !trimmed.is_empty() {
-            let color = deterministic_color_for_name(&trimmed);
-            let _ = ensure_manual_genre(&tx, &trimmed, color);
-        }
-        let is_manual = i64::from(!trimmed.is_empty());
-        for chunk in visible_ids.chunks(450) {
-            let placeholders = (3..=chunk.len() + 2)
-                .map(|idx| format!("?{}", idx))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let sql = format!(
-                "UPDATE samples SET genre = ?1, genre_is_manual = ?2 WHERE id IN ({})",
-                placeholders
-            );
-            let mut params_vec: Vec<rusqlite::types::Value> = Vec::with_capacity(chunk.len() + 2);
-            params_vec.push(rusqlite::types::Value::Text(trimmed.clone()));
-            params_vec.push(rusqlite::types::Value::Integer(is_manual));
-            for sid in chunk {
-                params_vec.push(rusqlite::types::Value::Integer(*sid));
+        if trimmed.is_empty() {
+            for chunk in visible_ids.chunks(400) {
+                let ph = crate::db::sql_in_placeholders(1, chunk.len());
+                let sql = format!(
+                    "DELETE FROM sample_tags
+                     WHERE tag_id IN (
+                         SELECT t.id FROM tags t
+                         INNER JOIN tag_facets f ON f.id = t.facet_id
+                         WHERE f.domain = 'genres'
+                     )
+                       AND sample_id IN ({})",
+                    ph
+                );
+                let pvals: Vec<rusqlite::types::Value> = chunk
+                    .iter()
+                    .map(|sid| rusqlite::types::Value::Integer(*sid))
+                    .collect();
+                tx.execute(&sql, rusqlite::params_from_iter(pvals))
+                    .map_err(|e| format!("Failed clearing genres in batch: {}", e))?;
             }
-            tx.execute(&sql, rusqlite::params_from_iter(params_vec))
-                .map_err(|e| format!("Failed to assign genre in batch: {}", e))?;
+            sync_primary_genre_for_samples(&tx, &visible_ids)?;
+            tx.commit().map_err(|e| e.to_string())?;
+            return Ok(String::new());
         }
+
+        let (facet_slug, resolved_name) = match sanitize_id3_genre_or_mood_typo(&trimmed) {
+            Some((f, canonical)) => (f, canonical.to_string()),
+            None => (
+                if is_canonical_mood_name(&trimmed) {
+                    "mood"
+                } else {
+                    "genre"
+                },
+                trimmed.clone(),
+            ),
+        };
+        let tag_id = ensure_taxonomy_tag(&tx, &resolved_name, Some(facet_slug), None, None, true)?;
+        {
+            let mut stmt = tx
+                .prepare_cached(
+                    "INSERT INTO sample_tags (sample_id, tag_id, is_manual, source)
+                     VALUES (?1, ?2, 1, 'manual')
+                     ON CONFLICT(sample_id, tag_id) DO UPDATE SET is_manual = 1, source = 'manual'",
+                )
+                .map_err(|e| e.to_string())?;
+            for &sid in &visible_ids {
+                stmt.execute(params![sid, tag_id])
+                    .map_err(|e| format!("Failed assigning genre in batch: {}", e))?;
+            }
+        }
+        sync_primary_genre_for_samples(&tx, &visible_ids)?;
         tx.commit().map_err(|e| e.to_string())?;
-        Ok(trimmed)
+        Ok(resolved_name)
     })
     .await
 }
@@ -361,69 +350,56 @@ pub async fn auto_detect_library_genres(state: State<'_, AppState>) -> Result<us
         }
 
         let detected = extract_embedded_meta_batch(&candidates);
+        if detected.is_empty() {
+            return Ok(0);
+        }
 
         let mut conn = state_owned.lock_db();
         let tx = conn
             .transaction()
             .map_err(|e| format!("Failed to start transaction: {}", e))?;
 
-        let mut unique_genres: HashMap<String, String> = HashMap::new();
-        for (_, meta) in &detected {
-            let g = meta.genre.trim();
-            if !g.is_empty() {
-                unique_genres
-                    .entry(g.to_lowercase())
-                    .or_insert_with(|| g.to_string());
-            }
-        }
-        for (_, g) in unique_genres {
-            let exists: bool = tx
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM genres WHERE name = ?1 COLLATE NOCASE)",
-                    params![&g],
-                    |r| r.get(0),
-                )
-                .unwrap_or(false);
-            if !exists {
-                let color = deterministic_color_for_name(&g);
-                tx.execute(
-                    "INSERT OR IGNORE INTO genres (name, color, is_manual) VALUES (?1, ?2, 0)",
-                    params![g, color],
-                )
-                .map_err(|e| e.to_string())?;
-            }
-        }
-
-        let mut genre_count = 0usize;
+        let mut updated_sample_ids: Vec<i64> = Vec::new();
+        let mut detected_count = 0usize;
         {
             let mut upd_stmt = tx
                 .prepare(
                     "UPDATE samples
-                     SET genre  = CASE WHEN genre_is_manual = 0 AND ?1 != '' THEN ?1 ELSE genre END,
-                         artist = CASE WHEN ?2 != '' THEN ?2 ELSE artist END,
-                         album  = CASE WHEN ?3 != '' THEN ?3 ELSE album END,
-                         year   = CASE WHEN ?4 != '' THEN ?4 ELSE year END
-                     WHERE id = ?5",
+                     SET artist = CASE WHEN ?1 != '' THEN ?1 ELSE artist END,
+                         album  = CASE WHEN ?2 != '' THEN ?2 ELSE album END,
+                         year   = CASE WHEN ?3 != '' THEN ?3 ELSE year END
+                     WHERE id = ?4",
                 )
                 .map_err(|e| e.to_string())?;
+            let mut link_stmt = tx
+                .prepare(
+                    "INSERT OR IGNORE INTO sample_tags (sample_id, tag_id, is_manual, source)
+                     VALUES (?1, ?2, 0, 'auto_genre')",
+                )
+                .map_err(|e| e.to_string())?;
+
             for (sid, meta) in detected {
-                upd_stmt
-                    .execute(params![
-                        meta.genre,
-                        meta.artist,
-                        meta.album,
-                        meta.year,
-                        sid
-                    ])
-                    .map_err(|e| e.to_string())?;
-                if !meta.genre.is_empty() {
-                    genre_count += 1;
+                let _ = upd_stmt.execute(params![meta.artist, meta.album, meta.year, sid]);
+                if !meta.genre_mood_tags.is_empty() {
+                    for (facet_slug, name) in &meta.genre_mood_tags {
+                        if let Ok(tid) =
+                            ensure_taxonomy_tag(&tx, name, Some(facet_slug), None, None, false)
+                        {
+                            let _ = link_stmt.execute(params![sid, tid]);
+                        }
+                    }
+                    updated_sample_ids.push(sid);
+                    detected_count += 1;
                 }
             }
         }
 
+        if !updated_sample_ids.is_empty() {
+            sync_primary_genre_for_samples(&tx, &updated_sample_ids)?;
+        }
+
         tx.commit().map_err(|e| e.to_string())?;
-        Ok(genre_count)
+        Ok(detected_count)
     })
     .await
     .map_err(|e| format!("Genre & metadata detection worker error: {}", e))?

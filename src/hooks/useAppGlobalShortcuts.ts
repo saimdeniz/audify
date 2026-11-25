@@ -18,6 +18,7 @@ import {
 import {
   handleF2RenameShortcut,
   handleMarkSliceInOutShortcut,
+  handleRapidTaxonomyPickerShortcut,
   handleSliceModeKeyDown,
   handleSliceTextEntryUtility,
   handleSliceUndoRedoShortcut,
@@ -274,7 +275,7 @@ function handleCollectionOrTrashDelete(
 
 /**
  * Registers Audify's global keyboard shortcuts for settings, Mini Dock,
- * playback navigation, selection, file operations, and quick tag 1-9 hotkeys.
+ * playback navigation, selection, and file operations.
  */
 export function useAppGlobalShortcuts(): void {
   useEffect(() => {
@@ -485,7 +486,6 @@ export function useAppGlobalShortcuts(): void {
         selectedSample,
         selectedSampleIds,
         sliceRange,
-        tags,
       } = state;
 
       if (handleTransportShortcuts(e, state, false)) {
@@ -514,6 +514,9 @@ export function useAppGlobalShortcuts(): void {
       if (matchesShortcut(e, shortcuts.toggleFavorite)) {
         e.preventDefault();
         if (!e.repeat) handleToggleFavoriteShortcut(state);
+        return;
+      }
+      if (handleRapidTaxonomyPickerShortcut(e, state)) {
         return;
       }
 
@@ -550,23 +553,6 @@ export function useAppGlobalShortcuts(): void {
           if (ids.length > 0) {
             e.preventDefault();
             if (!e.repeat) state.addSamplesToBin(ids);
-          }
-        }
-        return;
-      }
-
-      if (/^[1-9]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        if (state.slicesFilterActive || state.trashFilterActive) return;
-        const idx = parseInt(e.key, 10) - 1;
-        if (tags[idx]) {
-          e.preventDefault();
-          if (!e.repeat) {
-            const targetTagIds = selectedSampleIds.filter((id) => id > 0);
-            if (targetTagIds.length > 1) {
-              void state.assignTagBatch(targetTagIds, tags[idx].id);
-            } else if (selectedSample && selectedSample.id > 0) {
-              void state.assignTag(selectedSample.id, tags[idx].id);
-            }
           }
         }
         return;

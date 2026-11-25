@@ -118,7 +118,7 @@ pub fn match_auto_tags(
     file_path: &str,
     file_name: &str,
     duration_ms: i64,
-    is_loop: bool,
+    _is_loop: bool,
     rules: &[AutoTagRule],
     categories: &HashMap<String, AutoTagCategoryConfig>,
 ) -> Vec<String> {
@@ -327,10 +327,6 @@ pub fn match_auto_tags(
         if !has_positive_keyword && has_duration_constraint && duration_ms > 0 {
             matched.insert(rule.tag_name.clone());
         }
-    }
-
-    if is_loop {
-        matched.insert("Loop".to_string());
     }
 
     let mut out: Vec<String> = matched.into_iter().collect();

@@ -5,9 +5,13 @@ import {
 } from "../utils/catalogFilterCore";
 import { SampleItem, SimilaritySession } from "../types";
 import { internSamplePool } from "../utils/sampleInterning";
-import { pruneSmartSearchCache } from "../utils/search/sampleIndex";
+import {
+  pruneSmartSearchCache,
+  setSmartSearchTaxonomy,
+} from "../utils/search/sampleIndex";
 import { computeSmartCollectionCounts } from "../utils/smartCollectionCounts";
 import { clearSmartSearchCache, executeSmartSearch } from "../utils/smartSearch";
+import type { TaxonomyWorkerIndex } from "../utils/taxonomyTree";
 import type {
   CatalogWorkerRequest,
   CatalogWorkerResponse,
@@ -90,6 +94,7 @@ export function createCatalogWorkerKernel(): CatalogWorkerKernel {
   let poolEpoch = 0;
   let pool: SampleItem[] = [];
   let samplesById = new Map<number, SampleItem>();
+  let taxonomyIndex: TaxonomyWorkerIndex | null = null;
   let hasActiveSearchQuery = false;
 
   return {
@@ -185,6 +190,15 @@ export function createCatalogWorkerKernel(): CatalogWorkerKernel {
         };
       }
 
+      if (msg.type === "set_taxonomy") {
+        taxonomyIndex = msg.taxonomy;
+        setSmartSearchTaxonomy(taxonomyIndex);
+        return {
+          response: { type: "pool_ack", poolEpoch },
+          transfer: [],
+        };
+      }
+
       if (msg.type === "clear_search_cache") {
         hasActiveSearchQuery = false;
         clearSmartSearchCache();
@@ -228,7 +242,10 @@ export function createCatalogWorkerKernel(): CatalogWorkerKernel {
           p.licenseGroups,
           p.binFilterActive,
           p.binSampleIds,
-          dupOrderMap
+          dupOrderMap,
+          p.excludedTagIds,
+          taxonomyIndex,
+          p.tagMatchMode ?? "all"
         );
 
         const smartBaseResult = p.smartQuery

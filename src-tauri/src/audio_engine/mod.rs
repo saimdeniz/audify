@@ -92,9 +92,6 @@ pub(super) enum EngineCmd {
         target_path_norm: Option<String>,
         reply: mpsc::Sender<bool>,
     },
-    GetSnapshot {
-        reply: mpsc::Sender<AudioSyncPayload>,
-    },
     TrimCaches,
 }
 
@@ -202,14 +199,6 @@ impl AudioEngineState {
         reply_rx
             .recv_timeout(Duration::from_secs(2))
             .unwrap_or(false)
-    }
-
-    pub fn snapshot(&self) -> Result<AudioSyncPayload, String> {
-        let (reply_tx, reply_rx) = mpsc::channel();
-        self.send(EngineCmd::GetSnapshot { reply: reply_tx })?;
-        reply_rx
-            .recv_timeout(Duration::from_secs(2))
-            .map_err(|_| "Failed reading audio state snapshot".to_string())
     }
 
     pub fn list_devices(&self) -> Vec<AudioOutputDeviceInfo> {

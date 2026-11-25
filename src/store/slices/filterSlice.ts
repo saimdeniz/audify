@@ -1,4 +1,10 @@
-import { SampleRateFilter, SortDir, SortKey, TypeFilter } from "../../types";
+import {
+  SampleRateFilter,
+  SortDir,
+  SortKey,
+  TypeFilter,
+} from "../../types";
+import { resolveTagFacetSlug } from "../../utils/taxonomyTree";
 import { clearSmartSearchCache } from "../../utils/smartSearch";
 import { shouldUseCatalogWorker } from "../../workers/catalogWorkerClient";
 import { applyClientFacetFilters, reconcileSelectionAfterFilter } from "../filterEngine";
@@ -13,6 +19,7 @@ import {
 import type { MainFilterRequest, StoreSliceContext } from "../types";
 import { bumpMemoryFilterSeq } from "../workerBridge";
 import { cancelPendingSimilaritySearch } from "./aiSlice";
+import { createTagFilterActions } from "./tagFilterActions";
 
 export function createFilterSlice(
   ctx: StoreSliceContext,
@@ -56,6 +63,8 @@ export function createFilterSlice(
       favoriteOnly: false,
       recentOnly: false,
       selectedTagIds: [],
+      excludedTagIds: [],
+      tagMatchMode: "all",
       selectedGenre: null,
       selectedCollectionId: null,
       typeFilter: "all",
@@ -206,6 +215,7 @@ export function createFilterSlice(
         trashFilterActive: false,
         selectedCollectionId: null,
         selectedTagIds: [],
+        excludedTagIds: [],
         selectedGenre: null,
         ...restoreSort,
       });
@@ -228,6 +238,7 @@ export function createFilterSlice(
         trashFilterActive: false,
         selectedCollectionId: null,
         selectedTagIds: [],
+        excludedTagIds: [],
         selectedGenre: null,
         ...restoreSort,
       });
@@ -251,38 +262,7 @@ export function createFilterSlice(
       }
     },
 
-    toggleTagFilter: (tagId: number) => {
-      const current = get().selectedTagIds;
-      const exists = current.includes(tagId);
-      const next = exists ? current.filter((id) => id !== tagId) : [...current, tagId];
-      set({ selectedTagIds: next });
-      if (!applyInstantMemoryFilter({ preserveMultiSelect: true })) {
-        void get().fetchSamples({ preserveMultiSelect: true });
-      }
-    },
-
-    selectOrToggleTagFilter: (tagId: number, append: boolean) => {
-      const current = get().selectedTagIds;
-      let next: number[];
-      if (append) {
-        next = current.includes(tagId)
-          ? current.filter((id) => id !== tagId)
-          : [...current, tagId];
-      } else {
-        next = current.length === 1 && current[0] === tagId ? [] : [tagId];
-      }
-      set({ selectedTagIds: next });
-      if (!applyInstantMemoryFilter({ preserveMultiSelect: true })) {
-        void get().fetchSamples({ preserveMultiSelect: true });
-      }
-    },
-
-    clearTagFilters: () => {
-      set({ selectedTagIds: [] });
-      if (!applyInstantMemoryFilter({ preserveMultiSelect: true })) {
-        void get().fetchSamples({ preserveMultiSelect: true });
-      }
-    },
+    ...createTagFilterActions(ctx),
 
     setSelectedGenre: (genre: string | null) => {
       const next = get().selectedGenre === genre ? null : genre;
@@ -517,6 +497,7 @@ export function createFilterSlice(
         favoriteOnly: false,
         recentOnly: false,
         selectedTagIds: [] as number[],
+        excludedTagIds: [] as number[],
         selectedGenre: null as string | null,
         selectedCollectionId: null as number | null,
         ...restoreSort,
@@ -531,10 +512,20 @@ export function createFilterSlice(
           nextBase.selectedTagIds = [req.id];
           persistNavigationFilters(null, null, false, null);
           break;
-        case "genre":
-          nextBase.selectedGenre = req.name;
+        case "genre": {
+          const matchedTag = get().tags.find(
+            (t) =>
+              t.name.toLowerCase() === req.name.toLowerCase() &&
+              (resolveTagFacetSlug(t) === "genre" || resolveTagFacetSlug(t) === "mood")
+          );
+          if (matchedTag) {
+            nextBase.selectedTagIds = [matchedTag.id];
+          } else {
+            nextBase.selectedGenre = req.name;
+          }
           persistNavigationFilters(null, null, false, null);
           break;
+        }
         case "license":
           nextBase.selectedLicenseGroupId = req.id;
           persistNavigationFilters(null, req.id, false, null);

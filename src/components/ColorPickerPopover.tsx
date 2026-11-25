@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Check, Copy, Shuffle } from "lucide-react";
 import { STUDIO_COLOR_PALETTE } from "../constants/palettes";
 import { Z_INDEX } from "../constants/zIndex";
+import { generateRandomStudioHex } from "../utils/taxonomyColor";
 import {
   getHexLuminance,
   hexToHsv,
@@ -156,15 +157,11 @@ export const ColorPickerPopover: React.FC<ColorPickerPopoverProps> = ({
 
   const pickRandom = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const available = STUDIO_COLOR_PALETTE.filter(
-      (c) => c.toLowerCase() !== safeColor.toLowerCase()
-    );
-    const chosen = available[Math.floor(Math.random() * available.length)];
-    if (chosen) {
-      onChange(chosen);
-      setHexInput(chosen);
-      setHsv(hexToHsv(chosen));
-    }
+    const chosen = generateRandomStudioHex();
+    onChange(chosen);
+    setHexInput(chosen);
+    setHsv(hexToHsv(chosen));
+    setActiveTab("custom");
   };
 
   const handleCopyHex = async (e: React.MouseEvent) => {

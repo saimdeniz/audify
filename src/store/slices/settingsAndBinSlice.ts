@@ -269,7 +269,6 @@ export function createSettingsAndBinSlice(
         targetNorm === "tab" ||
         targetNorm === "arrowup" ||
         targetNorm === "arrowdown" ||
-        /^[1-9]$/.test(targetNorm) ||
         targetNorm === "ctrl+," ||
         targetNorm === "ctrl+z" ||
         targetNorm === "ctrl+y" ||

@@ -136,7 +136,11 @@ fn sanitize_restored_snapshot_db(conn: &mut Connection) {
         }
     }
 
-    for (table, default_hex) in [("tags", "#3B82F6"), ("genres", "#8B5CF6")] {
+    for (table, default_hex) in [
+        ("tag_facets", "#64748B"),
+        ("tags", "#3B82F6"),
+        ("genres", "#8B5CF6"),
+    ] {
         let query = format!("SELECT id, color FROM {}", table);
         if let Ok(mut stmt) = tx.prepare(&query) {
             let rows: Vec<(i64, String)> = stmt

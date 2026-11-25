@@ -64,7 +64,7 @@ export const TransportControls: React.FC = React.memo(() => {
   );
 
   return (
-    <div className="w-[296px] border-r border-line px-2.5 py-2 flex flex-col justify-between shrink-0 bg-surface-1">
+    <div className="w-[320px] border-r border-line px-2.5 py-2 flex flex-col justify-between shrink-0 bg-surface-1">
       {/* Top Row: Grouped Transport Controls (Left) + Mode Toggles (Right) */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1">

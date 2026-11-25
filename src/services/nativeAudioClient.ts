@@ -137,10 +137,6 @@ export async function nativeAudioPause(): Promise<void> {
   await invoke("audio_engine_pause");
 }
 
-export async function nativeAudioStop(): Promise<void> {
-  await invoke("audio_engine_stop");
-}
-
 export async function nativeAudioUnload(): Promise<void> {
   await invoke("audio_engine_unload");
 }

@@ -8,6 +8,7 @@ import {
   clearCatalogWorkerSearchCache,
   shouldUseCatalogWorker,
   syncCatalogWorkerPool,
+  syncCatalogWorkerTaxonomy,
 } from "../workers/catalogWorkerClient";
 import {
   applyClientFacetFilters,
@@ -125,6 +126,22 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
     if (
       patch &&
       typeof patch === "object" &&
+      (("tags" in patch && patch.tags !== undefined && patch.tags !== state.tags) ||
+        ("tagFacets" in patch &&
+          patch.tagFacets !== undefined &&
+          patch.tagFacets !== state.tagFacets))
+    ) {
+      const nextTags =
+        "tags" in patch && patch.tags !== undefined ? patch.tags : state.tags;
+      const nextFacets =
+        "tagFacets" in patch && patch.tagFacets !== undefined
+          ? patch.tagFacets
+          : state.tagFacets;
+      syncCatalogWorkerTaxonomy(nextTags, nextFacets);
+    }
+    if (
+      patch &&
+      typeof patch === "object" &&
       "allProfileSamples" in patch &&
       patch.allProfileSamples !== undefined &&
       patch.allProfileSamples !== state.allProfileSamples
@@ -234,6 +251,8 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
       pendingTrashRequest: null,
       pendingFileConflictPrompt: null,
       batchRenameSampleIds: null,
+      autoTagImpactPreview: null,
+      canUndoAutoTagApply: false,
       aiSuggestionsBySampleId: {},
       pendingAiSuggestionsCount: 0,
       searchQuery: "",
@@ -267,6 +286,8 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
       favoriteOnly: false,
       recentOnly: false,
       selectedTagIds: [],
+      excludedTagIds: [],
+      tagMatchMode: "all",
       selectedGenre: null,
       selectedSampleIds: [],
       lastSelectedIndex: null,
@@ -326,6 +347,7 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
 
     const runSyncMemoryFilter = () => {
       const live = get();
+      const taxonomyIndex = syncCatalogWorkerTaxonomy(live.tags, live.tagFacets);
       const baseResult = filterBaseSamplesInMemory(
         live.allProfileSamples,
         live.folderFilter,
@@ -341,7 +363,10 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
         buildDuplicateOrderMap(
           live.duplicatesFilterActive,
           live.duplicateScanResult
-        )
+        ),
+        live.excludedTagIds,
+        taxonomyIndex,
+        live.tagMatchMode
       );
       const smartBaseResult = smartQuery
         ? executeSmartSearch(baseResult, smartQuery, live.smartSearchSynonyms)

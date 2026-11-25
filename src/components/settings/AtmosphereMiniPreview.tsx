@@ -243,12 +243,12 @@ export const AtmosphereMiniPreview: React.FC = React.memo(() => {
           >
             <div className="flex items-center space-x-1.5">
               <span
-                className="w-2.5 h-2.5 rounded-full inline-block"
+                className="w-2.5 h-2.5 rounded-[2px] inline-block"
                 style={{ backgroundColor: accentColor }}
               />
-              <div className="w-12 h-1.5 rounded-full bg-surface-3 overflow-hidden">
+              <div className="w-12 h-1.5 rounded-xs bg-surface-3 overflow-hidden">
                 <div
-                  className="h-full rounded-full"
+                  className="h-full rounded-xs"
                   style={{ width: "55%", backgroundColor: accentColor }}
                 />
               </div>
@@ -280,17 +280,17 @@ export const AtmosphereMiniPreview: React.FC = React.memo(() => {
             >
               <div className="flex items-center space-x-1">
                 <span
-                  className="w-1.5 h-1.5 rounded-full shrink-0"
+                  className="w-1.5 h-1.5 rounded-[2px] shrink-0"
                   style={{ backgroundColor: accentColor }}
                 />
                 <div className="w-7 h-1 rounded-xs bg-fg-3 opacity-40" />
               </div>
               <div className="flex items-center space-x-1">
-                <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-info/80" />
+                <span className="w-1.5 h-1.5 rounded-[2px] shrink-0 bg-info opacity-80" />
                 <div className="w-6 h-1 rounded-xs bg-fg-3 opacity-30" />
               </div>
               <div className="flex items-center space-x-1">
-                <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-ok/80" />
+                <span className="w-1.5 h-1.5 rounded-[2px] shrink-0 bg-ok opacity-80" />
                 <div className="w-5 h-1 rounded-xs bg-fg-3 opacity-30" />
               </div>
             </div>
@@ -347,7 +347,7 @@ export const AtmosphereMiniPreview: React.FC = React.memo(() => {
         <span className="inline-flex items-center gap-1.5 shrink-0 min-w-0">
           <span
             data-testid="preview-style-dot"
-            className={`w-1.5 h-1.5 rounded-full shrink-0 ${styleDotClass}`}
+            className={`w-1.5 h-1.5 rounded-[2px] shrink-0 ${styleDotClass}`}
           />
           <span
             data-testid="preview-style-label"

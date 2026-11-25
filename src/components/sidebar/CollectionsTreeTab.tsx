@@ -1,15 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import {
-  ChevronDown,
-  ChevronRight,
-  ChevronsDown,
-  ChevronsUp,
-  LayoutGrid,
-  Plus,
-  Search,
-  Settings,
-  X,
-} from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { LayoutGrid, Plus } from "lucide-react";
 import {
   AUDIFY_STORAGE_KEYS,
   safeGetItem,
@@ -17,8 +7,11 @@ import {
 } from "../../store/storageHelpers";
 import { useSampleStore } from "../../store/useSampleStore";
 import { Collection } from "../../types";
+import { buildCollectionHierarchy } from "../../utils/collectionTree";
 import { QuickCreatePopover } from "../QuickCreatePopover";
 import { CollectionGroupItem } from "./CollectionGroupItem";
+import { TaxonomySidebarHeader } from "./TaxonomySidebarHeader";
+import { TaxonomyFacetSectionHeader } from "./TaxonomySidebarRow";
 
 let sessionCollectionSearch = "";
 
@@ -71,9 +64,7 @@ export const CollectionsTreeTab: React.FC<CollectionsTreeTabProps> = ({
 
   useEffect(() => {
     if (isSearchOpen) {
-      requestAnimationFrame(() => {
-        searchInputRef.current?.focus();
-      });
+      requestAnimationFrame(() => searchInputRef.current?.focus());
     }
   }, [isSearchOpen]);
 
@@ -82,9 +73,20 @@ export const CollectionsTreeTab: React.FC<CollectionsTreeTabProps> = ({
   );
   const [newSubfolderName, setNewSubfolderName] = useState("");
 
+  const [isManualSectionOpen, setIsManualSectionOpen] = useState<boolean>(
+    () => safeGetItem(AUDIFY_STORAGE_KEYS.sidebarManualCollectionsOpen) !== "false"
+  );
   const [isSmartSectionOpen, setIsSmartSectionOpen] = useState<boolean>(
     () => safeGetItem(AUDIFY_STORAGE_KEYS.sidebarSmartCollectionsOpen) !== "false"
   );
+
+  useEffect(() => {
+    safeSetItem(
+      AUDIFY_STORAGE_KEYS.sidebarManualCollectionsOpen,
+      String(isManualSectionOpen),
+      { broadcast: false, markEdited: false }
+    );
+  }, [isManualSectionOpen]);
 
   useEffect(() => {
     safeSetItem(
@@ -116,31 +118,10 @@ export const CollectionsTreeTab: React.FC<CollectionsTreeTabProps> = ({
     return () => clearTimeout(t);
   }, [expandedCollectionIds]);
 
-  const { rootCollections, childrenByParentId } = useMemo(() => {
-    const roots: typeof collections = [];
-    const childrenMap = new Map<number, typeof collections>();
-
-    for (const c of collections) {
-      if (c.parent_id) {
-        const list = childrenMap.get(c.parent_id) || [];
-        list.push(c);
-        childrenMap.set(c.parent_id, list);
-      } else {
-        roots.push(c);
-      }
-    }
-
-    for (const [, list] of childrenMap.entries()) {
-      list.sort((a, b) =>
-        a.name.localeCompare(b.name, undefined, {
-          numeric: true,
-          sensitivity: "base",
-        })
-      );
-    }
-
-    return { rootCollections: roots, childrenByParentId: childrenMap };
-  }, [collections]);
+  const { rootCollections, childrenByParentId } = useMemo(
+    () => buildCollectionHierarchy(collections),
+    [collections]
+  );
 
   const filteredRootCollections = useMemo(() => {
     const q = collectionSearch.trim().toLowerCase();
@@ -165,20 +146,46 @@ export const CollectionsTreeTab: React.FC<CollectionsTreeTabProps> = ({
     };
   }, [filteredRootCollections]);
 
-  const toggleCollectionExpand = (id: number) => {
+  const toggleCollectionExpand = useCallback((id: number) => {
     setExpandedCollectionIds((prev) => {
       const current = prev[id] !== undefined ? prev[id] : true;
       return { ...prev, [id]: !current };
     });
-  };
+  }, []);
 
-  const setAllCollectionsExpanded = (expanded: boolean) => {
+  const handleExpandAll = useCallback(() => {
+    setIsManualSectionOpen(true);
+    setIsSmartSectionOpen(true);
     const next: Record<number, boolean> = {};
     for (const col of rootCollections) {
-      next[col.id] = expanded;
+      next[col.id] = true;
     }
     setExpandedCollectionIds(next);
-  };
+  }, [rootCollections]);
+
+  const handleCollapseAll = useCallback(() => {
+    const parentsWithChildren = rootCollections.filter(
+      (col) => (childrenByParentId.get(col.id)?.length ?? 0) > 0
+    );
+    const anyParentOpen =
+      isManualSectionOpen &&
+      parentsWithChildren.some((col) => expandedCollectionIds[col.id] !== false);
+    if (anyParentOpen) {
+      const next: Record<number, boolean> = {};
+      for (const col of rootCollections) {
+        next[col.id] = false;
+      }
+      setExpandedCollectionIds(next);
+      return;
+    }
+    setIsManualSectionOpen(false);
+    setIsSmartSectionOpen(false);
+  }, [
+    rootCollections,
+    childrenByParentId,
+    isManualSectionOpen,
+    expandedCollectionIds,
+  ]);
 
   const handleCreateSubfolder = async (
     parentId: number,
@@ -228,7 +235,7 @@ export const CollectionsTreeTab: React.FC<CollectionsTreeTabProps> = ({
 
   const isSearching = collectionSearch.trim().length > 0;
   const qLower = collectionSearch.trim().toLowerCase();
-  const showPinnedSmartSection = smartFilteredCollections.length > 0;
+  const isManualExpandedEffective = isSearching ? true : isManualSectionOpen;
   const isSmartExpandedEffective = isSearching ? true : isSmartSectionOpen;
 
   const renderCollectionGroup = (rootCol: Collection) => {
@@ -275,39 +282,16 @@ export const CollectionsTreeTab: React.FC<CollectionsTreeTabProps> = ({
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <div className="h-[32px] px-2.5 border-b border-line bg-surface-header flex items-center justify-between shrink-0">
-        <div className="flex items-center space-x-1.5 min-w-0">
-          <span className="text-[10px] uppercase tracking-wider font-semibold text-fg-head truncate">
-            COLLECTIONS ({collections.length.toLocaleString()})
-          </span>
-          {selectedCollectionId !== null && (
-            <button
-              type="button"
-              onClick={() => setCollectionFilter(null)}
-              className="w-[18px] h-[18px] text-accent-fg hover:bg-accent/20 rounded-xs border border-accent/40 flex items-center justify-center shrink-0 transition-colors"
-              title="Clear collection filter (Show all)"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          )}
-        </div>
-        <div className="flex items-center space-x-1 shrink-0">
-          <button
-            type="button"
-            onClick={() => setAllCollectionsExpanded(true)}
-            className="w-[20px] h-[20px] rounded-xs flex items-center justify-center text-fg-3 hover:text-fg hover:bg-line shrink-0 transition-colors"
-            title="Expand All Collections"
-          >
-            <ChevronsDown className="w-3.5 h-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setAllCollectionsExpanded(false)}
-            className="w-[20px] h-[20px] rounded-xs flex items-center justify-center text-fg-3 hover:text-fg hover:bg-line shrink-0 transition-colors"
-            title="Collapse All Collections"
-          >
-            <ChevronsUp className="w-3.5 h-3.5" />
-          </button>
+      <TaxonomySidebarHeader
+        title={
+          isSearching
+            ? `COLLECTIONS (${filteredRootCollections.length.toLocaleString()}/${collections.length.toLocaleString()})`
+            : `COLLECTIONS (${collections.length.toLocaleString()})`
+        }
+        hasActiveFilter={selectedCollectionId !== null}
+        clearFilterTitle="Clear collection filter (Show all)"
+        onClearFilter={() => setCollectionFilter(null)}
+        createAction={
           <QuickCreatePopover
             title="New Collection"
             placeholder="Collection name..."
@@ -321,87 +305,29 @@ export const CollectionsTreeTab: React.FC<CollectionsTreeTabProps> = ({
               return Boolean(created);
             }}
           />
-          <button
-            type="button"
-            onClick={() => {
-              if (isSearchOpen && !collectionSearch.trim()) {
-                setIsSearchOpen(false);
-              } else {
-                setIsSearchOpen(true);
-                requestAnimationFrame(() => searchInputRef.current?.focus());
-              }
-            }}
-            className={`w-[20px] h-[20px] rounded-xs border flex items-center justify-center shrink-0 transition-colors ${
-              isSearchOpen || isSearching
-                ? "bg-accent-soft border-accent text-accent-fg"
-                : "border-transparent text-fg-3 hover:text-fg hover:bg-line"
-            }`}
-            title="Search collections"
-          >
-            <Search className="w-3 h-3" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setSettingsOpen(true, "collections")}
-            className="w-[20px] h-[20px] rounded-xs flex items-center justify-center text-fg-3 hover:text-fg hover:bg-line shrink-0 transition-colors"
-            title="Manage Collections & Rules in Settings"
-          >
-            <Settings className="w-3 h-3" />
-          </button>
-        </div>
-      </div>
+        }
+        showExpandCollapse={rootCollections.length > 0}
+        expandAllTitle="Expand All Collections & Sections"
+        collapseAllTitle="Collapse Sub-collections & Sections"
+        onExpandAll={handleExpandAll}
+        onCollapseAll={handleCollapseAll}
+        isSearchOpen={isSearchOpen}
+        isSearching={isSearching}
+        searchQuery={collectionSearch}
+        searchPlaceholder="Filter collections..."
+        searchButtonTitle="Search collections"
+        searchInputRef={searchInputRef}
+        onSearchChange={updateCollectionSearch}
+        onSearchOpenChange={setIsSearchOpen}
+        settingsTitle="Manage Collections & Rules in Settings"
+        onOpenSettings={() => setSettingsOpen(true, "collections")}
+      />
 
-      {(isSearchOpen || isSearching) && (
-        <div className="px-2 py-1.5 border-b border-line shrink-0">
-          <div className="relative flex items-center">
-            <Search className="w-3.5 h-3.5 text-fg-head absolute left-2 pointer-events-none" />
-            <input
-              ref={searchInputRef}
-              type="text"
-              value={collectionSearch}
-              onChange={(e) => updateCollectionSearch(e.target.value)}
-              onBlur={() => {
-                if (!collectionSearch.trim()) {
-                  setIsSearchOpen(false);
-                }
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  e.stopPropagation();
-                  if (collectionSearch.trim()) {
-                    updateCollectionSearch("");
-                  } else {
-                    setIsSearchOpen(false);
-                    searchInputRef.current?.blur();
-                  }
-                }
-              }}
-              placeholder="Filter collections..."
-              className="w-full h-[24px] rounded-xs bg-surface-3 border border-line focus:border-accent pl-6 pr-6 text-[11px] text-fg placeholder-fg-3 outline-none"
-            />
-            {collectionSearch && (
-              <button
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => {
-                  updateCollectionSearch("");
-                  searchInputRef.current?.focus();
-                }}
-                className="absolute right-1.5 text-fg-2 hover:text-fg"
-                title="Clear filter"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
-      <div className="flex-1 overflow-y-auto py-1.5">
+      <div className="flex-1 overflow-y-auto py-1.5 select-none">
         {filteredRootCollections.length === 0 ? (
           rootCollections.length === 0 ? (
-            <div className="py-8 px-3 text-center space-y-2 select-none">
-              <div className="w-8 h-8 mx-auto rounded-full bg-surface-2 flex items-center justify-center text-fg-3 border border-line">
+            <div className="py-8 px-3 text-center space-y-2">
+              <div className="w-8 h-8 mx-auto rounded-[3px] bg-surface-2 flex items-center justify-center text-fg-3 border border-line">
                 <LayoutGrid className="w-4 h-4" />
               </div>
               <div className="text-[11px] font-medium text-fg">
@@ -417,44 +343,52 @@ export const CollectionsTreeTab: React.FC<CollectionsTreeTabProps> = ({
               No collections match filter.
             </div>
           )
-        ) : normalFilteredCollections.length > 0 ? (
-          <div className="text-[12px]">
-            {normalFilteredCollections.map(renderCollectionGroup)}
-          </div>
-        ) : null}
-      </div>
+        ) : (
+          <div className="flex flex-col">
+            {normalFilteredCollections.length > 0 && (
+              <div>
+                <TaxonomyFacetSectionHeader
+                  label="COLLECTIONS"
+                  count={normalFilteredCollections.length}
+                  isOpen={isManualExpandedEffective}
+                  title={
+                    isManualExpandedEffective
+                      ? "Collapse manual collections"
+                      : "Expand manual collections"
+                  }
+                  onToggle={() => setIsManualSectionOpen((prev) => !prev)}
+                />
+                {isManualExpandedEffective && (
+                  <div className="flex flex-col text-[12px]">
+                    {normalFilteredCollections.map(renderCollectionGroup)}
+                  </div>
+                )}
+              </div>
+            )}
 
-      {showPinnedSmartSection && (
-        <div className="shrink-0 border-t border-line bg-surface-1 flex flex-col max-h-[42%]">
-          <button
-            type="button"
-            onClick={() => setIsSmartSectionOpen((prev) => !prev)}
-            aria-expanded={isSmartExpandedEffective}
-            className="h-[26px] px-2.5 bg-surface-header hover:bg-surface-2 flex items-center justify-between text-left shrink-0 transition-colors cursor-pointer select-none"
-            title={
-              isSmartExpandedEffective
-                ? "Collapse Smart collections"
-                : "Expand Smart collections"
-            }
-          >
-            <span className="flex items-center space-x-1.5 min-w-0">
-              {isSmartExpandedEffective ? (
-                <ChevronDown className="w-3 h-3 text-fg-3 shrink-0" />
-              ) : (
-                <ChevronRight className="w-3 h-3 text-fg-3 shrink-0" />
-              )}
-              <span className="text-[10px] uppercase tracking-wider font-semibold text-fg-head truncate">
-                SMART ({smartFilteredCollections.length.toLocaleString()})
-              </span>
-            </span>
-          </button>
-          {isSmartExpandedEffective && (
-            <div className="overflow-y-auto py-1 text-[12px]">
-              {smartFilteredCollections.map(renderCollectionGroup)}
-            </div>
-          )}
-        </div>
-      )}
+            {smartFilteredCollections.length > 0 && (
+              <div>
+                <TaxonomyFacetSectionHeader
+                  label="SMART"
+                  count={smartFilteredCollections.length}
+                  isOpen={isSmartExpandedEffective}
+                  title={
+                    isSmartExpandedEffective
+                      ? "Collapse Smart collections"
+                      : "Expand Smart collections"
+                  }
+                  onToggle={() => setIsSmartSectionOpen((prev) => !prev)}
+                />
+                {isSmartExpandedEffective && (
+                  <div className="flex flex-col text-[12px]">
+                    {smartFilteredCollections.map(renderCollectionGroup)}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 };

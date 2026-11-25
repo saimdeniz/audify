@@ -207,7 +207,12 @@ pub(super) fn commit_scanned_batch(
                 "DELETE FROM sample_tags
                  WHERE sample_id = ?1
                    AND is_manual = 0
-                   AND COALESCE(source, 'auto') IN ('auto', 'auto_rule')",
+                   AND COALESCE(source, 'auto') IN ('auto', 'auto_rule')
+                   AND tag_id NOT IN (
+                       SELECT t.id FROM tags t
+                       INNER JOIN tag_facets f ON f.id = t.facet_id
+                       WHERE f.domain = 'genres'
+                   )",
             )
             .map_err(|e| e.to_string())?;
 
@@ -215,6 +220,13 @@ pub(super) fn commit_scanned_batch(
             .prepare(
                 "INSERT OR IGNORE INTO sample_tags (sample_id, tag_id, is_manual, source)
                  VALUES (?1, ?2, 0, 'auto_rule')",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let mut genre_tag_insert_stmt = tx
+            .prepare(
+                "INSERT OR IGNORE INTO sample_tags (sample_id, tag_id, is_manual, source)
+                 VALUES (?1, ?2, 0, 'auto_genre')",
             )
             .map_err(|e| e.to_string())?;
 
@@ -268,7 +280,23 @@ pub(super) fn commit_scanned_batch(
                         let _ = tag_insert_stmt.execute(params![sample_id, tag_id]);
                     }
                 }
-                if bulk_fts_batch && (!s.auto_tags.is_empty() || force) {
+                for (facet_slug, gm_name) in &s.genre_mood_tags {
+                    if let Ok(gm_tag_id) = crate::db::ensure_taxonomy_tag(
+                        &tx,
+                        gm_name,
+                        Some(facet_slug),
+                        None,
+                        None,
+                        false,
+                    ) {
+                        if gm_tag_id > 0 {
+                            let _ = genre_tag_insert_stmt.execute(params![sample_id, gm_tag_id]);
+                        }
+                    }
+                }
+                if bulk_fts_batch
+                    && (!s.auto_tags.is_empty() || !s.genre_mood_tags.is_empty() || force)
+                {
                     fts_dirty_ids.push(sample_id);
                 }
             }
@@ -276,24 +304,7 @@ pub(super) fn commit_scanned_batch(
 
         if bulk_fts_batch {
             if !fts_dirty_ids.is_empty() {
-                fts_dirty_ids.sort_unstable();
-                fts_dirty_ids.dedup();
-                for chunk in fts_dirty_ids.chunks(450) {
-                    let placeholders = crate::db::sql_in_placeholders(1, chunk.len());
-                    let sql = format!(
-                        "UPDATE samples_fts
-                         SET tags_text = COALESCE((
-                             SELECT GROUP_CONCAT(t.name, ' ') || ' ' || REPLACE(REPLACE(GROUP_CONCAT(t.name, ' '), 'ı', 'i'), 'İ', 'i')
-                             FROM sample_tags st
-                             INNER JOIN tags t ON t.id = st.tag_id
-                             WHERE st.sample_id = samples_fts.rowid
-                         ), '')
-                         WHERE rowid IN ({})",
-                        placeholders
-                    );
-                    tx.execute(&sql, rusqlite::params_from_iter(chunk.iter().copied()))
-                        .map_err(|e| format!("Failed updating FTS tags chunk: {}", e))?;
-                }
+                crate::db::rebuild_fts_tags_for_samples(&tx, Some(&fts_dirty_ids))?;
             }
             tx.execute_batch(crate::db::SAMPLE_TAGS_FTS_TRIGGERS_SQL)
                 .map_err(|e| format!("Failed restoring tag FTS triggers after batch sync: {}", e))?;
@@ -390,11 +401,8 @@ pub(super) fn finalize_library_sync(
 
     let changed = force || total_upserted > 0 || pre_renamed > 0 || rows_deleted > 0;
     if changed {
-        // Prune ONLY non-manual orphan auto-tags!
-        let _ = tx.execute(
-            "DELETE FROM tags WHERE is_manual = 0 AND id NOT IN (SELECT DISTINCT tag_id FROM sample_tags)",
-            [],
-        );
+        // Prune ONLY non-manual orphan auto-tags while protecting system roots and parents!
+        let _ = crate::db::prune_orphan_auto_tags(&tx);
         let _ = tx.execute(
             "UPDATE libraries SET last_scanned_at = datetime('now') WHERE id = ?1",
             params![lib_id],
@@ -530,6 +538,7 @@ mod tests {
             camelot_key: String::new(),
             peaks_json: "[]".to_string(),
             auto_tags: vec!["warm".to_string()],
+            genre_mood_tags: Vec::new(),
         }];
 
         let (_, changed) = commit_synced_samples_with_status(
@@ -606,6 +615,7 @@ mod tests {
             camelot_key: String::new(),
             peaks_json: "[]".to_string(),
             auto_tags: vec!["Kick".to_string()],
+            genre_mood_tags: Vec::new(),
         };
 
         let n1 = commit_scanned_batch(&mut conn, 1, false, &[mk("a.wav"), mk("b.wav")], &[])

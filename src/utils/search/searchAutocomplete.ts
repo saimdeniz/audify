@@ -1,6 +1,20 @@
 import { CAMELOT_KEYS } from "../../constants/camelotKeys";
-import type { FolderStat, Genre, Tag } from "../../types";
+import type {
+  FolderStat,
+  Genre,
+  Tag,
+  TagFacet,
+  TaxonomyFacetSlug,
+} from "../../types";
 import { foldSearchText, folderNameFromPath } from "../format";
+import {
+  FACET_SHORT_BADGE,
+  getFacetLabel,
+  getSharedTaxonomyIndex,
+  getTagRollupCount,
+  resolveFacetDomain,
+  resolveTagFacetSlug,
+} from "../taxonomyTree";
 
 export interface SearchAutocompleteItem {
   id: string;
@@ -8,7 +22,8 @@ export interface SearchAutocompleteItem {
   label: string;
   meta?: string;
   color?: string;
-  kind: "tag" | "genre" | "key" | "folder" | "operator";
+  facetBadge?: string;
+  kind: "tag" | "genre" | "mood" | "source" | "key" | "folder" | "operator";
 }
 
 export interface SearchAutocompleteContext {
@@ -216,9 +231,75 @@ function buildUniqueFolderEntries(
   return Array.from(byFolded.values());
 }
 
+interface RankedTaxonomyCandidate {
+  tag: Tag;
+  breadcrumb: string;
+  slashToken: string;
+  effectiveColor: string;
+  rollupCount: number;
+  facet: TaxonomyFacetSlug;
+}
+
+function rankTaxonomyTagMatches(
+  tags: readonly Tag[],
+  needleFolded: string,
+  allowedFacets?: ReadonlySet<TaxonomyFacetSlug>,
+  facets?: readonly TagFacet[]
+): RankedTaxonomyCandidate[] {
+  const index = getSharedTaxonomyIndex(tags, facets);
+  const prefix: RankedTaxonomyCandidate[] = [];
+  const contains: RankedTaxonomyCandidate[] = [];
+
+  for (let i = 0; i < tags.length; i++) {
+    const t = tags[i];
+    const facet = index.facetByTagId.get(t.id) ?? resolveTagFacetSlug(t, facets);
+    if (allowedFacets && !allowedFacets.has(facet)) continue;
+    const breadcrumb = index.breadcrumbByTagId.get(t.id) ?? t.name;
+    const ancestors = index.ancestorsByTagId.get(t.id) ?? [];
+    const slashToken =
+      ancestors.length > 0
+        ? [...ancestors.map((a) => a.name), t.name].join("/")
+        : t.name;
+    const foldedName = foldSearchText(t.name);
+    const foldedBreadcrumb = foldSearchText(breadcrumb);
+    const foldedSlash = foldSearchText(slashToken);
+    const aliases = Array.isArray(t.aliases) ? t.aliases : [];
+
+    const entry: RankedTaxonomyCandidate = {
+      tag: t,
+      breadcrumb,
+      slashToken,
+      effectiveColor: index.effectiveColorByTagId.get(t.id) ?? t.color,
+      rollupCount: getTagRollupCount(t),
+      facet,
+    };
+
+    if (
+      !needleFolded ||
+      foldedName.startsWith(needleFolded) ||
+      foldedSlash.startsWith(needleFolded)
+    ) {
+      prefix.push(entry);
+    } else if (
+      foldedName.includes(needleFolded) ||
+      foldedBreadcrumb.includes(needleFolded) ||
+      foldedSlash.includes(needleFolded) ||
+      aliases.some((a) => foldSearchText(a).includes(needleFolded))
+    ) {
+      contains.push(entry);
+    }
+  }
+
+  const byPopularity = (a: RankedTaxonomyCandidate, b: RankedTaxonomyCandidate) =>
+    b.rollupCount - a.rollupCount || a.breadcrumb.localeCompare(b.breadcrumb);
+  prefix.sort(byPopularity);
+  contains.sort(byPopularity);
+  return [...prefix, ...contains].slice(0, MAX_SUGGESTIONS);
+}
+
 /**
  * Computes Smart Search inline autocomplete suggestions for the operator token
- * under `cursorPos` (`tag:`, `#`, `genre:`, `folder:`, `path:`, `key:`, `key:~`, `ext:`, `format:`, `type:`, `is:`, `ch:`, `sr:`, `bit:`, `dur:`, `size:`, `bpm:`).
+ * under `cursorPos` (`tag:`, `#`, `genre:`, `mood:`, `source:`, `folder:`, `path:`, `key:`, `key:~`, `ext:`, `format:`, `type:`, `is:`, `ch:`, `sr:`, `bit:`, `dur:`, `size:`, `bpm:`).
  * Returns `null` for plain keyword tokens so normal searching is never interrupted.
  */
 export function getSearchAutocompleteSuggestions(
@@ -226,7 +307,8 @@ export function getSearchAutocompleteSuggestions(
   cursorPos: number,
   tags: readonly Tag[],
   genres: readonly Genre[],
-  folderStats: readonly FolderStat[] = []
+  folderStats: readonly FolderStat[] = [],
+  facets: readonly TagFacet[] = []
 ): SearchAutocompleteContext | null {
   const active = extractActiveToken(query, cursorPos);
   if (!active) return null;
@@ -238,19 +320,21 @@ export function getSearchAutocompleteSuggestions(
   // Shorthand `#tag` syntax
   if (body.startsWith("#")) {
     const needle = foldSearchText(body.slice(1).replace(/^"|"$/g, ""));
-    const matched = rankTextMatches(tags, needle);
+    const matched = rankTaxonomyTagMatches(tags, needle, undefined, facets);
     if (matched.length === 0) return null;
     return finalizeAutocompleteContext({
       tokenStart: start,
       tokenEnd: end,
       rawToken: token,
       headerLabel: negPrefix ? "EXCLUDE TAG" : "FILTER BY TAG",
-      items: matched.map((t) => ({
-        id: `tag:${t.id}`,
-        insertToken: `${negPrefix}tag:${formatTokenValue(t.name)}`,
-        label: t.name,
-        meta: t.sample_count.toLocaleString(),
-        color: t.color,
+      items: matched.map((c) => ({
+        id: `tag:${c.tag.id}`,
+        insertToken: `${negPrefix}tag:${formatTokenValue(c.slashToken)}`,
+        label: c.breadcrumb,
+        meta: c.rollupCount.toLocaleString(),
+        color: c.facet === "source" ? undefined : c.effectiveColor,
+        facetBadge:
+          FACET_SHORT_BADGE[c.facet] ?? c.facet.slice(0, 6).toUpperCase(),
         kind: "tag",
       })),
     });
@@ -262,28 +346,107 @@ export function getSearchAutocompleteSuggestions(
   const op = body.slice(0, colonIdx).toLowerCase();
   const rawVal = body.slice(colonIdx + 1);
 
-  if (op === "tag") {
+  if (op === "tag" || op === "t") {
     const needle = foldSearchText(rawVal.replace(/^"|"$/g, ""));
-    const matched = rankTextMatches(tags, needle);
+    const matched = rankTaxonomyTagMatches(tags, needle, undefined, facets);
     if (matched.length === 0) return null;
     return finalizeAutocompleteContext({
       tokenStart: start,
       tokenEnd: end,
       rawToken: token,
       headerLabel: negPrefix ? "EXCLUDE TAG (-tag:)" : "TAGS (tag:)",
-      items: matched.map((t) => ({
-        id: `tag:${t.id}`,
-        insertToken: `${negPrefix}tag:${formatTokenValue(t.name)}`,
-        label: t.name,
-        meta: t.sample_count.toLocaleString(),
-        color: t.color,
+      items: matched.map((c) => ({
+        id: `tag:${c.tag.id}`,
+        insertToken: `${negPrefix}tag:${formatTokenValue(c.slashToken)}`,
+        label: c.breadcrumb,
+        meta: c.rollupCount.toLocaleString(),
+        color: c.facet === "source" ? undefined : c.effectiveColor,
+        facetBadge:
+          FACET_SHORT_BADGE[c.facet] ?? c.facet.slice(0, 6).toUpperCase(),
         kind: "tag",
+      })),
+    });
+  }
+
+  if (op === "mood" || op === "m") {
+    const needle = foldSearchText(rawVal.replace(/^"|"$/g, ""));
+    const moodFacetSet = new Set<TaxonomyFacetSlug>(["mood"]);
+    const matched = rankTaxonomyTagMatches(tags, needle, moodFacetSet, facets);
+    if (matched.length === 0) return null;
+    return finalizeAutocompleteContext({
+      tokenStart: start,
+      tokenEnd: end,
+      rawToken: token,
+      headerLabel: negPrefix ? "EXCLUDE MOOD (-mood:)" : "MOODS (mood:)",
+      items: matched.map((c) => ({
+        id: `mood:${c.tag.id}`,
+        insertToken: `${negPrefix}mood:${formatTokenValue(c.tag.name)}`,
+        label: c.breadcrumb,
+        meta: c.rollupCount.toLocaleString(),
+        color: c.effectiveColor,
+        facetBadge: "MOOD",
+        kind: "mood",
+      })),
+    });
+  }
+
+  if (op === "source" || op === "src") {
+    const needle = foldSearchText(rawVal.replace(/^"|"$/g, ""));
+    const srcFacetSet = new Set<TaxonomyFacetSlug>(["source"]);
+    const matched = rankTaxonomyTagMatches(tags, needle, srcFacetSet, facets);
+    if (matched.length === 0) return null;
+    return finalizeAutocompleteContext({
+      tokenStart: start,
+      tokenEnd: end,
+      rawToken: token,
+      headerLabel: negPrefix ? "EXCLUDE SOURCE (-source:)" : "SOURCE / PACK (source:)",
+      items: matched.map((c) => ({
+        id: `source:${c.tag.id}`,
+        insertToken: `${negPrefix}source:${formatTokenValue(c.tag.name)}`,
+        label: c.tag.name,
+        meta: c.rollupCount.toLocaleString(),
+        facetBadge: "SRC",
+        kind: "source",
       })),
     });
   }
 
   if (op === "genre") {
     const needle = foldSearchText(rawVal.replace(/^"|"$/g, ""));
+    const genreDomainSlugs = new Set<TaxonomyFacetSlug>(["genre", "mood"]);
+    for (const f of facets) {
+      if (resolveFacetDomain(f.slug, facets) === "genres") {
+        genreDomainSlugs.add(f.slug);
+      }
+    }
+    const hasGenreDomainTags = tags.some((t) =>
+      genreDomainSlugs.has(resolveTagFacetSlug(t, facets))
+    );
+    if (hasGenreDomainTags) {
+      const matched = rankTaxonomyTagMatches(
+        tags,
+        needle,
+        genreDomainSlugs,
+        facets
+      );
+      if (matched.length === 0) return null;
+      return finalizeAutocompleteContext({
+        tokenStart: start,
+        tokenEnd: end,
+        rawToken: token,
+        headerLabel: negPrefix ? "EXCLUDE GENRE (-genre:)" : "GENRES & MOODS (genre:)",
+        items: matched.map((c) => ({
+          id: `genre:${c.tag.id}`,
+          insertToken: `${negPrefix}genre:${formatTokenValue(c.tag.name)}`,
+          label: c.breadcrumb,
+          meta: c.rollupCount.toLocaleString(),
+          color: c.effectiveColor,
+          facetBadge:
+            FACET_SHORT_BADGE[c.facet] ?? c.facet.slice(0, 6).toUpperCase(),
+          kind: "genre",
+        })),
+      });
+    }
     const matched = rankTextMatches(genres, needle);
     if (matched.length === 0) return null;
     return finalizeAutocompleteContext({
@@ -297,6 +460,7 @@ export function getSearchAutocompleteSuggestions(
         label: g.name,
         meta: g.sample_count.toLocaleString(),
         color: g.color,
+        facetBadge: g.facet_slug === "mood" ? "MOOD" : "GENRE",
         kind: "genre",
       })),
     });
@@ -372,6 +536,49 @@ export function getSearchAutocompleteSuggestions(
         kind: "operator",
       })),
     });
+  }
+
+  // Custom user-defined facet operator (`material:`, `era:`, `-material:`, etc.)
+  const opFolded = foldSearchText(op);
+  if (
+    opFolded &&
+    opFolded !== "category" &&
+    opFolded !== "genre" &&
+    opFolded !== "mood" &&
+    opFolded !== "source"
+  ) {
+    const matchingCustomFacet =
+      facets.find((f) => foldSearchText(f.slug) === opFolded) ?? null;
+    const targetSlug = matchingCustomFacet
+      ? matchingCustomFacet.slug
+      : tags.some((t) => foldSearchText(t.facet_slug ?? "") === opFolded)
+        ? opFolded
+        : null;
+    if (targetSlug) {
+      const needle = foldSearchText(rawVal.replace(/^"|"$/g, ""));
+      const customSet = new Set<TaxonomyFacetSlug>([targetSlug]);
+      const matched = rankTaxonomyTagMatches(tags, needle, customSet, facets);
+      if (matched.length === 0) return null;
+      const facetTitle = getFacetLabel(targetSlug, facets).toUpperCase();
+      const shortBadge = targetSlug.slice(0, 6).toUpperCase();
+      return finalizeAutocompleteContext({
+        tokenStart: start,
+        tokenEnd: end,
+        rawToken: token,
+        headerLabel: negPrefix
+          ? `EXCLUDE ${facetTitle} (-${op}:)`
+          : `${facetTitle} (${op}:)`,
+        items: matched.map((c) => ({
+          id: `${targetSlug}:${c.tag.id}`,
+          insertToken: `${negPrefix}${op}:${formatTokenValue(c.tag.name)}`,
+          label: c.breadcrumb,
+          meta: c.rollupCount.toLocaleString(),
+          color: c.effectiveColor,
+          facetBadge: shortBadge,
+          kind: resolveFacetDomain(targetSlug, facets) === "genres" ? "genre" : "tag",
+        })),
+      });
+    }
   }
 
   return null;

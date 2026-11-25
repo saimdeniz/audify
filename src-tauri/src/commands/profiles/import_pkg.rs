@@ -120,44 +120,175 @@ pub(crate) fn import_profile_from_file_with_user_dir(
 
     let new_profile_id = tx.last_insert_rowid();
 
-    for t in &pkg.tags {
+    // Pass 0: Restore custom user facets before tags so custom `facet_slug` references resolve cleanly.
+    for f in &pkg.facets {
+        let fname = f.name.trim();
+        let raw_slug = f.slug.trim().to_ascii_lowercase();
+        if fname.is_empty()
+            || fname.chars().count() > 40
+            || raw_slug.is_empty()
+            || matches!(raw_slug.as_str(), "category" | "genre" | "mood" | "source")
+            || !raw_slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+        {
+            continue;
+        }
+        let fdomain = if f.domain.eq_ignore_ascii_case("genres") {
+            "genres"
+        } else {
+            "tags"
+        };
+        let fcolor = sanitize_hex_color_or_default(&f.color, "#64748B");
+        let next_sort = if f.sort_order > 0 { f.sort_order } else { 20 };
+        let _ = tx.execute(
+            "INSERT OR IGNORE INTO tag_facets (slug, name, color, sort_order, is_system, domain, allow_nesting)
+             VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)",
+            params![raw_slug, fname, fcolor, next_sort, fdomain, i64::from(f.allow_nesting)],
+        );
+    }
+
+    // Pass 1: Ensure imported tags exist (preserving existing global user colors on conflict!)
+    // Topologically ordered by `parent_name` chain depth (0 -> 1 -> 2) so 3-level hierarchies resolve cleanly.
+    let parent_by_lower: std::collections::HashMap<String, String> = pkg
+        .tags
+        .iter()
+        .filter_map(|t| {
+            let child = t.name.trim().to_lowercase();
+            let parent = t.parent_name.as_deref()?.trim().to_lowercase();
+            (!child.is_empty() && !parent.is_empty() && child != parent).then_some((child, parent))
+        })
+        .collect();
+    let compute_import_tag_depth = |name_lower: &str| -> usize {
+        let mut depth = 0usize;
+        let mut cur = name_lower;
+        let mut seen = std::collections::HashSet::new();
+        seen.insert(cur);
+        while let Some(next) = parent_by_lower.get(cur) {
+            if !seen.insert(next.as_str()) || depth > crate::db::taxonomy::MAX_TAXONOMY_DEPTH {
+                break;
+            }
+            depth += 1;
+            cur = next.as_str();
+        }
+        depth
+    };
+    let mut indexed_tags: Vec<(usize, &crate::commands::ExportedTagEntry)> =
+        pkg.tags.iter().enumerate().collect();
+    indexed_tags.sort_by_key(|(idx, t)| (compute_import_tag_depth(&t.name.trim().to_lowercase()), *idx));
+
+    let manual_tag_names_lower: std::collections::HashSet<String> = pkg
+        .manual_tag_ref_indices
+        .keys()
+        .chain(pkg.ai_approved_tag_ref_indices.keys())
+        .chain(pkg.manual_tag_samples.keys())
+        .chain(pkg.manual_tag_assignments.keys())
+        .map(|k| k.trim().to_lowercase())
+        .collect();
+
+    for (_, t) in indexed_tags {
         let tname = t.name.trim();
         if tname.is_empty() || tname.chars().count() > 64 {
             continue;
         }
-        let is_man = pkg.manual_tag_ref_indices.contains_key(tname)
-            || pkg.ai_approved_tag_ref_indices.contains_key(tname)
-            || pkg.manual_tag_samples.contains_key(tname)
-            || pkg.manual_tag_assignments.contains_key(tname);
+        let is_man = manual_tag_names_lower.contains(&tname.to_lowercase());
         let safe_tag_color =
             sanitize_hex_color_or_default(&t.color, deterministic_color_for_name(tname));
-        tx.execute(
-            "INSERT INTO tags (name, color, is_manual) VALUES (?1, ?2, ?3)
-             ON CONFLICT(name) DO UPDATE SET
-                color = excluded.color,
-                is_manual = CASE WHEN tags.is_manual = 1 OR excluded.is_manual = 1 THEN 1 ELSE 0 END",
-            params![tname, safe_tag_color, is_man],
-        )
-        .map_err(|e| format!("Failed restoring imported tag: {}", e))?;
+
+        let existing_id: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM tags WHERE LOWER(name) = LOWER(?1) LIMIT 1",
+                params![tname],
+                |r| r.get(0),
+            )
+            .ok();
+
+        if let Some(eid) = existing_id {
+            if is_man {
+                let _ = tx.execute("UPDATE tags SET is_manual = 1 WHERE id = ?1", params![eid]);
+            }
+            continue;
+        }
+
+        let facet_override = t
+            .facet_slug
+            .as_deref()
+            .filter(|s| crate::db::taxonomy::resolve_facet_id_in_db(&tx, s).is_some());
+        let parent_override = t
+            .parent_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty() && !p.eq_ignore_ascii_case(tname));
+        let color_opt = if t.color_inherited {
+            None
+        } else {
+            Some(safe_tag_color.as_str())
+        };
+
+        let created_id = crate::db::ensure_taxonomy_tag(
+            &tx,
+            tname,
+            facet_override,
+            parent_override,
+            color_opt,
+            is_man,
+        )?;
+        if !t.aliases.is_empty() {
+            let encoded = crate::db::taxonomy::encode_aliases_json(&t.aliases, Some(tname));
+            let _ = tx.execute(
+                "UPDATE tags SET aliases_json = ?1 WHERE id = ?2",
+                params![encoded, created_id],
+            );
+        }
     }
+
+    let manual_genre_names_lower: std::collections::HashSet<String> = pkg
+        .manual_genre_ref_indices
+        .keys()
+        .chain(pkg.manual_genre_assignments.keys())
+        .map(|k| k.trim().to_lowercase())
+        .collect();
 
     for g in &pkg.genres {
         let gname = g.name.trim();
         if gname.is_empty() || gname.chars().count() > 64 {
             continue;
         }
-        let is_man = pkg.manual_genre_ref_indices.contains_key(gname)
-            || pkg.manual_genre_assignments.contains_key(gname);
+        let (target_facet, canonical_name) =
+            match crate::taxonomy_catalog::sanitize_id3_genre_or_mood_typo(gname) {
+                Some((f, canon)) => (f, canon.to_string()),
+                None => (
+                    if crate::taxonomy_catalog::is_canonical_mood_name(gname) {
+                        "mood"
+                    } else {
+                        "genre"
+                    },
+                    gname.to_string(),
+                ),
+            };
+        let is_man = manual_genre_names_lower.contains(&gname.to_lowercase())
+            || manual_genre_names_lower.contains(&canonical_name.to_lowercase());
         let safe_genre_color =
-            sanitize_hex_color_or_default(&g.color, deterministic_color_for_name(gname));
-        tx.execute(
-            "INSERT INTO genres (name, color, is_manual) VALUES (?1, ?2, ?3)
-             ON CONFLICT(name) DO UPDATE SET
-                color = excluded.color,
-                is_manual = CASE WHEN genres.is_manual = 1 OR excluded.is_manual = 1 THEN 1 ELSE 0 END",
-            params![gname, safe_genre_color, is_man],
-        )
-        .map_err(|e| format!("Failed restoring imported genre: {}", e))?;
+            sanitize_hex_color_or_default(&g.color, deterministic_color_for_name(&canonical_name));
+        let existing_id: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM tags WHERE LOWER(name) = LOWER(?1) LIMIT 1",
+                params![canonical_name],
+                |r| r.get(0),
+            )
+            .ok();
+        if let Some(eid) = existing_id {
+            if is_man {
+                let _ = tx.execute("UPDATE tags SET is_manual = 1 WHERE id = ?1", params![eid]);
+            }
+        } else {
+            let _ = crate::db::ensure_taxonomy_tag(
+                &tx,
+                &canonical_name,
+                Some(target_facet),
+                None,
+                Some(&safe_genre_color),
+                is_man,
+            )?;
+        }
     }
 
     // Security Hardening: ONLY insert libraries that pass `is_safe_library_dir` locally!
@@ -324,6 +455,220 @@ mod tests {
             )
             .unwrap();
         assert_eq!(restored, (Some(124.0), 1));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn export_and_import_preserves_3_level_hierarchy_case_insensitive_refs_and_custom_genre_facets() {
+        use crate::commands::taxonomy::facets::create_tag_facet_with_conn;
+        use crate::commands::taxonomy::tags::create_tag_with_options_conn;
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "audify_import_v18_hierarchy_{}_{}",
+            std::process::id(),
+            nanos
+        ));
+        let src_user = root.join("src_user");
+        let dst_user = root.join("dst_user");
+        let lib_dir = root.join("V18Lib");
+        fs::create_dir_all(&lib_dir).unwrap();
+        let wav_path = lib_dir.join("retro_blade.wav");
+        fs::write(&wav_path, b"RIFF0000WAVEfmt ").unwrap();
+
+        let conn_src = init_db(&src_user).expect("init src db");
+        let src_pid = get_active_profile_id(&conn_src);
+        let lib_norm = normalize_clean_path(&lib_dir.to_string_lossy());
+        let wav_norm = normalize_clean_path(&wav_path.to_string_lossy());
+
+        conn_src
+            .execute(
+                "INSERT INTO libraries (path, name, is_global) VALUES (?1, 'V18Lib', 0)",
+                params![lib_norm],
+            )
+            .unwrap();
+        let src_lib_id = conn_src.last_insert_rowid();
+        conn_src
+            .execute(
+                "INSERT INTO profile_libraries (profile_id, library_id) VALUES (?1, ?2)",
+                params![src_pid, src_lib_id],
+            )
+            .unwrap();
+        conn_src
+            .execute(
+                "INSERT INTO samples (library_id, file_path, file_name, extension, duration_ms, file_size)
+                 VALUES (?1, ?2, 'retro_blade.wav', 'wav', 900, 2048)",
+                params![src_lib_id, wav_norm],
+            )
+            .unwrap();
+        let src_sid = conn_src.last_insert_rowid();
+
+        // Create custom genres-domain facet ("Era") and 3-level Category hierarchy + 2-level Genre hierarchy
+        let era_facet = create_tag_facet_with_conn(&conn_src, "Era", "genres", "#F59E0B", false)
+            .expect("create Era facet");
+        let tag_era_80s = create_tag_with_options_conn(
+            &conn_src,
+            "80s",
+            "#F59E0B",
+            Some(&era_facet.slug),
+            None,
+            Some(false),
+            None,
+        )
+        .expect("create 80s tag");
+
+        // Bump sqlite_sequence so depth-2/3 tags get 3-digit IDs (exercises slash-depth sort vs string length)
+        conn_src
+            .execute("UPDATE sqlite_sequence SET seq = 150 WHERE name = 'tags'", [])
+            .ok();
+
+        let root_cat = create_tag_with_options_conn(
+            &conn_src,
+            "CustomCombat",
+            "#EF4444",
+            Some("category"),
+            None,
+            Some(false),
+            None,
+        )
+        .expect("create root category");
+        let mid_cat = create_tag_with_options_conn(
+            &conn_src,
+            "CustomBlades",
+            "",
+            Some("category"),
+            Some(root_cat.id),
+            Some(true),
+            None,
+        )
+        .expect("create depth-2 category");
+        let leaf_cat = create_tag_with_options_conn(
+            &conn_src,
+            "PlasmaKatana",
+            "",
+            Some("category"),
+            Some(mid_cat.id),
+            Some(true),
+            None,
+        )
+        .expect("create depth-3 category");
+
+        let root_elec = create_tag_with_options_conn(
+            &conn_src,
+            "ElectronicRoot",
+            "#0EA5E9",
+            Some("genre"),
+            None,
+            Some(false),
+            None,
+        )
+        .expect("create root genre");
+        let sub_synth = create_tag_with_options_conn(
+            &conn_src,
+            "OutrunWave",
+            "",
+            Some("genre"),
+            Some(root_elec.id),
+            Some(true),
+            None,
+        )
+        .expect("create sub-genre");
+
+        conn_src
+            .execute(
+                "INSERT INTO sample_tags (sample_id, tag_id, is_manual, source)
+                 VALUES (?1, ?2, 1, 'manual'), (?1, ?3, 1, 'manual'), (?1, ?4, 1, 'manual')",
+                params![src_sid, leaf_cat.id, tag_era_80s.id, sub_synth.id],
+            )
+            .unwrap();
+
+        let (_, mut pkg) = build_profile_export_package_with_options(&conn_src, src_pid, false)
+            .expect("export profile package");
+
+        // Verify export ordered CustomCombat -> CustomBlades -> PlasmaKatana despite 3-digit IDs
+        let exported_names: Vec<&str> = pkg.tags.iter().map(|t| t.name.as_str()).collect();
+        let pos_root = exported_names.iter().position(|&n| n == "CustomCombat").unwrap();
+        let pos_mid = exported_names.iter().position(|&n| n == "CustomBlades").unwrap();
+        let pos_leaf = exported_names.iter().position(|&n| n == "PlasmaKatana").unwrap();
+        assert!(pos_root < pos_mid && pos_mid < pos_leaf, "export must topologically order depth 1 -> 2 -> 3");
+
+        // Reverse pkg.tags to ALSO exercise import's topological sort, and lowercase manual_tag_ref_indices key
+        pkg.tags.reverse();
+        if let Some(indices) = pkg.manual_tag_ref_indices.remove("PlasmaKatana") {
+            pkg.manual_tag_ref_indices
+                .insert("plasmakatana".to_string(), indices);
+        }
+
+        let pkg_path = root.join("v18_hierarchy.audify-profile");
+        write_profile_package_to_path(&pkg, &pkg_path).unwrap();
+
+        // Import into a brand-new clean destination database that already knows the physical file
+        let mut conn_dst = init_db(&dst_user).expect("init dst db");
+        conn_dst
+            .execute(
+                "INSERT INTO libraries (path, name, is_global) VALUES (?1, 'V18Lib', 0)",
+                params![lib_norm],
+            )
+            .unwrap();
+        let dst_lib_id = conn_dst.last_insert_rowid();
+        conn_dst
+            .execute(
+                "INSERT INTO samples (library_id, file_path, file_name, extension, duration_ms, file_size)
+                 VALUES (?1, ?2, 'retro_blade.wav', 'wav', 900, 2048)",
+                params![dst_lib_id, wav_norm],
+            )
+            .unwrap();
+        let dst_sid = conn_dst.last_insert_rowid();
+
+        let _ = import_profile_from_file_with_conn(&mut conn_dst, &pkg_path.to_string_lossy())
+            .expect("import v18 package");
+
+        // Verify 3-level Category chain: CustomCombat -> CustomBlades -> PlasmaKatana
+        let (leaf_id, mid_id_opt, leaf_path): (i64, Option<i64>, String) = conn_dst
+            .query_row(
+                "SELECT id, parent_id, path FROM tags WHERE LOWER(name) = 'plasmakatana'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .expect("PlasmaKatana imported");
+        let mid_id = mid_id_opt.expect("PlasmaKatana must keep parent_id");
+        let (root_id_opt, mid_name): (Option<i64>, String) = conn_dst
+            .query_row(
+                "SELECT parent_id, name FROM tags WHERE id = ?1",
+                params![mid_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let root_id = root_id_opt.expect("CustomBlades must keep root parent_id");
+        assert_eq!(mid_name, "CustomBlades");
+        assert_eq!(leaf_path, format!("/{}/{}/{}/", root_id, mid_id, leaf_id));
+
+        // Verify case-insensitive manual tag link + custom genres-domain primary genre sync
+        let linked_count: i64 = conn_dst
+            .query_row(
+                "SELECT COUNT(*) FROM sample_tags WHERE sample_id = ?1",
+                params![dst_sid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(linked_count, 3, "all 3 manual tags (including lowercase ref) must link");
+
+        let synced_genre: String = conn_dst
+            .query_row(
+                "SELECT COALESCE(genre, '') FROM samples WHERE id = ?1",
+                params![dst_sid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            synced_genre == "OutrunWave" || synced_genre == "80s",
+            "primary samples.genre must sync from imported sub-genre or custom genres-domain facet, got: {}",
+            synced_genre
+        );
 
         let _ = fs::remove_dir_all(&root);
     }

@@ -5,6 +5,7 @@ import {
   runCatalogWorkerFilter,
   runCatalogWorkerSmartCounts,
   syncCatalogWorkerPool,
+  syncCatalogWorkerTaxonomy,
 } from "../workers/catalogWorkerClient";
 import { reconcileSelectionAfterFilter } from "./filterEngine";
 import { resetPlayheadClock } from "./playheadClock";
@@ -99,6 +100,10 @@ export function dispatchWorkerInstantMemoryFilter(params: {
     recentOnly,
     recentSampleIds,
     selectedTagIds,
+    excludedTagIds,
+    tagMatchMode,
+    tags,
+    tagFacets,
     selectedGenre,
     selectedLicenseGroupId,
     licenseGroups,
@@ -113,6 +118,7 @@ export function dispatchWorkerInstantMemoryFilter(params: {
     similaritySession,
   } = snapshotState;
 
+  syncCatalogWorkerTaxonomy(tags, tagFacets);
   const poolEpoch = syncCatalogWorkerPool(allProfileSamples);
   const memSeq = ++latestMemFilterSeq;
   const dupOrderMap = buildDuplicateOrderMap(
@@ -126,6 +132,8 @@ export function dispatchWorkerInstantMemoryFilter(params: {
     recentOnly,
     recentSampleIds,
     selectedTagIds,
+    excludedTagIds,
+    tagMatchMode,
     selectedGenre,
     selectedLicenseGroupId,
     licenseGroups,

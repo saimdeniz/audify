@@ -1,10 +1,14 @@
 import { SampleItem } from "../../types";
 import { foldSearchText } from "../format";
+import type { TaxonomyWorkerIndex } from "../taxonomyTree";
 import { normalizeMusicalOrCamelotKey } from "./musicalKey";
 
 const MAX_FOLDER_INDEX_CACHE = 4096;
 const MAX_FOLDED_STR_POOL = 8192;
 const EMPTY_STRINGS: readonly string[] = Object.freeze([]);
+const EMPTY_CUSTOM_FACETS: Readonly<Record<string, readonly string[]>> =
+  Object.freeze({});
+const BUILTIN_FACET_SLUGS = new Set(["category", "genre", "mood", "source"]);
 
 /**
  * Splits camelCase, PascalCase, letter-digit boundaries, and delimiters into folded tokens.
@@ -59,6 +63,11 @@ export interface IndexedSampleEntry {
   nameWords: readonly string[];
   parentWords: readonly string[];
   tagNamesFolded: readonly string[];
+  tagPathsFolded: readonly string[];
+  genreTagNamesFolded: readonly string[];
+  moodTagNamesFolded: readonly string[];
+  sourceTagNamesFolded: readonly string[];
+  customFacetTermsFolded: Readonly<Record<string, readonly string[]>>;
   detectedBpm: number | null;
   effectiveCamelotKey: string;
 }
@@ -68,8 +77,34 @@ export interface IndexedSampleEntry {
  * are automatically GC'd without storing 10 duplicate raw-field copies per row.
  */
 let sampleIndexCache = new WeakMap<SampleItem, IndexedSampleEntry>();
+let activeSearchTaxonomy: TaxonomyWorkerIndex | null = null;
+let knownCustomFacetSlugs: ReadonlySet<string> = new Set<string>();
 const folderIndexCache = new Map<string, FolderIndexEntry>();
 const foldedStringPool = new Map<string, string>();
+
+export function getKnownCustomFacetSlugs(): ReadonlySet<string> {
+  return knownCustomFacetSlugs;
+}
+
+export function setSmartSearchTaxonomy(
+  taxonomy: TaxonomyWorkerIndex | null
+): void {
+  if (activeSearchTaxonomy === taxonomy) return;
+  activeSearchTaxonomy = taxonomy;
+  if (taxonomy?.facetDomainBySlug) {
+    const custom = new Set<string>();
+    for (const rawSlug of Object.keys(taxonomy.facetDomainBySlug)) {
+      const foldedSlug = foldSearchText(rawSlug);
+      if (foldedSlug && !BUILTIN_FACET_SLUGS.has(foldedSlug)) {
+        custom.add(foldedSlug);
+      }
+    }
+    knownCustomFacetSlugs = custom;
+  } else {
+    knownCustomFacetSlugs = new Set<string>();
+  }
+  sampleIndexCache = new WeakMap<SampleItem, IndexedSampleEntry>();
+}
 
 export function clearSmartSearchCache(): void {
   sampleIndexCache = new WeakMap<SampleItem, IndexedSampleEntry>();
@@ -166,10 +201,134 @@ export function getIndexedSample(sample: SampleItem): IndexedSampleEntry {
 
   const folderEntry = getFolderIndex(sample.folder_path || "");
   const nameWords = rawStem ? tokenizeSearchWords(rawStem) : EMPTY_STRINGS;
-  const tagNamesFolded =
-    sample.tags && sample.tags.length > 0
-      ? sample.tags.map((t) => internFolded(t.name))
-      : EMPTY_STRINGS;
+
+  let tagNamesFolded: readonly string[] = EMPTY_STRINGS;
+  let tagPathsFolded: readonly string[] = EMPTY_STRINGS;
+  let genreTagNamesFolded: readonly string[] = EMPTY_STRINGS;
+  let moodTagNamesFolded: readonly string[] = EMPTY_STRINGS;
+  let sourceTagNamesFolded: readonly string[] = EMPTY_STRINGS;
+  let customFacetTermsFolded: Readonly<Record<string, readonly string[]>> =
+    EMPTY_CUSTOM_FACETS;
+
+  if (sample.tags && sample.tags.length > 0) {
+    const names = new Set<string>();
+    const paths = new Set<string>();
+    const genres = new Set<string>();
+    const moods = new Set<string>();
+    const sources = new Set<string>();
+    const customSets = new Map<string, Set<string>>();
+    const metaMap = activeSearchTaxonomy?.searchMetaByTagId;
+    const facetDomains = activeSearchTaxonomy?.facetDomainBySlug;
+    const facetSlugsById = activeSearchTaxonomy?.facetByTagId;
+
+    const addCustomTerm = (slug: string, val: string) => {
+      if (!val) return;
+      let bucket = customSets.get(slug);
+      if (!bucket) {
+        bucket = new Set<string>();
+        customSets.set(slug, bucket);
+      }
+      bucket.add(val);
+    };
+
+    for (let i = 0; i < sample.tags.length; i++) {
+      const t = sample.tags[i];
+      const foldedName = internFolded(t.name);
+      if (foldedName) names.add(foldedName);
+      const meta = metaMap?.[t.id];
+      if (meta) {
+        if (meta.slashPath) paths.add(internFolded(meta.slashPath));
+        const foldedAncestors: string[] = [];
+        for (let a = 0; a < meta.ancestors.length; a++) {
+          const fa = internFolded(meta.ancestors[a]);
+          if (fa) {
+            names.add(fa);
+            foldedAncestors.push(fa);
+          }
+        }
+        const foldedAliases: string[] = [];
+        for (let a = 0; a < meta.aliases.length; a++) {
+          const al = internFolded(meta.aliases[a]);
+          if (al) {
+            names.add(al);
+            foldedAliases.push(al);
+          }
+        }
+
+        const facetSlugFolded = internFolded(meta.facet);
+        const isGenreDomain =
+          meta.domain === "genres" ||
+          meta.facet === "genre" ||
+          meta.facet === "mood" ||
+          facetDomains?.[meta.facet] === "genres";
+
+        if (isGenreDomain) {
+          if (foldedName) genres.add(foldedName);
+          for (let a = 0; a < foldedAncestors.length; a++) {
+            genres.add(foldedAncestors[a]);
+          }
+          for (let a = 0; a < foldedAliases.length; a++) {
+            genres.add(foldedAliases[a]);
+          }
+        }
+        if (meta.facet === "mood") {
+          if (foldedName) moods.add(foldedName);
+          for (let a = 0; a < foldedAncestors.length; a++) {
+            moods.add(foldedAncestors[a]);
+          }
+          for (let a = 0; a < foldedAliases.length; a++) {
+            moods.add(foldedAliases[a]);
+          }
+        } else if (meta.facet === "source") {
+          if (foldedName) sources.add(foldedName);
+          for (let a = 0; a < foldedAliases.length; a++) {
+            sources.add(foldedAliases[a]);
+          }
+        }
+        if (facetSlugFolded && !BUILTIN_FACET_SLUGS.has(facetSlugFolded)) {
+          addCustomTerm(facetSlugFolded, foldedName);
+          for (let a = 0; a < foldedAncestors.length; a++) {
+            addCustomTerm(facetSlugFolded, foldedAncestors[a]);
+          }
+          for (let a = 0; a < foldedAliases.length; a++) {
+            addCustomTerm(facetSlugFolded, foldedAliases[a]);
+          }
+        }
+      } else {
+        if (foldedName) paths.add(foldedName);
+        const mappedSlug = facetSlugsById?.[t.id];
+        const rawSlug = mappedSlug ? internFolded(mappedSlug) : "";
+        if (rawSlug === "genre") {
+          if (foldedName) genres.add(foldedName);
+        } else if (rawSlug === "mood") {
+          if (foldedName) {
+            genres.add(foldedName);
+            moods.add(foldedName);
+          }
+        } else if (rawSlug === "source") {
+          if (foldedName) sources.add(foldedName);
+        } else if (rawSlug && !BUILTIN_FACET_SLUGS.has(rawSlug)) {
+          if (facetDomains?.[rawSlug] === "genres" && foldedName) {
+            genres.add(foldedName);
+          }
+          addCustomTerm(rawSlug, foldedName);
+        }
+      }
+    }
+    tagNamesFolded = names.size > 0 ? Array.from(names) : EMPTY_STRINGS;
+    tagPathsFolded = paths.size > 0 ? Array.from(paths) : EMPTY_STRINGS;
+    genreTagNamesFolded = genres.size > 0 ? Array.from(genres) : EMPTY_STRINGS;
+    moodTagNamesFolded = moods.size > 0 ? Array.from(moods) : EMPTY_STRINGS;
+    sourceTagNamesFolded = sources.size > 0 ? Array.from(sources) : EMPTY_STRINGS;
+    if (customSets.size > 0) {
+      const rec: Record<string, readonly string[]> = {};
+      for (const [slug, vals] of customSets.entries()) {
+        rec[slug] = Array.from(vals);
+      }
+      customFacetTermsFolded = rec;
+    }
+  }
+
   const detectedBpm = rawBpm ?? extractBpmFromStem(foldedStem);
 
   let effectiveCamelotKey = rawCamelotKey.trim().toUpperCase();
@@ -190,6 +349,11 @@ export function getIndexedSample(sample: SampleItem): IndexedSampleEntry {
     nameWords,
     parentWords: folderEntry.parentWords,
     tagNamesFolded,
+    tagPathsFolded,
+    genreTagNamesFolded,
+    moodTagNamesFolded,
+    sourceTagNamesFolded,
+    customFacetTermsFolded,
     detectedBpm,
     effectiveCamelotKey,
   };

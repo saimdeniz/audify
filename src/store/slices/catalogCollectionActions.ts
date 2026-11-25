@@ -359,6 +359,32 @@ export function createCatalogCollectionActions(ctx: StoreSliceContext) {
       }
     },
 
+    reparentCollection: async (
+      collectionId: number,
+      newParentId: number | null
+    ): Promise<Collection | null> => {
+      try {
+        const updated = await invokeCommand("reparent_collection", {
+          collectionId,
+          newParentId,
+        });
+        await get().refreshSidebarData();
+        const parentName = newParentId
+          ? get().collections.find((c) => c.id === newParentId)?.name
+          : null;
+        set({
+          statusMessage: parentName
+            ? `Moved "${updated.name}" inside "${parentName}"`
+            : `Moved "${updated.name}" to top-level Collections`,
+        });
+        return updated;
+      } catch (err) {
+        console.error("Failed to reparent collection:", err);
+        emitNotice(`Move collection error: ${String(err)}`, "error");
+        return null;
+      }
+    },
+
     deleteCollection: async (collectionId: number) => {
       try {
         const prevCollections = get().collections;

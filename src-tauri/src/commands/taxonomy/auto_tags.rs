@@ -7,29 +7,29 @@ use rusqlite::{params, Connection};
 use std::collections::HashMap;
 use tauri::State;
 
-struct SampleAutoTagInput {
-    id: i64,
-    file_path: String,
-    file_name: String,
-    duration_ms: i64,
-    old_is_loop: bool,
-    loop_is_manual: bool,
+pub(super) struct SampleAutoTagInput {
+    pub id: i64,
+    pub file_path: String,
+    pub file_name: String,
+    pub duration_ms: i64,
+    pub old_is_loop: bool,
+    pub loop_is_manual: bool,
 }
 
-struct ComputedSampleTags {
-    sample_id: i64,
-    new_is_loop: Option<bool>,
-    tags: Vec<String>,
+pub(super) struct ComputedSampleTags {
+    pub sample_id: i64,
+    pub new_is_loop: Option<bool>,
+    pub tags: Vec<String>,
 }
 
-struct PreparedAutoTagPlan {
-    active_id: i64,
-    rules: Vec<AutoTagRule>,
-    computed: Vec<ComputedSampleTags>,
-    assigned_count: usize,
+pub(super) struct PreparedAutoTagPlan {
+    pub active_id: i64,
+    pub rules: Vec<AutoTagRule>,
+    pub computed: Vec<ComputedSampleTags>,
+    pub assigned_count: usize,
 }
 
-const ACTIVE_PROFILE_VISIBLE_SAMPLES_SQL: &str = "
+pub(super) const ACTIVE_PROFILE_VISIBLE_SAMPLES_SQL: &str = "
     SELECT s.id
     FROM samples s
     INNER JOIN libraries l ON l.id = s.library_id
@@ -55,7 +55,7 @@ fn read_active_profile_settings(conn: &Connection) -> (i64, String) {
     (active_id, settings_json)
 }
 
-fn read_auto_tag_inputs(
+pub(super) fn read_auto_tag_inputs(
     conn: &Connection,
 ) -> Result<(i64, String, Vec<SampleAutoTagInput>), String> {
     let (active_id, settings_json) = read_active_profile_settings(conn);
@@ -90,7 +90,7 @@ fn read_auto_tag_inputs(
     Ok((active_id, settings_json, rows.flatten().collect()))
 }
 
-fn compute_auto_tag_plan(
+pub(super) fn compute_auto_tag_plan(
     active_id: i64,
     settings_json: &str,
     samples: Vec<SampleAutoTagInput>,
@@ -162,10 +162,17 @@ fn commit_auto_tag_plan(conn: &mut Connection, plan: &PreparedAutoTagPlan) -> Re
     )
     .map_err(|e| e.to_string())?;
 
+    // Only clear rule-generated tags in the `tags` domain; NEVER touch `genres`-domain links
+    // (auto-detected genres, moods, custom genre facets) or AI/manual assignments.
     let delete_sql = format!(
         "DELETE FROM sample_tags
          WHERE is_manual = 0
            AND COALESCE(source, 'auto') IN ('auto', 'auto_rule')
+           AND tag_id NOT IN (
+               SELECT t.id FROM tags t
+               INNER JOIN tag_facets f ON f.id = t.facet_id
+               WHERE f.domain = 'genres'
+           )
            AND sample_id IN ({})",
         ACTIVE_PROFILE_VISIBLE_SAMPLES_SQL
     );
@@ -196,21 +203,14 @@ fn commit_auto_tag_plan(conn: &mut Connection, plan: &PreparedAutoTagPlan) -> Re
         }
     }
 
-    // Prune ONLY auto-generated tags (`is_manual = 0`) that are no longer referenced anywhere.
-    let _ = tx.execute(
-        "DELETE FROM tags WHERE is_manual = 0 AND id NOT IN (SELECT DISTINCT tag_id FROM sample_tags)",
-        [],
-    );
+    // Prune ONLY auto-generated orphan leaf tags (protecting manual tags, system roots, and parents).
+    let _ = crate::db::prune_orphan_auto_tags(&tx);
 
     let fts_sql = format!(
         "UPDATE samples_fts
-         SET tags_text = COALESCE((
-             SELECT GROUP_CONCAT(t.name, ' ') || ' ' || REPLACE(REPLACE(GROUP_CONCAT(t.name, ' '), 'ı', 'i'), 'İ', 'i')
-             FROM sample_tags st
-             INNER JOIN tags t ON t.id = st.tag_id
-             WHERE st.sample_id = samples_fts.rowid
-         ), '')
+         SET tags_text = {}
          WHERE rowid IN ({})",
+        crate::db::FTS_TAGS_TEXT_SUBQUERY_SQL,
         ACTIVE_PROFILE_VISIBLE_SAMPLES_SQL
     );
     tx.execute(&fts_sql, params![plan.active_id])
@@ -245,7 +245,14 @@ pub async fn apply_auto_tag_rules_to_library(state: State<'_, AppState>) -> Resu
         };
         let plan = compute_auto_tag_plan(active_id, &settings_json, samples);
         let mut conn = state_cloned.lock_db();
-        commit_auto_tag_plan(&mut conn, &plan)
+        let snapshot =
+            super::auto_tags_undo::capture_auto_tag_undo_snapshot(&conn, plan.active_id)?;
+        let assigned = commit_auto_tag_plan(&mut conn, &plan)?;
+        *state_cloned
+            .last_auto_tag_undo
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(snapshot);
+        Ok(assigned)
     })
     .await
     .map_err(|e| format!("Auto-tag worker error: {}", e))?
@@ -288,21 +295,25 @@ fn preview_auto_tag_rule_with_conn(
 
     let mut match_count = 0;
     let mut sample_names = Vec::new();
+    let target_tag_name = rule.tag_name.clone();
     let rules_slice = [rule];
 
     for item in rows.flatten() {
-        let (file_path, file_name, duration_ms, is_loop) = item;
+        let (file_path, file_name, duration_ms, _is_loop) = item;
         let matched = match_auto_tags(
             &file_path,
             &file_name,
             duration_ms,
-            is_loop,
+            false,
             &rules_slice,
             &categories,
         );
-        if !matched.is_empty() {
+        if matched
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case(target_tag_name.trim()))
+        {
             match_count += 1;
-            if sample_names.len() < 5 {
+            if sample_names.len() < 12 {
                 sample_names.push(file_name);
             }
         }
@@ -461,5 +472,259 @@ mod tests {
             crate::security::validate_hex_color(&snare_color).is_ok(),
             "invalid rule tag color must fall back to valid hex"
         );
+    }
+
+    #[test]
+    fn preview_auto_tag_rule_ignores_is_loop_false_positives_and_caps_at_12() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        init_schema_on_conn(&conn).expect("init schema");
+        conn.execute(
+            "INSERT INTO libraries (id, path, name, is_global) VALUES (1, 'C:/SFX', 'SFX', 1)",
+            [],
+        )
+        .unwrap();
+
+        for i in 1..=15 {
+            conn.execute(
+                "INSERT INTO samples (library_id, file_path, file_name, extension, duration_ms, is_loop)
+                 VALUES (1, ?1, ?2, 'mp3', 1200, 1)",
+                params![
+                    format!("C:/SFX/mc/berry_bush_break_{}.mp3", i),
+                    format!("berry_bush_break_{}.mp3", i)
+                ],
+            )
+            .unwrap();
+        }
+        for i in 1..=15 {
+            conn.execute(
+                "INSERT INTO samples (library_id, file_path, file_name, extension, duration_ms, is_loop)
+                 VALUES (1, ?1, ?2, 'wav', 450, 0)",
+                params![
+                    format!("C:/SFX/weapons/sword_slash_{}.wav", i),
+                    format!("sword_slash_{}.wav", i)
+                ],
+            )
+            .unwrap();
+        }
+
+        let rule = AutoTagRule {
+            id: "r-sword".to_string(),
+            tag_name: "Melee".to_string(),
+            tag_color: "#EF4444".to_string(),
+            keywords: vec!["sword".to_string(), "slash".to_string()],
+            enabled: true,
+            include_paths: Some(Vec::new()),
+            exclude_paths: Some(Vec::new()),
+            rel_include_paths: Vec::new(),
+            rel_exclude_paths: Vec::new(),
+            category: None,
+            min_duration_ms: None,
+            max_duration_ms: None,
+            facet_slug: Some("category".to_string()),
+            parent_tag_name: Some("Action & Combat".to_string()),
+        };
+
+        let preview = super::preview_auto_tag_rule_with_conn(&conn, rule).expect("preview");
+        assert_eq!(preview.match_count, 15, "is_loop non-matching files must never be counted");
+        assert_eq!(preview.sample_names.len(), 12, "preview list should show up to 12 names");
+        assert!(
+            preview
+                .sample_names
+                .iter()
+                .all(|n| n.starts_with("sword_slash_")),
+            "unexpected non-matching sample in preview: {:?}",
+            preview.sample_names
+        );
+    }
+
+    #[test]
+    fn apply_auto_tags_preserves_genres_domain_tags_and_never_prunes_them() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        init_schema_on_conn(&conn).expect("init schema");
+
+        conn.execute(
+            "INSERT INTO libraries (id, path, name, is_global) VALUES (1, 'C:/Music', 'Music', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO samples (id, library_id, file_path, file_name, extension, duration_ms, genre)
+             VALUES (1, 1, 'C:/Music/acoustic_theme.mp3', 'acoustic_theme.mp3', 'mp3', 12000, 'Acoustic')",
+            [],
+        )
+        .unwrap();
+
+        // Seed both a legacy 'auto' Genre tag and a new 'auto_genre' Mood tag in genres-domain facets.
+        conn.execute(
+            "INSERT INTO tags (id, name, color, is_manual, facet_id, path)
+             VALUES
+               (201, 'Acoustic', '#3B82F6', 0, 2, '/201/'),
+               (202, 'Chill', '#EC4899', 0, 3, '/202/')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sample_tags (sample_id, tag_id, is_manual, source)
+             VALUES
+               (1, 201, 0, 'auto'),
+               (1, 202, 0, 'auto_genre')",
+            [],
+        )
+        .unwrap();
+
+        apply_auto_tag_rules_with_conn(&mut conn).expect("apply auto tags");
+
+        let surviving_links: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sample_tags WHERE sample_id = 1 AND tag_id IN (201, 202)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            surviving_links, 2,
+            "Apply rules must never delete genres-domain sample_tags links"
+        );
+
+        let surviving_tags: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tags WHERE id IN (201, 202)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            surviving_tags, 2,
+            "Apply rules must never prune auto-detected Genre or Mood tags"
+        );
+    }
+
+    #[test]
+    fn preview_impact_and_atomic_undo_restore_auto_tags_and_pruned_rows() {
+        use crate::commands::taxonomy::auto_tags_undo::{
+            capture_auto_tag_undo_snapshot, preview_auto_tag_rules_impact_with_conn,
+            restore_auto_tag_undo_snapshot_with_conn,
+        };
+        use crate::db::ensure_taxonomy_tag;
+
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        init_schema_on_conn(&conn).expect("init schema");
+
+        conn.execute(
+            "INSERT INTO libraries (id, path, name, is_global) VALUES (1, 'C:/SFX', 'SFX', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO samples (id, library_id, file_path, file_name, extension, duration_ms)
+             VALUES
+               (1, 1, 'C:/SFX/kick_heavy.wav', 'kick_heavy.wav', 'wav', 300),
+               (2, 1, 'C:/SFX/snare_tight.wav', 'snare_tight.wav', 'wav', 300)",
+            [],
+        )
+        .unwrap();
+
+        // Seed initial rule matching sample 1 ("TempKickAuto") + a manual tag on sample 1 that must never be touched
+        let initial_rules = serde_json::json!({
+            "autoTagCategories": [],
+            "autoTagRules": [
+                {
+                    "id": "r-kick",
+                    "tag_name": "TempKickAuto",
+                    "tag_color": "#EF4444",
+                    "keywords": ["kick"],
+                    "enabled": true,
+                    "facet_slug": "category"
+                }
+            ]
+        })
+        .to_string();
+        conn.execute(
+            "UPDATE profiles SET settings_json = ?1 WHERE id = 1",
+            params![initial_rules],
+        )
+        .unwrap();
+
+        let manual_tag = ensure_taxonomy_tag(&conn, "KeepManual", Some("category"), None, None, true).unwrap();
+        conn.execute(
+            "INSERT INTO sample_tags (sample_id, tag_id, is_manual, source) VALUES (1, ?1, 1, 'manual')",
+            params![manual_tag],
+        )
+        .unwrap();
+
+        apply_auto_tag_rules_with_conn(&mut conn).expect("initial apply");
+
+        // Now change rules: disable/remove TempKickAuto, enable TempSnareAuto
+        let next_rules = serde_json::json!({
+            "autoTagCategories": [],
+            "autoTagRules": [
+                {
+                    "id": "r-snare",
+                    "tag_name": "TempSnareAuto",
+                    "tag_color": "#3B82F6",
+                    "keywords": ["snare"],
+                    "enabled": true,
+                    "facet_slug": "category"
+                }
+            ]
+        })
+        .to_string();
+        conn.execute(
+            "UPDATE profiles SET settings_json = ?1 WHERE id = 1",
+            params![next_rules],
+        )
+        .unwrap();
+
+        let impact = preview_auto_tag_rules_impact_with_conn(&conn, false).expect("preview impact");
+        assert_eq!(impact.added_links, 1, "should preview +1 link on snare_tight.wav");
+        assert_eq!(impact.removed_links, 1, "should preview -1 link on kick_heavy.wav");
+        assert_eq!(impact.affected_samples, 2, "2 distinct samples affected");
+
+        // Capture undo snapshot right before applying new rules (which prunes orphan TempKickAuto!)
+        let snapshot = capture_auto_tag_undo_snapshot(&conn, 1).expect("capture snapshot");
+        apply_auto_tag_rules_with_conn(&mut conn).expect("apply updated rules");
+
+        let kick_after_apply: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tags WHERE name = 'TempKickAuto'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kick_after_apply, 0, "orphan auto tag TempKickAuto was pruned on apply");
+
+        // Undo restores pruned TempKickAuto + link on sample 1, removes TempSnareAuto, preserves KeepManual
+        restore_auto_tag_undo_snapshot_with_conn(&mut conn, &snapshot).expect("undo apply");
+
+        let restored_kick_link: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sample_tags st
+                 INNER JOIN tags t ON t.id = st.tag_id
+                 WHERE st.sample_id = 1 AND t.name = 'TempKickAuto' AND st.source = 'auto_rule'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(restored_kick_link, 1, "TempKickAuto tag & sample link restored");
+
+        let snare_link_after_undo: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sample_tags st
+                 INNER JOIN tags t ON t.id = st.tag_id
+                 WHERE t.name = 'TempSnareAuto'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(snare_link_after_undo, 0, "TempSnareAuto link removed on undo");
+
+        let manual_preserved: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sample_tags WHERE sample_id = 1 AND tag_id = ?1 AND is_manual = 1",
+                params![manual_tag],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(manual_preserved, 1, "manual tag untouched across apply & undo");
     }
 }

@@ -87,6 +87,16 @@ export const GlobalTooltip: React.FC = () => {
   const cachedWidthRef = useRef<number>(0);
 
   useEffect(() => {
+    const FLOATING_PORTAL_SELECTOR =
+      "[data-popover-portal='true'], [data-context-menu-portal='true'], [data-color-picker-portal='true'], [data-quick-create-portal='true']";
+
+    const isBlockedByOpenPortal = (el: HTMLElement | null): boolean => {
+      if (!el) return false;
+      const openPortal = document.querySelector(FLOATING_PORTAL_SELECTOR);
+      if (!openPortal) return false;
+      return !el.closest(FLOATING_PORTAL_SELECTOR);
+    };
+
     const isDragActive = () =>
       isOsDragCurrentlyInFlight() ||
       useSampleStore.getState().inAppDragSample !== null;
@@ -114,8 +124,8 @@ export const GlobalTooltip: React.FC = () => {
         "[title], [data-tooltip]"
       );
 
-      if (!target) {
-        if (currentTargetRef.current) {
+      if (!target || isBlockedByOpenPortal(target)) {
+        if (currentTargetRef.current || visibleRef.current) {
           hideImmediately();
         }
         return;
@@ -198,7 +208,11 @@ export const GlobalTooltip: React.FC = () => {
 
       timerRef.current = window.setTimeout(() => {
         timerRef.current = null;
-        if (!target.isConnected || currentTargetRef.current !== target) {
+        if (
+          !target.isConnected ||
+          currentTargetRef.current !== target ||
+          isBlockedByOpenPortal(target)
+        ) {
           return;
         }
         // Re-read in case React updated or cleared title/data-tooltip while waiting

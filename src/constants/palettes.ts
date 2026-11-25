@@ -1,4 +1,5 @@
 import { AccentColorOption } from "../types";
+import { generateDeterministicFullSpectrumColor } from "../utils/taxonomyColor";
 
 export const ACCENT_COLORS: AccentColorOption[] = [
   {
@@ -59,6 +60,17 @@ export const ACCENT_COLORS: AccentColorOption[] = [
   },
 ];
 
+export const FAMILY_COLOR_PALETTE: string[] = [
+  "#22C55E", // Nature / Animals
+  "#EF4444", // Action & Combat
+  "#F59E0B", // Foley & Material
+  "#14B8A6", // Nature & Ambience
+  "#0EA5E9", // Sci-Fi & Tech
+  "#8B5CF6", // Voice & Music
+  "#EC4899", // Mood / Dramatic
+  "#64748B", // Neutral / Source
+];
+
 export const STUDIO_COLOR_PALETTE: string[] = [
   "#EF4444", "#F97316", "#F59E0B", "#EAB308", "#84CC16", "#22C55E",
   "#10B981", "#14B8A6", "#06B6D4", "#0EA5E9", "#3B82F6", "#6366F1",
@@ -68,16 +80,7 @@ export const STUDIO_COLOR_PALETTE: string[] = [
   "#0D9488", "#059669",
 ];
 
-export const TAG_COLOR_PALETTE: string[] = STUDIO_COLOR_PALETTE;
-
 export function deterministicColorForName(name: string): string {
-  if (!name || !name.trim()) return STUDIO_COLOR_PALETTE[0];
-  let hash = 5381;
-  const lower = name.trim().toLowerCase();
-  for (let i = 0; i < lower.length; i++) {
-    hash = ((hash << 5) + hash) + lower.charCodeAt(i);
-    hash |= 0;
-  }
-  const idx = Math.abs(hash) % STUDIO_COLOR_PALETTE.length;
-  return STUDIO_COLOR_PALETTE[idx];
+  if (!name || !name.trim()) return FAMILY_COLOR_PALETTE[0];
+  return generateDeterministicFullSpectrumColor(name);
 }

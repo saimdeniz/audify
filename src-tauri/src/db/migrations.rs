@@ -530,6 +530,45 @@ pub(crate) fn run_schema_migrations(conn: &Connection) -> Result<(), String> {
         .map_err(|e| format!("Failed to apply v16 redundant sample index cleanup migration: {}", e))?;
     }
 
+    let ver_v17: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap_or(0);
+    if ver_v17 < 17 {
+        super::migration_v17::run_v17_taxonomy_migration(conn)?;
+    }
+
+    let ver_v18: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap_or(0);
+    if ver_v18 < 18 {
+        ensure_column(conn, "tag_facets", "domain", "TEXT NOT NULL DEFAULT 'tags'")?;
+        ensure_column(
+            conn,
+            "tag_facets",
+            "allow_nesting",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        conn.execute_batch(
+            "
+            BEGIN IMMEDIATE TRANSACTION;
+            UPDATE tag_facets SET domain = 'tags',   allow_nesting = 1 WHERE slug = 'category';
+            UPDATE tag_facets SET domain = 'genres', allow_nesting = 1 WHERE slug = 'genre';
+            UPDATE tag_facets SET domain = 'genres', allow_nesting = 0 WHERE slug = 'mood';
+            UPDATE tag_facets SET domain = 'tags',   allow_nesting = 0 WHERE slug = 'source';
+            COMMIT;
+            PRAGMA user_version = 18;
+            ",
+        )
+        .map_err(|e| format!("Failed to apply v18 custom facets migration: {}", e))?;
+    }
+
+    let ver_v19: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap_or(0);
+    if ver_v19 < 19 {
+        super::migration_v19::run_v19_genre_recovery_migration(conn)?;
+    }
+
     Ok(())
 }
 
@@ -609,12 +648,12 @@ mod tests {
         )
         .expect("seed v1 db");
 
-        init_schema_on_conn(&conn).expect("migrate v1 schema to v16");
+        init_schema_on_conn(&conn).expect("migrate v1 schema to v19");
 
         let user_version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("read user_version");
-        assert_eq!(user_version, 16);
+        assert_eq!(user_version, 19);
 
         let migrated_fav_count: i64 = conn
             .query_row(
@@ -813,12 +852,12 @@ mod tests {
         )
         .expect("downgrade to v12 state");
 
-        run_schema_migrations(&conn).expect("migrate v12 -> v16");
+        run_schema_migrations(&conn).expect("migrate v12 -> v19");
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 16);
+        assert_eq!(version, 19);
 
         for dropped in ["idx_samples_file_path_nocase", "idx_samples_library_id"] {
             let exists: i64 = conn
@@ -857,5 +896,251 @@ mod tests {
             )
             .unwrap();
         assert_eq!(hashes_table_exists, 1);
+    }
+
+    #[test]
+    fn migrates_v16_to_v17_preserving_manual_tags_cleaning_noise_and_enabling_fts_ancestors() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        // Seed a realistic v16 schema state with legacy flat tags, noisy auto/AI tags, and genres
+        init_schema_on_conn(&conn).expect("init baseline schema");
+        conn.execute_batch(
+            "
+            INSERT INTO libraries (id, path, name, is_global) VALUES (1, 'C:/Audio', 'Audio', 1);
+            INSERT INTO samples (id, library_id, file_path, file_name, extension, duration_ms, genre, genre_is_manual, is_loop)
+            VALUES
+              (1, 1, 'C:/Audio/dog_bark.wav', 'dog_bark.wav', 'wav', 600, 'Sountrack', 1, 0),
+              (2, 1, 'C:/Audio/whisper.wav', 'whisper.wav', 'wav', 900, 'Dark', 0, 0),
+              (3, 1, 'C:/Audio/pika_cry.wav', 'pika_cry.wav', 'wav', 400, 'Ambient', 1, 1),
+              (4, 1, 'C:/Audio/synth_pad.wav', 'synth_pad.wav', 'wav', 3000, '', 0, 0);
+
+            INSERT INTO genres (name, color) VALUES
+              ('Ambient', '#3B82F6'),
+              ('Dark', '#F59E0B'),
+              ('Sountrack', '#22C55E');
+
+            INSERT INTO tags (id, name, color, is_manual) VALUES
+              (101, 'MyCustomTag', '#112233', 1),
+              (102, 'Voice', '#7C3AED', 1),
+              (103, 'Vocal', '#8B5CF6', 0),
+              (104, 'Animals', '#84CC16', 0),
+              (105, 'Dog', '#84CC16', 0),
+              (106, 'Pokemon', '#EAB308', 0),
+              (107, 'Loop', '#EAB308', 0),
+              (108, 'Combat', '#EF4444', 0);
+
+            INSERT INTO sample_tags (sample_id, tag_id, is_manual, source) VALUES
+              (1, 101, 1, 'manual'),
+              (1, 104, 1, 'manual'),
+              (1, 105, 0, 'auto_rule'),
+              (2, 102, 1, 'manual'),
+              (3, 106, 0, 'auto_rule'),
+              (3, 107, 0, 'auto_rule'),
+              (4, 104, 0, 'ai_auto'),
+              (4, 108, 0, 'auto_rule');
+
+            PRAGMA user_version = 16;
+            ",
+        )
+        .expect("seed v16 data");
+
+        run_schema_migrations(&conn).expect("migrate v16 -> v19");
+
+        let ver: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ver, 19);
+
+        // Manual custom tag preserved intact
+        let custom_kept: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sample_tags st JOIN tags t ON t.id = st.tag_id
+                 WHERE st.sample_id = 1 AND t.name = 'MyCustomTag' AND st.source = 'manual'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(custom_kept, 1);
+
+        // Voice merged into Vocal with 'Voice' alias & manual link preserved on sample 2
+        let voice_gone: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tags WHERE LOWER(name) = 'voice'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(voice_gone, 0);
+        let vocal_aliases: String = conn
+            .query_row("SELECT aliases_json FROM tags WHERE name = 'Vocal'", [], |r| r.get(0))
+            .unwrap();
+        assert!(vocal_aliases.contains("Voice"));
+        let vocal_link: String = conn
+            .query_row(
+                "SELECT st.source FROM sample_tags st JOIN tags t ON t.id = st.tag_id
+                 WHERE st.sample_id = 2 AND t.name = 'Vocal'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(vocal_link, "manual");
+
+        // Sountrack typo normalized to Soundtrack (Genre facet=2) with manual provenance
+        let s1_genre: String = conn
+            .query_row("SELECT genre FROM samples WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(s1_genre, "Soundtrack");
+        let dark_facet: i64 = conn
+            .query_row("SELECT facet_id FROM tags WHERE name = 'Dark'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(dark_facet, 3, "Dark should be in mood facet");
+
+        // Pokemon moved to source facet (4)
+        let poke_facet: i64 = conn
+            .query_row("SELECT facet_id FROM tags WHERE name = 'Pokemon'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(poke_facet, 4);
+
+        // Auto Loop link retired
+        let loop_links: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sample_tags st JOIN tags t ON t.id = st.tag_id WHERE LOWER(t.name) = 'loop'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(loop_links, 0);
+
+        // Animals ai_auto on synth_pad (sample 4) cleaned, manual Animals on sample 1 preserved
+        let ai_animals: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sample_tags st JOIN tags t ON t.id = st.tag_id
+                 WHERE st.sample_id = 4 AND t.name = 'Animals'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ai_animals, 0);
+        let manual_animals: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sample_tags st JOIN tags t ON t.id = st.tag_id
+                 WHERE st.sample_id = 1 AND t.name = 'Animals' AND st.source = 'manual'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(manual_animals, 1);
+
+        // Dog placed under Animals parent with valid materialized path
+        let (animals_id, dog_parent, dog_path): (i64, Option<i64>, String) = conn
+            .query_row(
+                "SELECT a.id, d.parent_id, d.path FROM tags a JOIN tags d ON d.name = 'Dog' WHERE a.name = 'Animals'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(dog_parent, Some(animals_id));
+        assert!(dog_path.starts_with(&format!("/{}/", animals_id)));
+
+        // FTS5 ancestor + alias indexing: searching 'animals' matches Dog, searching 'voice' matches Vocal
+        let fts_voice: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM samples_fts WHERE rowid = 2 AND samples_fts MATCH 'voice'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(fts_voice, 1, "FTS5 alias search 'voice' must match Vocal sample");
+        let fts_animals: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM samples_fts WHERE rowid = 1 AND samples_fts MATCH 'animals'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(fts_animals, 1, "FTS5 ancestor search 'animals' must match Dog sample");
+    }
+
+    #[test]
+    fn migrates_v17_to_v18_backfilling_facet_domains_and_nesting_flags() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        init_schema_on_conn(&conn).expect("init baseline schema");
+        conn.execute_batch(
+            "
+            UPDATE tag_facets SET domain = 'tags', allow_nesting = 0;
+            PRAGMA user_version = 17;
+            ",
+        )
+        .expect("simulate v17 state");
+
+        run_schema_migrations(&conn).expect("migrate v17 -> v19");
+
+        let ver: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ver, 19);
+
+        let check = |slug: &str| -> (String, i64) {
+            conn.query_row(
+                "SELECT domain, allow_nesting FROM tag_facets WHERE slug = ?1",
+                [slug],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        };
+        assert_eq!(check("category"), ("tags".to_string(), 1));
+        assert_eq!(check("source"), ("tags".to_string(), 0));
+        assert_eq!(check("genre"), ("genres".to_string(), 1));
+        assert_eq!(check("mood"), ("genres".to_string(), 0));
+    }
+
+    #[test]
+    fn migrates_v18_to_v19_recovering_orphaned_sample_genres_and_upgrading_sources() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        init_schema_on_conn(&conn).expect("init baseline schema");
+        conn.execute_batch(
+            "
+            INSERT INTO libraries (id, path, name, is_global) VALUES (1, 'C:/Music', 'Music', 1);
+            INSERT INTO samples (id, library_id, file_path, file_name, extension, duration_ms, genre, genre_is_manual)
+            VALUES
+              (1, 1, 'C:/Music/track_a.mp3', 'track_a.mp3', 'mp3', 30000, 'Acoustic', 0),
+              (2, 1, 'C:/Music/track_b.mp3', 'track_b.mp3', 'mp3', 30000, 'Synthwave', 0);
+
+            INSERT INTO tags (id, name, color, is_manual, facet_id, path)
+            VALUES (300, 'Synthwave', '#8B5CF6', 0, 2, '/300/');
+
+            INSERT INTO sample_tags (sample_id, tag_id, is_manual, source)
+            VALUES (2, 300, 0, 'auto');
+
+            PRAGMA user_version = 18;
+            ",
+        )
+        .expect("seed v18 orphaned genre state");
+
+        run_schema_migrations(&conn).expect("migrate v18 -> v19");
+
+        let ver: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ver, 19);
+
+        // Orphaned sample 1 ('Acoustic') recovered into Genre facet with source='auto_genre'
+        let (acoustic_facet, acoustic_source): (i64, String) = conn
+            .query_row(
+                "SELECT t.facet_id, st.source
+                 FROM sample_tags st
+                 INNER JOIN tags t ON t.id = st.tag_id
+                 WHERE st.sample_id = 1 AND t.name = 'Acoustic'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("recovered Acoustic genre tag link");
+        assert_eq!(acoustic_facet, 2);
+        assert_eq!(acoustic_source, "auto_genre");
+
+        // Existing sample 2 ('Synthwave') legacy source='auto' upgraded to 'auto_genre'
+        let synth_source: String = conn
+            .query_row(
+                "SELECT source FROM sample_tags WHERE sample_id = 2 AND tag_id = 300",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(synth_source, "auto_genre");
     }
 }

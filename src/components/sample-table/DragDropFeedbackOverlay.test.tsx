@@ -56,7 +56,7 @@ describe("DragDropFeedbackOverlay hybrid collapsed-sidebar & Mini Dock layout", 
     });
   });
 
-  it("shifts full overlay 256px right and stays below z-50 sidebar flyout in wide Normal View", async () => {
+  it("shifts full overlay 280px right and stays below z-50 sidebar flyout in wide Normal View", async () => {
     const { container } = render(<DragDropFeedbackOverlay />);
 
     act(() => {
@@ -76,7 +76,7 @@ describe("DragDropFeedbackOverlay hybrid collapsed-sidebar & Mini Dock layout", 
       '[data-drag-overlay-mode="full"]'
     );
     expect(overlay).not.toBeNull();
-    expect(overlay?.style.left).toBe("256px");
+    expect(overlay?.style.left).toBe("280px");
     expect(Number(overlay?.style.zIndex)).toBe(Z_INDEX.dragFeedback);
     expect(Number(overlay?.style.zIndex)).toBeLessThan(50);
   });

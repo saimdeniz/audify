@@ -63,7 +63,7 @@ const SettingsModalInner: React.FC<{ standalone?: boolean }> = ({
   const [collectionsSubTab, setCollectionsSubTab] = useState<
     "list" | "templates"
   >("list");
-  const [tagsSubTab, setTagsSubTab] = useState<"rules" | "library">("rules");
+  const [tagsSubTab, setTagsSubTab] = useState<"library" | "rules">("library");
   const [recordingAction, setRecordingAction] = useState<
     keyof KeyboardShortcuts | null
   >(null);

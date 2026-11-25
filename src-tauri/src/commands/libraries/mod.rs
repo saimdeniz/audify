@@ -209,15 +209,8 @@ pub(crate) fn remove_library_with_conn(
     tx.execute_batch(crate::db::SAMPLE_TAGS_FTS_TRIGGERS_SQL)
         .map_err(|e| format!("Failed restoring tag FTS triggers after library removal: {}", e))?;
 
-    // Clean up orphaned auto-tags and auto-genres while preserving user-created ones!
-    let _ = tx.execute(
-        "DELETE FROM tags WHERE is_manual = 0 AND id NOT IN (SELECT DISTINCT tag_id FROM sample_tags)",
-        [],
-    );
-    let _ = tx.execute(
-        "DELETE FROM genres WHERE is_manual = 0 AND LOWER(name) NOT IN (SELECT DISTINCT LOWER(genre) FROM samples WHERE genre != '')",
-        [],
-    );
+    // Clean up orphaned auto-tags and auto-genres while preserving user-created ones, system roots, and parent tags!
+    let _ = crate::db::prune_orphan_auto_tags(&tx);
     tx.commit()
         .map_err(|e| format!("Failed committing library removal: {}", e))?;
 

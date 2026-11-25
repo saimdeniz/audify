@@ -1,140 +1,10 @@
-import React, {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useState,
-} from "react";
+import React, { useLayoutEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Z_INDEX } from "../../constants/zIndex";
-import { useSampleStore } from "../../store/useSampleStore";
-import type { Genre, Tag } from "../../types";
-import {
-  applyAutocompleteSuggestion,
-  getSearchAutocompleteSuggestions,
-  type SearchAutocompleteContext,
-  type SearchAutocompleteItem,
+import type {
+  SearchAutocompleteContext,
+  SearchAutocompleteItem,
 } from "../../utils/search/searchAutocomplete";
-
-export function useSearchAutocomplete({
-  enabled,
-  searchQuery,
-  tags,
-  genres,
-  searchInputRef,
-  setSearchQuery,
-}: {
-  enabled: boolean;
-  searchQuery: string;
-  tags: readonly Tag[];
-  genres: readonly Genre[];
-  searchInputRef: React.RefObject<HTMLInputElement>;
-  setSearchQuery: (q: string) => void;
-}) {
-  const folderStats = useSampleStore((s) => s.folderStats);
-  const [isFocused, setIsFocused] = useState(false);
-  const [cursorPos, setCursorPos] = useState(0);
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [dismissedToken, setDismissedToken] = useState<string | null>(null);
-
-  const context = useMemo(() => {
-    if (!enabled || !isFocused) return null;
-    const ctx = getSearchAutocompleteSuggestions(
-      searchQuery,
-      cursorPos,
-      tags,
-      genres,
-      folderStats
-    );
-    if (!ctx || ctx.rawToken === dismissedToken) return null;
-    return ctx;
-  }, [
-    enabled,
-    isFocused,
-    searchQuery,
-    cursorPos,
-    tags,
-    genres,
-    folderStats,
-    dismissedToken,
-  ]);
-
-  useEffect(() => {
-    setActiveIndex(0);
-  }, [context?.rawToken, context?.items.length]);
-
-  const accept = useCallback(
-    (item: SearchAutocompleteItem) => {
-      if (!context) return;
-      const { nextQuery, nextCursor } = applyAutocompleteSuggestion(
-        searchQuery,
-        context,
-        item
-      );
-      setDismissedToken(null);
-      setSearchQuery(nextQuery);
-      setCursorPos(nextCursor);
-      requestAnimationFrame(() => {
-        const input = searchInputRef.current;
-        if (input) {
-          input.focus();
-          input.setSelectionRange(nextCursor, nextCursor);
-        }
-      });
-    },
-    [context, searchQuery, setSearchQuery, searchInputRef]
-  );
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>): boolean => {
-      if (!context || context.items.length === 0) return false;
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setActiveIndex((i) => (i + 1) % context.items.length);
-        return true;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setActiveIndex(
-          (i) => (i - 1 + context.items.length) % context.items.length
-        );
-        return true;
-      }
-      if (e.key === "Tab" || e.key === "Enter") {
-        e.preventDefault();
-        const chosen = context.items[activeIndex] ?? context.items[0];
-        if (chosen) accept(chosen);
-        return true;
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        setDismissedToken(context.rawToken);
-        return true;
-      }
-      return false;
-    },
-    [context, activeIndex, accept]
-  );
-
-  return {
-    context,
-    activeIndex,
-    setActiveIndex,
-    accept,
-    handleKeyDown,
-    onFocus: (pos: number) => {
-      setIsFocused(true);
-      setCursorPos(pos);
-    },
-    onBlur: () => setIsFocused(false),
-    onCursorChange: (pos: number) => setCursorPos(pos),
-    onValueChange: (pos: number) => {
-      setDismissedToken(null);
-      setCursorPos(pos);
-    },
-  };
-}
 
 interface SmartSearchAutocompleteProps {
   context: SearchAutocompleteContext;
@@ -228,7 +98,6 @@ export const SmartSearchAutocomplete: React.FC<SmartSearchAutocompleteProps> =
                 aria-selected={isActive}
                 onMouseEnter={() => onHoverIndex(idx)}
                 onMouseDown={(e) => {
-                  // Prevent input blur before insertion completes
                   e.preventDefault();
                   onSelect(item);
                 }}
@@ -239,25 +108,36 @@ export const SmartSearchAutocomplete: React.FC<SmartSearchAutocompleteProps> =
                 }`}
               >
                 <span className="flex items-center gap-2 min-w-0">
-                  {item.color && (
+                  {item.color ? (
                     <span
                       className="w-2 h-2 rounded-[2px] shrink-0"
                       style={{ backgroundColor: item.color }}
                     />
-                  )}
+                  ) : item.kind === "source" || item.facetBadge === "SRC" ? (
+                    <span className="font-mono text-[10px] text-fg-3 shrink-0 w-2 text-center">
+                      #
+                    </span>
+                  ) : null}
                   <span className="truncate font-mono text-[11px]">
                     {item.label}
                   </span>
                 </span>
-                {item.meta && (
-                  <span
-                    className={`font-mono tabular-nums text-[10px] shrink-0 ${
-                      isActive ? "text-accent-fg" : "text-fg-3"
-                    }`}
-                  >
-                    {item.meta}
-                  </span>
-                )}
+                <span className="flex items-center gap-1.5 shrink-0">
+                  {item.facetBadge && (
+                    <span className="font-mono text-[8.5px] uppercase tracking-wider px-1 py-0.2 rounded-[2px] border border-line bg-surface-3 text-fg-3">
+                      {item.facetBadge}
+                    </span>
+                  )}
+                  {item.meta && (
+                    <span
+                      className={`font-mono tabular-nums text-[10px] shrink-0 ${
+                        isActive ? "text-accent-fg" : "text-fg-3"
+                      }`}
+                    >
+                      {item.meta}
+                    </span>
+                  )}
+                </span>
               </button>
             );
           })}

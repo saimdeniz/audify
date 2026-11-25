@@ -182,9 +182,9 @@ button:disabled {
   cursor: not-allowed;
 }
 
-/* Press: 1px physical push + neutral overlay (works on any theme/accent); skip OS window caption buttons */
-button:not(:disabled):not([data-window-caption="true"]):active,
-[role="button"]:active {
+/* Press: 1px physical push + neutral overlay (works on any theme/accent); skip OS window caption buttons and tree toggle controls */
+button:not(:disabled):not([data-window-caption="true"]):not([data-no-press-shift="true"]):active,
+[role="button"]:not([data-no-press-shift="true"]):active {
   transform: translateY(1px);
   box-shadow: inset 0 0 0 999px rgb(128 128 128 / 0.22);
 }

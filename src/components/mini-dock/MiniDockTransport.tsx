@@ -47,10 +47,11 @@ export const MiniDockTransport: React.FC = () => {
           type="button"
           onMouseDown={(e) => e.preventDefault()}
           onClick={togglePlayPause}
+          aria-label={isPlaying ? "Pause" : "Play"}
           className={`w-[30px] h-[24px] border rounded-sm flex items-center justify-center transition-colors shadow-xs ${
             isPlaying
               ? "bg-accent text-accent-on border-accent"
-              : "bg-accent-soft hover:bg-accent text-accent-fg hover:text-accent-on border-accent/80"
+              : "bg-surface-3 text-fg border-line-strong hover:border-accent"
           }`}
           title="Play / Pause (Space)"
         >

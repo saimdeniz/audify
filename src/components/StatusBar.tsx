@@ -38,6 +38,7 @@ export const TopHeaderBar: React.FC = React.memo(() => {
         s.favoriteOnly ||
         s.recentOnly ||
         s.selectedTagIds.length > 0 ||
+        s.excludedTagIds.length > 0 ||
         s.selectedGenre ||
         s.selectedCollectionId !== null ||
         s.selectedLicenseGroupId !== null ||
@@ -55,6 +56,7 @@ export const TopHeaderBar: React.FC = React.memo(() => {
         !s.folderFilter &&
         !s.recentOnly &&
         s.selectedTagIds.length === 0 &&
+        s.excludedTagIds.length === 0 &&
         !s.selectedGenre &&
         s.selectedCollectionId === null &&
         s.selectedLicenseGroupId === null &&
@@ -227,6 +229,8 @@ export const BottomStatusBar: React.FC = React.memo(() => {
   const favoriteOnly = useSampleStore((s) => s.favoriteOnly);
   const selectedCollectionId = useSampleStore((s) => s.selectedCollectionId);
   const selectedTagCount = useSampleStore((s) => s.selectedTagIds.length);
+  const excludedTagCount = useSampleStore((s) => s.excludedTagIds.length);
+  const selectedGenre = useSampleStore((s) => s.selectedGenre);
   const collections = useSampleStore((s) => s.collections);
   const inAppDragSample = useSampleStore((s) => s.inAppDragSample);
   const inAppDragCount = useSampleStore((s) => s.inAppDragSamples.length);
@@ -323,11 +327,23 @@ export const BottomStatusBar: React.FC = React.memo(() => {
             <span>Favorites</span>
           </span>
         )}
+        {selectedGenre && (
+          <span className="text-accent-fg inline-flex items-center space-x-0.5">
+            <span>♫ {selectedGenre}</span>
+          </span>
+        )}
         {selectedTagCount > 0 && (
           <span className="text-accent-fg inline-flex items-center space-x-0.5">
             <Hash className="w-3 h-3" />
             <span>
-              {selectedTagCount} tag{selectedTagCount > 1 ? "s" : ""}
+              {selectedTagCount} filter{selectedTagCount > 1 ? "s" : ""}
+            </span>
+          </span>
+        )}
+        {excludedTagCount > 0 && (
+          <span className="text-fg-2 inline-flex items-center space-x-0.5">
+            <span>
+              NOT {excludedTagCount}
             </span>
           </span>
         )}

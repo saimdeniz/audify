@@ -1,4 +1,5 @@
 import type { AiSimilarityScope, SortDir, SortKey } from "./types/aiAndSearch";
+import type { TaxonomyDomain, TaxonomyFacetSlug } from "./types/profileAndSettings";
 
 export * from "./types/aiAndSearch";
 export * from "./types/profileAndSettings";
@@ -15,11 +16,32 @@ export interface Library {
   is_read_only?: boolean;
 }
 
+export interface TagFacet {
+  id: number;
+  slug: TaxonomyFacetSlug;
+  name: string;
+  color: string;
+  sort_order: number;
+  is_system: boolean;
+  domain?: TaxonomyDomain;
+  allow_nesting?: boolean;
+}
+
 export interface Tag {
   id: number;
   name: string;
   color: string;
   sample_count: number;
+  facet_id?: number;
+  facet_slug?: TaxonomyFacetSlug;
+  parent_id?: number | null;
+  path?: string;
+  aliases?: string[];
+  effective_color?: string;
+  color_inherited?: boolean;
+  is_system?: boolean;
+  sort_order?: number;
+  rollup_count?: number;
 }
 
 export interface Genre {
@@ -27,6 +49,7 @@ export interface Genre {
   name: string;
   color: string;
   sample_count: number;
+  facet_slug?: TaxonomyFacetSlug;
 }
 
 export interface Collection {

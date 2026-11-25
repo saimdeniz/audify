@@ -4,6 +4,7 @@ import type {
   AiModelStatus,
   AiTaggingMode,
   AiTagSuggestionItem,
+  AutoTagImpactPreview,
   BatchRenameEntryInput,
   BatchRenameRecord,
   Collection,
@@ -18,6 +19,9 @@ import type {
   SliceHistoryEntry,
   SliceRenameOutcome,
   SliceTrashSummary,
+  Tag,
+  TagFacet,
+  TaxonomyFacetSlug,
   TrashActionSummary,
 } from "../types";
 
@@ -53,9 +57,92 @@ export interface AudifyCommandMap {
     args: { sampleIds: number[] | null; tagId: number };
     result: void;
   };
-  clear_sample_tags_batch: {
-    args: { sampleIds: number[] | null };
+  unassign_tag_batch: {
+    args: { sampleIds: number[] | null; tagId: number };
     result: void;
+  };
+  clear_sample_tags_batch: {
+    args: {
+      sampleIds: number[] | null;
+      facetSlugs?: TaxonomyFacetSlug[] | null;
+    };
+    result: void;
+  };
+  get_tag_facets: {
+    args: Record<string, never>;
+    result: TagFacet[];
+  };
+  create_tag_facet: {
+    args: {
+      name: string;
+      domain: "tags" | "genres";
+      color: string;
+      allowNesting: boolean;
+    };
+    result: TagFacet;
+  };
+  update_tag_facet: {
+    args: {
+      facetId: number;
+      name?: string | null;
+      color?: string | null;
+      allowNesting?: boolean | null;
+    };
+    result: TagFacet;
+  };
+  delete_tag_facet: {
+    args: { facetId: number };
+    result: number;
+  };
+  reorder_tag_facets: {
+    args: { orderedFacetIds: number[] };
+    result: void;
+  };
+  reorder_taxonomy_items: {
+    args: { orderedTagIds: number[] };
+    result: void;
+  };
+  preview_auto_tag_rules_impact: {
+    args: Record<string, never>;
+    result: AutoTagImpactPreview;
+  };
+  undo_last_auto_tag_apply: {
+    args: Record<string, never>;
+    result: number;
+  };
+  reparent_collection: {
+    args: {
+      collectionId: number;
+      newParentId: number | null;
+    };
+    result: Collection;
+  };
+  update_tag_taxonomy: {
+    args: {
+      tagId: number;
+      facetSlug?: TaxonomyFacetSlug | null;
+      parentId?: number | null;
+      clearParent?: boolean | null;
+      colorInherited?: boolean | null;
+      aliases?: string[] | null;
+      sortOrder?: number | null;
+    };
+    result: Tag;
+  };
+  merge_tags: {
+    args: {
+      sourceTagId: number;
+      targetTagId: number;
+      addSourceAsAlias?: boolean | null;
+    };
+    result: Tag;
+  };
+  harmonize_taxonomy_colors: {
+    args: {
+      facetSlug?: string | null;
+      parentTagId?: number | null;
+    };
+    result: number;
   };
   assign_sample_genre_batch: {
     args: { sampleIds: number[] | null; genreName: string };

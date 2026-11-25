@@ -163,6 +163,87 @@ export function useSampleTableInteractions({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [searchInputRef]);
 
+  // Rapid Tag / Genre keyboard shortcuts (`T` / `G`) anchored to selected row
+  useEffect(() => {
+    const onOpenRapidPicker = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ mode?: "tags" | "genres" }>).detail;
+      const mode = detail?.mode;
+      if (mode !== "tags" && mode !== "genres") return;
+
+      const state = useSampleStore.getState();
+      if (state.trashFilterActive || state.slicesFilterActive) return;
+      const anchorId =
+        state.selectedSample?.id ?? state.selectedSampleIds[0] ?? null;
+      if (!anchorId || anchorId <= 0) return;
+
+      setContextMenu(null);
+      setHoverOverflowTags(null);
+      setBatchPopover(null);
+      setShowColumnPicker(false);
+      setShowSearchHelper(false);
+
+      const selector =
+        mode === "tags"
+          ? `[data-row-tag-btn="${anchorId}"]`
+          : `[data-row-genre-btn="${anchorId}"]`;
+      const btnEl = document.querySelector<HTMLElement>(selector);
+      const rowEl =
+        btnEl ??
+        document.querySelector<HTMLElement>(`[data-sample-row-id="${anchorId}"]`);
+      const anchorRect = rowEl?.getBoundingClientRect();
+
+      let x = 360;
+      let y = 120;
+      if (anchorRect && anchorRect.width > 0 && anchorRect.height > 0) {
+        const pos = computeAnchoredPopoverPosition(
+          anchorRect,
+          272,
+          mode === "tags" ? 340 : 300,
+          mode === "tags"
+        );
+        x = pos.x;
+        y = pos.y;
+      } else {
+        const mainRect = document.querySelector("main")?.getBoundingClientRect();
+        const baseLeft = mainRect?.left ?? 320;
+        const baseWidth = mainRect?.width ?? Math.max(320, window.innerWidth - baseLeft);
+        const baseTop = mainRect?.top ?? 80;
+        x = Math.max(
+          12,
+          Math.min(window.innerWidth - 284, Math.round(baseLeft + (baseWidth - 272) / 2))
+        );
+        y = Math.max(64, Math.min(window.innerHeight - 352, Math.round(baseTop + 44)));
+      }
+
+      if (mode === "tags") {
+        setRowGenrePopover(null);
+        setRowTagPopover((prev) =>
+          prev?.sampleId === anchorId ? null : { sampleId: anchorId, x, y }
+        );
+      } else {
+        setRowTagPopover(null);
+        setRowGenrePopover((prev) =>
+          prev?.sampleId === anchorId ? null : { sampleId: anchorId, x, y }
+        );
+      }
+    };
+
+    window.addEventListener("audify:open-row-taxonomy-picker", onOpenRapidPicker);
+    return () =>
+      window.removeEventListener(
+        "audify:open-row-taxonomy-picker",
+        onOpenRapidPicker
+      );
+  }, [
+    setBatchPopover,
+    setContextMenu,
+    setHoverOverflowTags,
+    setRowGenrePopover,
+    setRowTagPopover,
+    setShowColumnPicker,
+    setShowSearchHelper,
+  ]);
+
   // Capture-phase Escape closes any open table menu/popover before App.tsx clears multi-selection
   const hasAnyTableMenuOpen = Boolean(
     contextMenu ||

@@ -10,6 +10,8 @@ export const DEFAULT_SHORTCUTS: KeyboardShortcuts = {
   toggleAutoPreview: "p",
   toggleMute: "m",
   toggleFavorite: "f",
+  openTagPicker: "t",
+  openGenrePicker: "g",
   markSliceIn: "i",
   markSliceOut: "o",
   saveSlice: "Ctrl+S",

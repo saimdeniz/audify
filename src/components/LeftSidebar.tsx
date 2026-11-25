@@ -3,11 +3,15 @@ import { useExternalFolderDrop } from "../hooks/useExternalFolderDrop";
 import { useLeftSidebarDragDrop } from "../hooks/useLeftSidebarDragDrop";
 import { useSampleStore } from "../store/useSampleStore";
 import { filterVisibleLibraries } from "../utils/format";
-import { FoldersTreeTab } from "./sidebar/FoldersTreeTab";
 import { LibraryViewsSection } from "./sidebar/LibraryViewsSection";
 import { SidebarNavRail } from "./sidebar/SidebarNavRail";
 import { useSidebarHoverOverlay } from "./sidebar/useSidebarHoverOverlay";
 
+const FoldersTreeTab = lazy(() =>
+  import("./sidebar/FoldersTreeTab").then((m) => ({
+    default: m.FoldersTreeTab,
+  }))
+);
 const CollectionsTreeTab = lazy(() =>
   import("./sidebar/CollectionsTreeTab").then((m) => ({
     default: m.CollectionsTreeTab,
@@ -337,7 +341,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           ? "w-[40px] bg-surface-rail border-r border-line flex flex-row shrink-0 select-none relative z-50 overflow-visible"
           : sidebarCollapsed
           ? "w-[40px] bg-surface-rail border-r border-line flex flex-row shrink-0 select-none overflow-hidden relative"
-          : "w-[296px] bg-surface-1 border-r border-line flex flex-row shrink-0 select-none overflow-hidden relative"
+          : "w-[320px] bg-surface-1 border-r border-line flex flex-row shrink-0 select-none overflow-hidden relative"
       }
     >
       <SidebarNavRail
@@ -392,8 +396,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             isHoverOverlayMode
               ? `absolute left-[40px] ${
                   isMiniOverlay
-                    ? "w-[min(256px,calc(100vw-42px))]"
-                    : "w-[256px]"
+                    ? "w-[min(280px,calc(100vw-42px))]"
+                    : "w-[280px]"
                 } top-0 bottom-0 bg-surface-1 border-r border-line-strong shadow-2xl flex flex-col overflow-hidden z-40 transition-[transform,opacity] duration-150 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none will-change-transform ${
                   isOverlayOpen
                     ? "opacity-100 translate-x-0 pointer-events-auto"
@@ -432,53 +436,49 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 : ""
             }`}
           >
-            {(activeTab === "folders" ||
-              activeTab === "bin" ||
-              activeTab === "trash") && (
-              <FoldersTreeTab
-                forcedScope={
-                  activeTab === "bin"
-                    ? "bin"
-                    : activeTab === "trash"
-                    ? "trash"
-                    : undefined
-                }
-                dragHoverTarget={dragHoverTarget}
-                setDragHoverTarget={updateDragHoverTarget}
-                dropFlashTarget={dropFlashTarget}
-                isExternalFileDragActive={isExternalFileDragActive}
-              />
-            )}
-            {activeTab !== "folders" &&
-              activeTab !== "bin" &&
-              activeTab !== "trash" && (
-              <Suspense fallback={null}>
-                {activeTab === "collections" && (
-                  <CollectionsTreeTab
-                    dragHoverTarget={dragHoverTarget}
-                    setDragHoverTarget={updateDragHoverTarget}
-                    dropFlashTarget={dropFlashTarget}
-                  />
-                )}
-                {activeTab === "tags" && (
-                  <TagsSidebarTab
-                    dragHoverTarget={dragHoverTarget}
-                    setDragHoverTarget={updateDragHoverTarget}
-                    dropFlashTarget={dropFlashTarget}
-                  />
-                )}
-                {activeTab === "genres" && (
-                  <GenresSidebarTab
-                    dragHoverTarget={dragHoverTarget}
-                    setDragHoverTarget={updateDragHoverTarget}
-                    dropFlashTarget={dropFlashTarget}
-                  />
-                )}
-                {activeTab === "licenses" && enableLicensesSystem && (
-                  <LicensesTreeTab />
-                )}
-              </Suspense>
-            )}
+            <Suspense fallback={null}>
+              {(activeTab === "folders" ||
+                activeTab === "bin" ||
+                activeTab === "trash") && (
+                <FoldersTreeTab
+                  forcedScope={
+                    activeTab === "bin"
+                      ? "bin"
+                      : activeTab === "trash"
+                      ? "trash"
+                      : undefined
+                  }
+                  dragHoverTarget={dragHoverTarget}
+                  setDragHoverTarget={updateDragHoverTarget}
+                  dropFlashTarget={dropFlashTarget}
+                  isExternalFileDragActive={isExternalFileDragActive}
+                />
+              )}
+              {activeTab === "collections" && (
+                <CollectionsTreeTab
+                  dragHoverTarget={dragHoverTarget}
+                  setDragHoverTarget={updateDragHoverTarget}
+                  dropFlashTarget={dropFlashTarget}
+                />
+              )}
+              {activeTab === "tags" && (
+                <TagsSidebarTab
+                  dragHoverTarget={dragHoverTarget}
+                  setDragHoverTarget={updateDragHoverTarget}
+                  dropFlashTarget={dropFlashTarget}
+                />
+              )}
+              {activeTab === "genres" && (
+                <GenresSidebarTab
+                  dragHoverTarget={dragHoverTarget}
+                  setDragHoverTarget={updateDragHoverTarget}
+                  dropFlashTarget={dropFlashTarget}
+                />
+              )}
+              {activeTab === "licenses" && enableLicensesSystem && (
+                <LicensesTreeTab />
+              )}
+            </Suspense>
           </div>
         </div>
       )}

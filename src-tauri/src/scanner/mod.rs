@@ -59,6 +59,7 @@ pub struct ScannedSample {
     pub camelot_key: String,
     pub peaks_json: String,
     pub auto_tags: Vec<String>,
+    pub genre_mood_tags: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -337,6 +338,7 @@ where
                     camelot_key: fast_bpm_key.camelot_key,
                     peaks_json,
                     auto_tags,
+                    genre_mood_tags: meta.genre_mood_tags,
                 }
             })
             .collect();
@@ -463,6 +465,8 @@ mod tests {
                 rel_exclude_paths: Vec::new(),
                 min_duration_ms: None,
                 max_duration_ms: Some(2000),
+                facet_slug: None,
+                parent_tag_name: None,
             },
             AutoTagRule {
                 id: "r2".to_string(),
@@ -477,6 +481,8 @@ mod tests {
                 rel_exclude_paths: Vec::new(),
                 min_duration_ms: None,
                 max_duration_ms: None,
+                facet_slug: None,
+                parent_tag_name: None,
             },
             AutoTagRule {
                 id: "r3".to_string(),
@@ -491,6 +497,8 @@ mod tests {
                 rel_exclude_paths: Vec::new(),
                 min_duration_ms: None,
                 max_duration_ms: None,
+                facet_slug: None,
+                parent_tag_name: None,
             },
             AutoTagRule {
                 id: "r4".to_string(),
@@ -505,6 +513,8 @@ mod tests {
                 rel_exclude_paths: Vec::new(),
                 min_duration_ms: None,
                 max_duration_ms: None,
+                facet_slug: None,
+                parent_tag_name: None,
             },
         ];
         let cats = HashMap::new();
@@ -599,6 +609,8 @@ mod tests {
                 rel_exclude_paths: Vec::new(),
                 min_duration_ms: None,
                 max_duration_ms: None,
+                facet_slug: None,
+                parent_tag_name: None,
             },
             // Rule include_paths overrides category include_paths, while exclusions remain union
             AutoTagRule {
@@ -614,6 +626,8 @@ mod tests {
                 rel_exclude_paths: Vec::new(),
                 min_duration_ms: None,
                 max_duration_ms: None,
+                facet_slug: None,
+                parent_tag_name: None,
             },
         ];
 

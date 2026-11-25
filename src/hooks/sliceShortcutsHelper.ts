@@ -363,3 +363,31 @@ export function handleToggleFavoriteShortcut(state: SampleStoreState): void {
     void state.toggleFavorite(selectedSample.id);
   }
 }
+
+export function handleRapidTaxonomyPickerShortcut(
+  e: KeyboardEvent,
+  state: SampleStoreState
+): boolean {
+  if (state.slicesFilterActive || state.trashFilterActive) return false;
+  if (state.selectedSampleIds.length === 0 && !state.selectedSample) {
+    return false;
+  }
+  const tagKey =
+    state.shortcuts.openTagPicker ?? DEFAULT_SHORTCUTS.openTagPicker ?? "";
+  const genreKey =
+    state.shortcuts.openGenrePicker ?? DEFAULT_SHORTCUTS.openGenrePicker ?? "";
+  const matchedTag = Boolean(tagKey && matchesShortcut(e, tagKey));
+  const matchedGenre =
+    !matchedTag && Boolean(genreKey && matchesShortcut(e, genreKey));
+  if (!matchedTag && !matchedGenre) return false;
+
+  e.preventDefault();
+  if (!e.repeat) {
+    window.dispatchEvent(
+      new CustomEvent("audify:open-row-taxonomy-picker", {
+        detail: { mode: matchedTag ? "tags" : "genres" },
+      })
+    );
+  }
+  return true;
+}

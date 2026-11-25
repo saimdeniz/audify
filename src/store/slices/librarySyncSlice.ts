@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { SampleItem, Tag } from "../../types";
+import { SampleItem, Tag, TagFacet } from "../../types";
 import {
   isSampleInLicenseGroup,
   normalizePathForMatch,
@@ -44,6 +44,8 @@ export function createLibrarySyncSlice(
         folderFilter,
         favoriteOnly,
         selectedTagIds,
+        excludedTagIds,
+        tagMatchMode,
         collections,
         selectedCollectionId,
         trashFilterActive,
@@ -83,6 +85,8 @@ export function createLibrarySyncSlice(
           folderFilter: trashFilterActive ? null : folderFilter,
           favoriteOnly: trashFilterActive ? false : favoriteOnly,
           tagIds: trashFilterActive ? [] : selectedTagIds,
+          excludedTagIds: trashFilterActive ? [] : excludedTagIds,
+          tagMatchMode: trashFilterActive ? "all" : tagMatchMode,
           collectionId:
             trashFilterActive || smartQuery !== "" ? null : selectedCollectionId,
           limit: SAMPLE_QUERY_LIMIT,
@@ -99,15 +103,23 @@ export function createLibrarySyncSlice(
 
         const internRes = internSamplePoolWithStatus(resultRaw, get().tags);
         if (internRes.hadMissingTagIds) {
-          const freshTags = await invoke<Tag[]>("get_tags").catch(() => null);
+          const [freshTags, freshFacets] = await Promise.all([
+            invoke<Tag[]>("get_tags").catch(() => null),
+            invoke<TagFacet[]>("get_tag_facets").catch(() => null),
+          ]);
           if (fetchSeq !== opts.getFetchSeq() || epoch !== getProfileEpoch()) {
             return;
           }
-          if (freshTags && freshTags.length > 0) {
-            set({ tags: freshTags });
-            internSamplePoolWithStatus(resultRaw, freshTags, {
-              onlyUnresolvedTagIds: true,
+          if ((freshTags && freshTags.length > 0) || (freshFacets && freshFacets.length > 0)) {
+            set({
+              ...(freshTags && freshTags.length > 0 ? { tags: freshTags } : {}),
+              ...(freshFacets && freshFacets.length > 0 ? { tagFacets: freshFacets } : {}),
             });
+            if (freshTags && freshTags.length > 0) {
+              internSamplePoolWithStatus(resultRaw, freshTags, {
+                onlyUnresolvedTagIds: true,
+              });
+            }
           }
         }
 
@@ -170,7 +182,9 @@ export function createLibrarySyncSlice(
           : null;
         const genreFiltered = activeGenreLower
           ? duplicateFiltered.filter(
-              (s) => (s.genre || "").toLowerCase() === activeGenreLower
+              (s) =>
+                (s.genre || "").toLowerCase() === activeGenreLower ||
+                s.tags.some((t) => t.name.toLowerCase() === activeGenreLower)
             )
           : duplicateFiltered;
 
@@ -217,6 +231,7 @@ export function createLibrarySyncSlice(
           !favoriteOnly &&
           !live.recentOnly &&
           selectedTagIds.length === 0 &&
+          excludedTagIds.length === 0 &&
           live.selectedGenre === null &&
           selectedCollectionId === null &&
           live.selectedLicenseGroupId === null &&

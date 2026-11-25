@@ -1065,9 +1065,9 @@ describe("Integrated Duplicates View & UI Polish", () => {
     const { container } = render(<FilterDrawer compact={true} />);
 
     const simBtn = await screen.findByRole("button", { name: /^Similar$/i });
-    const drawerBody = container.querySelector(".h-\\[74px\\]");
-    expect(drawerBody).toBeTruthy();
-    expect(drawerBody?.className).toContain("overflow-y-auto");
+    const drawerBody = screen.getByTestId("filter-drawer-body");
+    expect(drawerBody.style.height).toBe("74px");
+    expect(drawerBody.className).toContain("overflow-y-auto");
     expect(container.querySelector(".min-h-\\[68px\\]")).toBeNull();
 
     const controlsRow = simBtn.parentElement?.parentElement;

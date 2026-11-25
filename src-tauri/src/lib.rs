@@ -11,6 +11,7 @@ pub mod duplicates;
 pub mod library_watcher;
 pub mod scanner;
 pub mod security;
+pub mod taxonomy_catalog;
 #[cfg(target_os = "windows")]
 pub mod win_drag;
 pub mod win_edge_peek;
@@ -205,6 +206,8 @@ pub fn run() {
             commands::delete_profile,
             commands::apply_auto_tag_rules_to_library,
             commands::preview_auto_tag_rule,
+            commands::preview_auto_tag_rules_impact,
+            commands::undo_last_auto_tag_apply,
             commands::export_settings_to_file,
             commands::import_settings_from_file,
             commands::export_profile_to_file,
@@ -249,14 +252,24 @@ pub fn run() {
             commands::toggle_sample_loop,
             commands::set_sample_bpm_key,
             commands::analyze_library_bpm_and_key,
+            commands::get_tag_facets,
+            commands::create_tag_facet,
+            commands::update_tag_facet,
+            commands::delete_tag_facet,
+            commands::reorder_tag_facets,
             commands::get_tags,
             commands::create_tag,
             commands::assign_tag,
             commands::unassign_tag,
             commands::assign_tag_batch,
+            commands::unassign_tag_batch,
             commands::clear_sample_tags_batch,
             commands::rename_tag,
             commands::update_tag_color,
+            commands::update_tag_taxonomy,
+            commands::reorder_taxonomy_items,
+            commands::harmonize_taxonomy_colors,
+            commands::merge_tags,
             commands::delete_tag,
             commands::get_genres,
             commands::create_genre,
@@ -272,6 +285,7 @@ pub fn run() {
             commands::add_samples_to_collection_batch,
             commands::remove_samples_from_collection,
             commands::rename_collection,
+            commands::reparent_collection,
             commands::delete_collection,
             commands::scan_duplicate_samples,
             commands::export_audio_slice,
@@ -300,7 +314,6 @@ pub fn run() {
             commands::audio_engine_list_devices,
             commands::audio_engine_set_device,
             commands::audio_engine_release_handle,
-            commands::audio_engine_get_state,
             commands::open_slices_folder,
             commands::transcode_to_pcm_cache,
             commands::show_in_folder,

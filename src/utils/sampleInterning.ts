@@ -32,7 +32,11 @@ export function internSamplePoolWithStatus(
       const t = tagDictionary[i];
       dictById.set(
         t.id,
-        Object.freeze({ id: t.id, name: t.name, color: t.color })
+        Object.freeze({
+          id: t.id,
+          name: t.name,
+          color: t.effective_color || t.color,
+        })
       );
     }
   }
