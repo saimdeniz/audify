@@ -39,7 +39,10 @@ struct WatcherConfig {
 enum WatcherMsg {
     FsEvent(notify::Result<Event>),
     Reconcile(WatcherConfig),
-    Suppress(Duration),
+    Suppress {
+        duration: Duration,
+        root: Option<PathBuf>,
+    },
     SetManualScan(bool),
     SyncFinished(PathBuf),
 }
@@ -92,6 +95,10 @@ impl LibraryWatcherState {
     }
 
     pub fn suppress_briefly(&self, duration_ms: u64) {
+        self.suppress_root_briefly(None, duration_ms);
+    }
+
+    pub fn suppress_root_briefly(&self, root: Option<PathBuf>, duration_ms: u64) {
         if let Some(tx) = self
             .sender
             .lock()
@@ -100,7 +107,10 @@ impl LibraryWatcherState {
             .cloned()
         {
             let clamped = duration_ms.clamp(250, 10_000);
-            let _ = tx.send(WatcherMsg::Suppress(Duration::from_millis(clamped)));
+            let _ = tx.send(WatcherMsg::Suppress {
+                duration: Duration::from_millis(clamped),
+                root,
+            });
         }
     }
 
@@ -199,6 +209,7 @@ fn run_watcher_loop(
     let mut enabled = false;
     let mut manual_scan_depth: usize = 0;
     let mut suppress_until: Option<Instant> = None;
+    let mut suppress_until_by_root: HashMap<String, Instant> = HashMap::new();
     let mut pending_by_root: HashMap<PathBuf, PendingLibraryDirty> = HashMap::new();
     let mut in_flight_roots: HashSet<PathBuf> = HashSet::new();
 
@@ -215,6 +226,7 @@ fn run_watcher_loop(
                     &mut enabled,
                     &mut manual_scan_depth,
                     &mut suppress_until,
+                    &mut suppress_until_by_root,
                     &mut pending_by_root,
                     &mut in_flight_roots,
                 );
@@ -229,6 +241,7 @@ fn run_watcher_loop(
                         &mut enabled,
                         &mut manual_scan_depth,
                         &mut suppress_until,
+                        &mut suppress_until_by_root,
                         &mut pending_by_root,
                         &mut in_flight_roots,
                     );
@@ -239,6 +252,7 @@ fn run_watcher_loop(
         }
 
         let now = Instant::now();
+        suppress_until_by_root.retain(|_, until| *until > now);
         if enabled
             && has_unattached_roots.load(Ordering::Relaxed)
             && now.duration_since(last_reattach_attempt) >= UNATTACHED_ROOT_RETRY_INTERVAL
@@ -282,6 +296,7 @@ fn process_watcher_msg(
     enabled: &mut bool,
     manual_scan_depth: &mut usize,
     suppress_until: &mut Option<Instant>,
+    suppress_until_by_root: &mut HashMap<String, Instant>,
     pending_by_root: &mut HashMap<PathBuf, PendingLibraryDirty>,
     in_flight_roots: &mut HashSet<PathBuf>,
 ) {
@@ -300,13 +315,20 @@ fn process_watcher_msg(
             apply_os_watch_diff(watcher, active_watches, &cfg, has_unattached_roots);
             *last_desired_cfg = Some(cfg);
         }
-        WatcherMsg::Suppress(dur) => {
-            let until = Instant::now() + dur;
-            *suppress_until = Some(match *suppress_until {
-                Some(prev) if prev > until => prev,
-                _ => until,
-            });
-            pending_by_root.clear();
+        WatcherMsg::Suppress { duration, root } => {
+            let until = Instant::now() + duration;
+            if let Some(root_path) = root {
+                let key = normalize_match_key(&root_path);
+                let prev = suppress_until_by_root.get(&key).copied();
+                if prev.is_none_or(|p| until > p) {
+                    suppress_until_by_root.insert(key, until);
+                }
+            } else {
+                *suppress_until = Some(match *suppress_until {
+                    Some(prev) if prev > until => prev,
+                    _ => until,
+                });
+            }
         }
         WatcherMsg::SetManualScan(active) => {
             if active {
@@ -336,6 +358,13 @@ fn process_watcher_msg(
                     continue;
                 }
                 if let Some(root) = match_library_root(roots_desc, &clean) {
+                    let root_key = normalize_match_key(root);
+                    if suppress_until_by_root
+                        .get(&root_key)
+                        .is_some_and(|until| now < *until)
+                    {
+                        continue;
+                    }
                     let entry = pending_by_root
                         .entry(root.clone())
                         .or_insert_with(|| PendingLibraryDirty::new(now));
@@ -343,7 +372,21 @@ fn process_watcher_msg(
                 }
             }
         }
-        WatcherMsg::FsEvent(Err(_)) => {}
+        WatcherMsg::FsEvent(Err(_)) => {
+            // OS watcher kernel buffer overflow (e.g. ReadDirectoryChangesW during huge copy/unzip):
+            // mark all watched roots overflowed so the next debounce runs a full incremental scan.
+            if !*enabled || *manual_scan_depth > 0 {
+                return;
+            }
+            let now = Instant::now();
+            for root in roots_desc.iter() {
+                let entry = pending_by_root
+                    .entry(root.clone())
+                    .or_insert_with(|| PendingLibraryDirty::new(now));
+                entry.overflowed = true;
+                entry.last_event_at = now;
+            }
+        }
     }
 }
 
@@ -458,10 +501,11 @@ fn spawn_watcher_root_sync(
             target_folder,
             false,
             false,
+            false,
         )
         .await;
 
-        if let Ok((updated_lib, true)) = res {
+        if let Ok(Some((updated_lib, true))) = res {
             let _ = app.emit(
                 "audify:library-fs-changed",
                 LibraryFsChangedPayload {

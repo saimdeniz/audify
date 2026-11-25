@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AUDIO_EXTENSION_RE,
   SUPPORTED_AUDIO_EXTENSIONS,
@@ -14,6 +14,7 @@ const MAX_STAGE_BATCH_BYTES = 16 * 1024 * 1024;
 interface UseExternalFolderDropParams {
   enableAdvancedFileOps: boolean;
   isMiniOverlay: boolean;
+  isOverlayOpen: boolean;
   dragHoverTargetRef: React.MutableRefObject<string | null>;
   isExternalFileDragRef: React.MutableRefObject<boolean>;
   updateDragHoverTarget: (
@@ -32,6 +33,7 @@ interface UseExternalFolderDropParams {
 export function useExternalFolderDrop({
   enableAdvancedFileOps,
   isMiniOverlay,
+  isOverlayOpen,
   dragHoverTargetRef,
   isExternalFileDragRef,
   updateDragHoverTarget,
@@ -45,6 +47,8 @@ export function useExternalFolderDrop({
 }: UseExternalFolderDropParams) {
   const [isExternalFileDragActive, setIsExternalFileDragActive] =
     useState(false);
+  const isOverlayOpenRef = useRef(isOverlayOpen);
+  isOverlayOpenRef.current = isOverlayOpen;
 
   useEffect(() => {
     if (!enableAdvancedFileOps) {
@@ -55,10 +59,66 @@ export function useExternalFolderDrop({
           detail: {
             isExternalFileDragActive: false,
             dragHoverTarget: dragHoverTargetRef.current,
+            isSidebarOverlayOpen: isMiniOverlay && isOverlayOpenRef.current,
           },
         })
       );
-      return;
+
+      const isOsFileDrop = (e: DragEvent): boolean => {
+        if (e.defaultPrevented) return false;
+        const st = useSampleStore.getState();
+        if (
+          st.isSettingsOpen ||
+          st.inAppDragSample !== null ||
+          isOsDragCurrentlyInFlight() ||
+          document.querySelector('[data-modal-portal="true"]') !== null
+        ) {
+          return false;
+        }
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('[data-waveform-similarity-drop="true"]')) {
+          return false;
+        }
+        const types = e.dataTransfer?.types;
+        return Boolean(types && Array.from(types).includes("Files"));
+      };
+
+      const onReadOnlyDragOver = (e: DragEvent) => {
+        if (!isOsFileDrop(e)) return;
+        e.preventDefault();
+        if (e.dataTransfer) {
+          e.dataTransfer.dropEffect = "none";
+        }
+      };
+
+      const onReadOnlyDrop = (e: DragEvent) => {
+        if (!isOsFileDrop(e)) return;
+        e.preventDefault();
+        const droppedFiles = e.dataTransfer?.files;
+        if (droppedFiles && droppedFiles.length > 0) {
+          const hasAudioOrFolder = Array.from(droppedFiles).some(
+            (f) => AUDIO_EXTENSION_RE.test(f.name) || !f.name.includes(".")
+          );
+          if (!hasAudioOrFolder) return;
+        }
+        useSampleStore.getState().showStatusNotice(
+          "Safe Read-Only Mode is active — enable Write Mode to import dropped files.",
+          "info",
+          {
+            label: "Enable Write Mode",
+            onClick: () => {
+              useSampleStore.getState().setEnableAdvancedFileOps(true);
+            },
+          }
+        );
+      };
+
+      window.addEventListener("dragover", onReadOnlyDragOver);
+      window.addEventListener("drop", onReadOnlyDrop);
+      return () => {
+        window.removeEventListener("dragover", onReadOnlyDragOver);
+        window.removeEventListener("drop", onReadOnlyDrop);
+      };
     }
 
     const clearExternalDragState = () => {
@@ -70,6 +130,7 @@ export function useExternalFolderDrop({
             detail: {
               isExternalFileDragActive: false,
               dragHoverTarget: null,
+              isSidebarOverlayOpen: false,
             },
           })
         );
@@ -83,9 +144,14 @@ export function useExternalFolderDrop({
     };
 
     const isExternalFilesDrag = (e: DragEvent): boolean => {
+      const st = useSampleStore.getState();
       if (
-        useSampleStore.getState().inAppDragSample !== null ||
-        isOsDragCurrentlyInFlight()
+        st.inAppDragSample !== null ||
+        isOsDragCurrentlyInFlight() ||
+        st.isSettingsOpen ||
+        document.querySelector(
+          "[data-modal-portal='true'], [data-shortcut-recorder='true']"
+        ) !== null
       ) {
         return false;
       }
@@ -95,6 +161,15 @@ export function useExternalFolderDrop({
 
     const onExternalDragOver = (e: DragEvent) => {
       if (!isExternalFilesDrag(e)) return;
+      const hitEl = document.elementFromPoint(
+        e.clientX,
+        e.clientY
+      ) as HTMLElement | null;
+      if (hitEl?.closest('[data-waveform-similarity-drop="true"]')) {
+        clearExternalDragState();
+        return;
+      }
+
       e.preventDefault();
       if (e.dataTransfer) {
         e.dataTransfer.dropEffect = "copy";
@@ -107,15 +182,12 @@ export function useExternalFolderDrop({
             detail: {
               isExternalFileDragActive: true,
               dragHoverTarget: dragHoverTargetRef.current,
+              isSidebarOverlayOpen: isMiniOverlay && isOverlayOpenRef.current,
             },
           })
         );
       }
 
-      const hitEl = document.elementFromPoint(
-        e.clientX,
-        e.clientY
-      ) as HTMLElement | null;
       const tabBtn = hitEl?.closest<HTMLElement>("[data-sidebar-tab]");
       if (tabBtn?.dataset.sidebarTab === "folders") {
         setHoveredRailTab("folders");
@@ -151,13 +223,18 @@ export function useExternalFolderDrop({
     };
 
     const onExternalDrop = async (e: DragEvent) => {
-      if (!isExternalFilesDrag(e)) return;
-      e.preventDefault();
+      if (e.defaultPrevented || !isExternalFilesDrag(e)) return;
 
       const hitEl = document.elementFromPoint(
         e.clientX,
         e.clientY
       ) as HTMLElement | null;
+      if (hitEl?.closest('[data-waveform-similarity-drop="true"]')) {
+        clearExternalDragState();
+        return;
+      }
+
+      e.preventDefault();
       const dropEl = hitEl?.closest<HTMLElement>("[data-sidebar-drop]");
       const hoveredKey =
         dropEl?.dataset.sidebarDrop || dragHoverTargetRef.current;
@@ -319,13 +396,35 @@ export function useExternalFolderDrop({
       }
     };
 
+    const onExternalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && isExternalFileDragRef.current) {
+        clearExternalDragState();
+      }
+    };
+
     window.addEventListener("dragover", onExternalDragOver);
     window.addEventListener("dragleave", onExternalDragLeave);
     window.addEventListener("drop", onExternalDrop);
+    window.addEventListener("dragend", clearExternalDragState);
+    window.addEventListener("blur", clearExternalDragState);
+    window.addEventListener("pointerdown", clearExternalDragState);
+    window.addEventListener("keydown", onExternalKeyDown);
+    window.addEventListener(
+      "audify:clear-external-drag",
+      clearExternalDragState
+    );
     return () => {
       window.removeEventListener("dragover", onExternalDragOver);
       window.removeEventListener("dragleave", onExternalDragLeave);
       window.removeEventListener("drop", onExternalDrop);
+      window.removeEventListener("dragend", clearExternalDragState);
+      window.removeEventListener("blur", clearExternalDragState);
+      window.removeEventListener("pointerdown", clearExternalDragState);
+      window.removeEventListener("keydown", onExternalKeyDown);
+      window.removeEventListener(
+        "audify:clear-external-drag",
+        clearExternalDragState
+      );
     };
   }, [
     enableAdvancedFileOps,

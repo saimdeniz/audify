@@ -1,8 +1,8 @@
 use crate::commands::{
     compute_rel_path, make_resilient_ref, normalize_path_str, query_profile_by_id,
-    ExportedCollectionEntry, ExportedGenreEntry, ExportedLibraryEntry, ExportedManualLoopIndexEntry,
-    ExportedManualMetaIndexEntry, ExportedSliceEntry, ExportedTagEntry, Profile,
-    ProfileExportPackage, ResilientSampleRef,
+    ExportedCollectionEntry, ExportedFacetEntry, ExportedGenreEntry, ExportedLibraryEntry,
+    ExportedManualLoopIndexEntry, ExportedManualMetaIndexEntry, ExportedSliceEntry,
+    ExportedTagEntry, Profile, ProfileExportPackage, ResilientSampleRef,
 };
 use crate::security::{normalize_clean_path, sanitize_settings_paths};
 use rusqlite::{params, Connection};
@@ -130,14 +130,46 @@ pub(crate) fn build_profile_export_package_with_options(
         populate_scope_rel_paths(obj, "autoTagRules", &lib_paths);
     }
 
-    let mut tags = Vec::new();
-    if let Ok(mut stmt) =
-        conn.prepare("SELECT name, color FROM tags ORDER BY name COLLATE NOCASE ASC")
-    {
+    let mut facets = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT slug, name, color, COALESCE(domain, 'tags'), COALESCE(allow_nesting, 0), sort_order
+         FROM tag_facets
+         WHERE COALESCE(is_system, 0) = 0
+         ORDER BY sort_order ASC, id ASC",
+    ) {
         if let Ok(rows) = stmt.query_map([], |r| {
+            Ok(ExportedFacetEntry {
+                slug: r.get(0)?,
+                name: r.get(1)?,
+                color: r.get(2)?,
+                domain: r.get(3)?,
+                allow_nesting: r.get::<_, i64>(4)? != 0,
+                sort_order: r.get(5)?,
+            })
+        }) {
+            facets.extend(rows.flatten());
+        }
+    }
+
+    let mut tags = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT t.name, t.color, COALESCE(f.slug, 'category'), p.name,
+                COALESCE(t.aliases_json, '[]'), COALESCE(t.color_inherited, 0), COALESCE(t.is_system, 0)
+         FROM tags t
+         LEFT JOIN tag_facets f ON f.id = t.facet_id
+         LEFT JOIN tags p ON p.id = t.parent_id
+         ORDER BY (LENGTH(COALESCE(t.path, '/')) - LENGTH(REPLACE(COALESCE(t.path, '/'), '/', ''))) ASC, COALESCE(t.facet_id, 1) ASC, t.name COLLATE NOCASE ASC",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            let aliases_raw: String = r.get(4)?;
             Ok(ExportedTagEntry {
                 name: r.get(0)?,
                 color: r.get(1)?,
+                facet_slug: Some(r.get(2)?),
+                parent_name: r.get(3)?,
+                aliases: crate::db::taxonomy::parse_aliases_json(&aliases_raw),
+                color_inherited: r.get::<_, i64>(5)? != 0,
+                is_system: r.get::<_, i64>(6)? != 0,
             })
         }) {
             tags.extend(rows.flatten());
@@ -145,9 +177,13 @@ pub(crate) fn build_profile_export_package_with_options(
     }
 
     let mut genres = Vec::new();
-    if let Ok(mut stmt) =
-        conn.prepare("SELECT name, color FROM genres ORDER BY name COLLATE NOCASE ASC")
-    {
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT t.name, t.color
+         FROM tags t
+         INNER JOIN tag_facets f ON f.id = t.facet_id
+         WHERE f.domain = 'genres'
+         ORDER BY t.name COLLATE NOCASE ASC",
+    ) {
         if let Ok(rows) = stmt.query_map([], |r| {
             Ok(ExportedGenreEntry {
                 name: r.get(0)?,
@@ -536,13 +572,14 @@ pub(crate) fn build_profile_export_package_with_options(
     }
 
     let pkg = ProfileExportPackage {
-        format: "audify-profile-v3".to_string(),
-        version: 3,
+        format: "audify-profile-v4".to_string(),
+        version: 4,
         name: profile.name.clone(),
         color: profile.color.clone(),
         includes_ai_tags: include_ai_tags && !ai_approved_tag_ref_indices.is_empty(),
         settings: sanitized_settings,
         libraries,
+        facets,
         tags,
         genres,
         collections,

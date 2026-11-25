@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import { resolveAtmosphereStyle } from "../../constants/atmosphereStyles";
 import {
   getAsciiMagicPreview,
@@ -181,6 +181,10 @@ export const AtmosphereMiniPreview: React.FC = React.memo(() => {
       ? "bg-accent"
       : "bg-fg-3";
 
+  const rawPreviewBlurId = useId();
+  const previewBlurFilterId = `audify-preview-blur-${rawPreviewBlurId.replace(/[^a-zA-Z0-9_-]/g, "")}`;
+  const previewBlurPx = hasBackdrop && customBgBlur > 0 ? Math.min(customBgBlur, 14) : 0;
+
   return (
     <div className="w-full rounded-sm border border-line bg-surface-0 overflow-hidden flex flex-col select-none shadow-xs">
       {/* Static Snapshot Viewport Area (16:9 monitor ratio) */}
@@ -188,10 +192,39 @@ export const AtmosphereMiniPreview: React.FC = React.memo(() => {
         className="relative aspect-video w-full overflow-hidden bg-surface-0"
         style={{ clipPath: "inset(0)", isolation: "isolate" }}
       >
+        {previewBlurPx > 0 && (
+          <svg
+            aria-hidden="true"
+            focusable="false"
+            className="absolute w-0 h-0 overflow-hidden pointer-events-none"
+          >
+            <defs>
+              <filter
+                id={previewBlurFilterId}
+                x="0%"
+                y="0%"
+                width="100%"
+                height="100%"
+                colorInterpolationFilters="sRGB"
+              >
+                <feGaussianBlur
+                  in="SourceGraphic"
+                  stdDeviation={previewBlurPx}
+                  edgeMode="duplicate"
+                />
+              </filter>
+            </defs>
+          </svg>
+        )}
         {showAscii || showMagic ? (
           <div
             className="absolute inset-0 pointer-events-none"
-            style={{ opacity: customBgOpacity }}
+            style={{
+              opacity: customBgOpacity,
+              filter:
+                previewBlurPx > 0 ? `url(#${previewBlurFilterId})` : undefined,
+              transform: previewBlurPx > 0 ? "translateZ(0)" : undefined,
+            }}
           >
             <canvas
               ref={asciiCanvasRef}
@@ -205,7 +238,12 @@ export const AtmosphereMiniPreview: React.FC = React.memo(() => {
             alt=""
             decoding="async"
             className="absolute inset-0 w-full h-full object-cover pointer-events-none"
-            style={{ opacity: customBgOpacity }}
+            style={{
+              opacity: customBgOpacity,
+              filter:
+                previewBlurPx > 0 ? `url(#${previewBlurFilterId})` : undefined,
+              transform: previewBlurPx > 0 ? "translateZ(0)" : undefined,
+            }}
           />
         ) : (
           themeTintIntensity > 0 && (
@@ -222,31 +260,23 @@ export const AtmosphereMiniPreview: React.FC = React.memo(() => {
           )
         )}
 
-        {hasBackdrop && customBgBlur > 0 && (
-          <div
-            className="absolute inset-0 pointer-events-none"
-            style={{
-              backdropFilter: `blur(${Math.min(customBgBlur, 14)}px)`,
-              WebkitBackdropFilter: `blur(${Math.min(customBgBlur, 14)}px)`,
-            }}
-          />
-        )}
-
         {/* Mini Audify Shell Wireframe (Frosted Frame Chrome + Clear Table Stage) */}
         <div className="absolute inset-0 flex flex-col p-2 gap-1.5 pointer-events-none z-10">
           <div
             className={`h-[24px] rounded-xs px-2 flex items-center justify-between border border-line bg-surface-1 ${
-              enableMica ? "backdrop-blur-md" : ""
+              hasBackdrop && enableMica && themeMode !== "contrast"
+                ? "backdrop-blur-md"
+                : ""
             }`}
           >
             <div className="flex items-center space-x-1.5">
               <span
-                className="w-2.5 h-2.5 rounded-full inline-block"
+                className="w-2.5 h-2.5 rounded-[2px] inline-block"
                 style={{ backgroundColor: accentColor }}
               />
-              <div className="w-12 h-1.5 rounded-full bg-surface-3 overflow-hidden">
+              <div className="w-12 h-1.5 rounded-xs bg-surface-3 overflow-hidden">
                 <div
-                  className="h-full rounded-full"
+                  className="h-full rounded-xs"
                   style={{ width: "55%", backgroundColor: accentColor }}
                 />
               </div>
@@ -271,22 +301,24 @@ export const AtmosphereMiniPreview: React.FC = React.memo(() => {
           <div className="flex-1 flex gap-1.5 min-h-0">
             <div
               className={`w-[56px] rounded-xs p-1.5 flex flex-col gap-1.5 border border-line bg-surface-1 ${
-                enableMica ? "backdrop-blur-md" : ""
+                hasBackdrop && enableMica && themeMode !== "contrast"
+                  ? "backdrop-blur-md"
+                  : ""
               }`}
             >
               <div className="flex items-center space-x-1">
                 <span
-                  className="w-1.5 h-1.5 rounded-full shrink-0"
+                  className="w-1.5 h-1.5 rounded-[2px] shrink-0"
                   style={{ backgroundColor: accentColor }}
                 />
                 <div className="w-7 h-1 rounded-xs bg-fg-3 opacity-40" />
               </div>
               <div className="flex items-center space-x-1">
-                <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-info/80" />
+                <span className="w-1.5 h-1.5 rounded-[2px] shrink-0 bg-info opacity-80" />
                 <div className="w-6 h-1 rounded-xs bg-fg-3 opacity-30" />
               </div>
               <div className="flex items-center space-x-1">
-                <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-ok/80" />
+                <span className="w-1.5 h-1.5 rounded-[2px] shrink-0 bg-ok opacity-80" />
                 <div className="w-5 h-1 rounded-xs bg-fg-3 opacity-30" />
               </div>
             </div>
@@ -343,7 +375,7 @@ export const AtmosphereMiniPreview: React.FC = React.memo(() => {
         <span className="inline-flex items-center gap-1.5 shrink-0 min-w-0">
           <span
             data-testid="preview-style-dot"
-            className={`w-1.5 h-1.5 rounded-full shrink-0 ${styleDotClass}`}
+            className={`w-1.5 h-1.5 rounded-[2px] shrink-0 ${styleDotClass}`}
           />
           <span
             data-testid="preview-style-label"

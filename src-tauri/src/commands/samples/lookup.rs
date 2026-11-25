@@ -42,61 +42,46 @@ pub(super) fn hydrate_sample_peaks(conn: &Connection, out: &mut [SampleItem]) {
     }
 }
 
-pub(super) fn hydrate_sample_tags(
+fn visit_sample_tag_pairs<F>(
     conn: &Connection,
     active_id: i64,
     want_trashed: bool,
-    out: &mut [SampleItem],
-) {
-    let mut tag_dict: HashMap<i64, (usize, SampleTagBadge)> = HashMap::new();
-    if let Ok(mut t_stmt) =
-        conn.prepare("SELECT id, name, color FROM tags ORDER BY name COLLATE NOCASE ASC")
-    {
-        if let Ok(t_rows) = t_stmt.query_map([], |r| {
-            Ok(SampleTagBadge {
-                id: r.get(0)?,
-                name: r.get(1)?,
-                color: r.get(2)?,
-            })
-        }) {
-            for (rank, badge) in t_rows.flatten().enumerate() {
-                tag_dict.insert(badge.id, (rank, badge));
-            }
-        }
-    }
-
-    if tag_dict.is_empty() {
-        return;
-    }
-
-    let mut tags_by_sample: HashMap<i64, Vec<(usize, SampleTagBadge)>> =
-        HashMap::with_capacity(out.len());
-
+    out: &[SampleItem],
+    mut on_pair: F,
+) where
+    F: FnMut(i64, i64),
+{
     if out.len() > 2_000 {
         let out_ids: HashSet<i64> = out.iter().map(|item| item.id).collect();
-        let trashed_flag: i64 = i64::from(want_trashed);
-        let sql = "SELECT st.sample_id, st.tag_id
-                   FROM sample_tags st
-                   INNER JOIN samples s ON s.id = st.sample_id
-                   WHERE COALESCE(s.is_trashed, 0) = ?1
-                     AND s.library_id IN (
-                         SELECT l.id FROM libraries l
-                         WHERE l.is_global = 1
-                            OR l.id IN (SELECT pl.library_id FROM profile_libraries pl WHERE pl.profile_id = ?2)
-                     )";
+        let sql = if want_trashed {
+            "SELECT st.sample_id, st.tag_id
+             FROM sample_tags st
+             INNER JOIN samples s ON s.id = st.sample_id
+             WHERE COALESCE(s.is_trashed, 0) = 1
+               AND s.library_id IN (
+                   SELECT l.id FROM libraries l
+                   WHERE l.is_global = 1
+                      OR l.id IN (SELECT pl.library_id FROM profile_libraries pl WHERE pl.profile_id = ?1)
+               )"
+        } else {
+            "SELECT st.sample_id, st.tag_id
+             FROM sample_tags st
+             INNER JOIN samples s ON s.id = st.sample_id
+             WHERE COALESCE(s.is_trashed, 0) = 0
+               AND s.library_id IN (
+                   SELECT l.id FROM libraries l
+                   WHERE l.is_global = 1
+                      OR l.id IN (SELECT pl.library_id FROM profile_libraries pl WHERE pl.profile_id = ?1)
+               )"
+        };
         if let Ok(mut st_stmt) = conn.prepare(sql) {
             if let Ok(st_rows) = st_stmt.query_map(
-                params_from_iter([
-                    rusqlite::types::Value::Integer(trashed_flag),
-                    rusqlite::types::Value::Integer(active_id),
-                ]),
+                params_from_iter([rusqlite::types::Value::Integer(active_id)]),
                 |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
             ) {
                 for (sid, tid) in st_rows.flatten() {
                     if out_ids.contains(&sid) {
-                        if let Some(entry) = tag_dict.get(&tid) {
-                            tags_by_sample.entry(sid).or_default().push(entry.clone());
-                        }
+                        on_pair(sid, tid);
                     }
                 }
             }
@@ -119,14 +104,56 @@ pub(super) fn hydrate_sample_tags(
                     })
                 {
                     for (sid, tid) in st_rows.flatten() {
-                        if let Some(entry) = tag_dict.get(&tid) {
-                            tags_by_sample.entry(sid).or_default().push(entry.clone());
-                        }
+                        on_pair(sid, tid);
                     }
                 }
             }
         }
     }
+}
+
+pub(super) fn hydrate_sample_tags(
+    conn: &Connection,
+    active_id: i64,
+    want_trashed: bool,
+    out: &mut [SampleItem],
+) {
+    let mut tag_dict: HashMap<i64, (usize, SampleTagBadge)> = HashMap::new();
+    if let Ok(mut all_tags) = crate::commands::taxonomy::query_tags_with_conn(conn) {
+        // Canonical alphabetical order matching `hydrate_sample_tag_ids` and `query_sample_tags`
+        // so Stage 1 (`compactTags=false`) and Stage 2 (`compactTags=true`) never reorder row badges.
+        all_tags.sort_by(|a, b| {
+            a.name
+                .to_ascii_lowercase()
+                .cmp(&b.name.to_ascii_lowercase())
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        for (rank, t) in all_tags.into_iter().enumerate() {
+            tag_dict.insert(
+                t.id,
+                (
+                    rank,
+                    SampleTagBadge {
+                        id: t.id,
+                        name: t.name,
+                        color: t.effective_color,
+                    },
+                ),
+            );
+        }
+    }
+
+    if tag_dict.is_empty() {
+        return;
+    }
+
+    let mut tags_by_sample: HashMap<i64, Vec<(usize, SampleTagBadge)>> =
+        HashMap::with_capacity(out.len());
+    visit_sample_tag_pairs(conn, active_id, want_trashed, out, |sid, tid| {
+        if let Some(entry) = tag_dict.get(&tid) {
+            tags_by_sample.entry(sid).or_default().push(entry.clone());
+        }
+    });
 
     for item in out {
         if let Some(mut ranked) = tags_by_sample.remove(&item.id) {
@@ -134,6 +161,46 @@ pub(super) fn hydrate_sample_tags(
                 ranked.sort_unstable_by_key(|(rank, _)| *rank);
             }
             item.tags = ranked.into_iter().map(|(_, b)| b).collect();
+        }
+    }
+}
+
+/// Compact bulk tag hydration: populates sorted `tag_ids` without cloning `{id, name, color}`
+/// tag strings across 50k–150k samples; frontend resolves shared frozen badge objects once.
+pub(super) fn hydrate_sample_tag_ids(
+    conn: &Connection,
+    active_id: i64,
+    want_trashed: bool,
+    out: &mut [SampleItem],
+) {
+    let mut tag_rank: HashMap<i64, usize> = HashMap::new();
+    if let Ok(mut t_stmt) =
+        conn.prepare("SELECT id FROM tags ORDER BY name COLLATE NOCASE ASC, id ASC")
+    {
+        if let Ok(t_rows) = t_stmt.query_map([], |r| r.get::<_, i64>(0)) {
+            for (rank, tid) in t_rows.flatten().enumerate() {
+                tag_rank.insert(tid, rank);
+            }
+        }
+    }
+
+    if tag_rank.is_empty() {
+        return;
+    }
+
+    let mut ids_by_sample: HashMap<i64, Vec<(usize, i64)>> = HashMap::with_capacity(out.len());
+    visit_sample_tag_pairs(conn, active_id, want_trashed, out, |sid, tid| {
+        if let Some(&rank) = tag_rank.get(&tid) {
+            ids_by_sample.entry(sid).or_default().push((rank, tid));
+        }
+    });
+
+    for item in out {
+        if let Some(mut ranked) = ids_by_sample.remove(&item.id) {
+            if ranked.len() > 1 {
+                ranked.sort_unstable_by_key(|(rank, _)| *rank);
+            }
+            item.tag_ids = ranked.into_iter().map(|(_, tid)| tid).collect();
         }
     }
 }
@@ -159,12 +226,12 @@ pub(crate) fn get_sample_by_id_or_path_with_conn(
     };
 
     let path_clause_1 = if cfg!(windows) {
-        "(s.file_path = ?1 COLLATE NOCASE OR s.original_file_path = ?1 COLLATE NOCASE)"
+        "(LOWER(s.file_path) = LOWER(?1) OR LOWER(s.original_file_path) = LOWER(?1))"
     } else {
         "(s.file_path = ?1 OR s.original_file_path = ?1)"
     };
     let path_clause_2 = if cfg!(windows) {
-        " OR s.file_path = ?2 COLLATE NOCASE OR s.original_file_path = ?2 COLLATE NOCASE"
+        " OR LOWER(s.file_path) = LOWER(?2) OR LOWER(s.original_file_path) = LOWER(?2)"
     } else {
         " OR s.file_path = ?2 OR s.original_file_path = ?2"
     };
@@ -274,6 +341,7 @@ pub(crate) fn get_sample_by_id_or_path_with_conn(
                 camelot_key: row.get(18)?,
                 peaks_json: row.get(19)?,
                 tags: Vec::new(),
+                tag_ids: Vec::new(),
                 created_at: row.get(20)?,
                 file_modified_at,
                 is_trashed,
@@ -393,4 +461,125 @@ pub async fn get_profile_quick_stats(
         get_profile_quick_stats_with_conn(conn, sample_ids)
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::samples::query_samples_with_conn_compact;
+    use crate::db::init_schema_on_conn;
+
+    #[test]
+    fn compact_tags_mode_emits_sorted_tag_ids_and_omits_repeated_tag_objects() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema_on_conn(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id, path, name, is_global) VALUES (1, 'D:/SFX', 'SFX', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO samples (id, library_id, file_path, file_name, extension)
+             VALUES (10, 1, 'D:/SFX/Whoosh.wav', 'Whoosh.wav', 'wav')",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO tags (id, name, color) VALUES (1, 'Whoosh', '#F59E0B')", [])
+            .unwrap();
+        conn.execute("INSERT INTO tags (id, name, color) VALUES (2, 'Ambient', '#38BDF8')", [])
+            .unwrap();
+        conn.execute("INSERT INTO sample_tags (sample_id, tag_id) VALUES (10, 1)", [])
+            .unwrap();
+        conn.execute("INSERT INTO sample_tags (sample_id, tag_id) VALUES (10, 2)", [])
+            .unwrap();
+
+        let compact = query_samples_with_conn_compact(
+            &conn, None, None, None, None, None, None, None, Some(false), Some(false), true,
+        )
+        .unwrap();
+        assert_eq!(compact.len(), 1);
+        assert!(compact[0].tags.is_empty());
+        // Sorted alphabetically by tag name: Ambient (2) before Whoosh (1)
+        assert_eq!(compact[0].tag_ids, vec![2, 1]);
+
+        let compact_json = serde_json::to_string(&compact[0]).unwrap();
+        assert!(!compact_json.contains("\"tags\":"));
+        assert!(compact_json.contains("\"tag_ids\":[2,1]"));
+
+        let full = query_samples_with_conn_compact(
+            &conn, None, None, None, None, None, None, None, Some(false), Some(false), false,
+        )
+        .unwrap();
+        assert_eq!(full[0].tags.len(), 2);
+        assert!(full[0].tag_ids.is_empty());
+        assert_eq!(
+            full[0].tags.iter().map(|t| t.id).collect::<Vec<_>>(),
+            compact[0].tag_ids
+        );
+        let full_json = serde_json::to_string(&full[0]).unwrap();
+        assert!(compact_json.len() < full_json.len());
+    }
+
+    #[test]
+    fn stage1_stage2_and_single_tag_hydration_share_identical_alphabetical_order() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema_on_conn(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO libraries (id, path, name, is_global) VALUES (1, 'D:/SFX', 'SFX', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO samples (id, library_id, file_path, file_name, extension)
+             VALUES
+               (10, 1, 'D:/SFX/ballad_of_the_cats.mp3', 'ballad_of_the_cats.mp3', 'mp3'),
+               (11, 1, 'D:/SFX/heartbeat_extra_1.wav', 'heartbeat_extra_1.wav', 'wav'),
+               (12, 1, 'D:/SFX/heartbeat_extra_2.wav', 'heartbeat_extra_2.wav', 'wav')",
+            [],
+        )
+        .unwrap();
+        // Give `Heartbeat` a higher sample_count and lower sort_order than `Cat` so non-alphabetical
+        // ordering would put `Heartbeat` first.
+        conn.execute(
+            "INSERT INTO tags (id, name, color, facet_id, sort_order) VALUES (1, 'Heartbeat', '#EF4444', 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tags (id, name, color, facet_id, sort_order) VALUES (2, 'Cat', '#10B981', 1, 20)",
+            [],
+        )
+        .unwrap();
+        for (sid, tid) in [(10, 1), (10, 2), (11, 1), (12, 1)] {
+            conn.execute(
+                "INSERT INTO sample_tags (sample_id, tag_id) VALUES (?1, ?2)",
+                params![sid, tid],
+            )
+            .unwrap();
+        }
+
+        let stage1 = query_samples_with_conn_compact(
+            &conn, None, None, None, None, None, Some(10), Some(0), Some(false), Some(false), false,
+        )
+        .unwrap();
+        let stage2 = query_samples_with_conn_compact(
+            &conn, None, None, None, None, None, Some(10), Some(0), Some(false), Some(false), true,
+        )
+        .unwrap();
+        let single = query_sample_tags(&conn, 10).unwrap();
+
+        let s1_row = stage1.iter().find(|s| s.id == 10).unwrap();
+        let s2_row = stage2.iter().find(|s| s.id == 10).unwrap();
+
+        // All three paths must return Cat (2) before Heartbeat (1)
+        assert_eq!(
+            s1_row.tags.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+            vec!["Cat", "Heartbeat"]
+        );
+        assert_eq!(s2_row.tag_ids, vec![2, 1]);
+        assert_eq!(
+            single.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+            vec!["Cat", "Heartbeat"]
+        );
+    }
 }

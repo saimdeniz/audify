@@ -2,6 +2,7 @@ use super::types::{SimilarityMatch, SimilaritySearchResult, AI_EMBEDDING_DIM};
 use rusqlite::{params, Connection};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Debug, Clone)]
@@ -9,7 +10,7 @@ pub struct CachedEmbedding {
     pub sample_id: i64,
     pub library_id: i64,
     pub duration_ms: i64,
-    pub parent_folder_norm: String,
+    pub parent_folder_norm: Arc<str>,
     pub vector: [f32; AI_EMBEDDING_DIM],
 }
 
@@ -20,9 +21,19 @@ pub struct AiVectorCache {
     pub hydrated: bool,
     pub entries: Vec<CachedEmbedding>,
     pub id_to_index: HashMap<i64, usize>,
+    pub(super) folder_pool: HashSet<Arc<str>>,
 }
 
 impl AiVectorCache {
+    fn intern_folder(&mut self, folder: String) -> Arc<str> {
+        if let Some(existing) = self.folder_pool.get(folder.as_str()) {
+            return Arc::clone(existing);
+        }
+        let shared: Arc<str> = Arc::from(folder);
+        self.folder_pool.insert(Arc::clone(&shared));
+        shared
+    }
+
     pub fn clear(&mut self) {
         self.model_id = String::new();
         self.profile_id = 0;
@@ -30,6 +41,31 @@ impl AiVectorCache {
         // Replace rather than .clear() so 55k-sample heap capacity is actually returned to the allocator.
         self.entries = Vec::new();
         self.id_to_index = HashMap::new();
+        self.folder_pool = HashSet::new();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_for_profile(
+        &mut self,
+        profile_id: i64,
+        model_id: &str,
+        sample_id: i64,
+        library_id: i64,
+        sample_path: &str,
+        duration_ms: i64,
+        vector: [f32; AI_EMBEDDING_DIM],
+    ) {
+        if self.profile_id != 0 && self.profile_id != profile_id {
+            return;
+        }
+        self.upsert(
+            model_id,
+            sample_id,
+            library_id,
+            sample_path,
+            duration_ms,
+            vector,
+        );
     }
 
     pub fn upsert(
@@ -46,7 +82,7 @@ impl AiVectorCache {
             // so `ensure_hydrated` reads all existing embeddings from SQLite on first search.
             return;
         }
-        let parent_folder_norm = normalize_parent_folder(sample_path);
+        let parent_folder_norm = self.intern_folder(normalize_parent_folder(sample_path));
         if let Some(&idx) = self.id_to_index.get(&sample_id) {
             if let Some(slot) = self.entries.get_mut(idx) {
                 slot.library_id = library_id;
@@ -88,9 +124,10 @@ impl AiVectorCache {
             return;
         }
         if let Some(&idx) = self.id_to_index.get(&sample_id) {
+            let folder = self.intern_folder(normalize_parent_folder(sample_path));
             if let Some(slot) = self.entries.get_mut(idx) {
                 slot.library_id = library_id;
-                slot.parent_folder_norm = normalize_parent_folder(sample_path);
+                slot.parent_folder_norm = folder;
             }
         }
     }
@@ -150,11 +187,12 @@ impl AiVectorCache {
         for row in rows.flatten() {
             if let Some(vector) = blob_to_vec(&row.4) {
                 let idx = self.entries.len();
+                let folder = self.intern_folder(normalize_parent_folder(&row.2));
                 self.entries.push(CachedEmbedding {
                     sample_id: row.0,
                     library_id: row.1,
                     duration_ms: row.3.max(0),
-                    parent_folder_norm: normalize_parent_folder(&row.2),
+                    parent_folder_norm: folder,
                     vector,
                 });
                 self.id_to_index.insert(row.0, idx);
@@ -202,10 +240,21 @@ pub fn normalize_parent_folder(sample_path: &str) -> String {
 
 #[inline]
 pub fn dot_similarity(a: &[f32; AI_EMBEDDING_DIM], b: &[f32; AI_EMBEDDING_DIM]) -> f32 {
-    let mut sum = 0.0_f32;
-    for i in 0..AI_EMBEDDING_DIM {
-        sum += a[i] * b[i];
+    // 8-way independent accumulators let LLVM auto-vectorize 128-D dot product into
+    // SSE/AVX2 FMA lanes without serial floating-point dependency stalls.
+    let (mut s0, mut s1, mut s2, mut s3) = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
+    let (mut s4, mut s5, mut s6, mut s7) = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
+    for (ca, cb) in a.as_chunks::<8>().0.iter().zip(b.as_chunks::<8>().0.iter()) {
+        s0 += ca[0] * cb[0];
+        s1 += ca[1] * cb[1];
+        s2 += ca[2] * cb[2];
+        s3 += ca[3] * cb[3];
+        s4 += ca[4] * cb[4];
+        s5 += ca[5] * cb[5];
+        s6 += ca[6] * cb[6];
+        s7 += ca[7] * cb[7];
     }
+    let sum = ((s0 + s1) + (s2 + s3)) + ((s4 + s5) + (s6 + s7));
     if sum.is_finite() {
         sum.clamp(0.0, 1.0)
     } else {
@@ -266,10 +315,11 @@ pub fn compute_top_k_similar(
             }
         }
         if let Some(ref prefix) = norm_prefix {
-            let matches_exact = entry.parent_folder_norm == *prefix;
-            let matches_child = entry.parent_folder_norm.len() > prefix.len()
-                && entry.parent_folder_norm.starts_with(prefix)
-                && entry.parent_folder_norm.as_bytes().get(prefix.len()) == Some(&b'/');
+            let folder: &str = &entry.parent_folder_norm;
+            let matches_exact = folder == prefix.as_str();
+            let matches_child = folder.len() > prefix.len()
+                && folder.starts_with(prefix.as_str())
+                && folder.as_bytes().get(prefix.len()) == Some(&b'/');
             if !matches_exact && !matches_child {
                 continue;
             }
@@ -376,9 +426,9 @@ mod tests {
                 library_id: 1,
                 duration_ms: if idx == 777 { 9_500 } else { 1_000 },
                 parent_folder_norm: if idx == 42 {
-                    "c:/sfx/impacts".to_string()
+                    Arc::from("c:/sfx/impacts")
                 } else {
-                    "c:/sfx/ambience".to_string()
+                    Arc::from("c:/sfx/ambience")
                 },
                 vector: vec,
             });
@@ -509,7 +559,7 @@ mod tests {
         let idx2 = *cache.id_to_index.get(&2).unwrap();
         assert_eq!(cache.entries[idx2].sample_id, 2);
         assert_eq!(cache.entries[idx2].library_id, 20);
-        assert_eq!(cache.entries[idx2].parent_folder_norm, "d:/moved/sub");
+        assert_eq!(&*cache.entries[idx2].parent_folder_norm, "d:/moved/sub");
 
         let idx4 = *cache.id_to_index.get(&4).unwrap();
         assert_eq!(cache.entries[idx4].sample_id, 4);

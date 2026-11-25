@@ -5,8 +5,11 @@ import {
   SimilaritySession,
   SortDir,
   SortKey,
+  TagMatchMode,
+  TaxonomyFacetSlug,
   TypeFilter,
 } from "../types";
+import type { TaxonomyWorkerIndex } from "./taxonomyTree";
 import {
   isSampleInLicenseGroup,
   normalizePathForMatch,
@@ -31,8 +34,13 @@ interface CachedNameSortKey {
   key: string;
 }
 
-const nameSortKeyCache = new WeakMap<SampleItem, CachedNameSortKey>();
-const createdAtMsCache = new WeakMap<SampleItem, number>();
+let nameSortKeyCache = new WeakMap<SampleItem, CachedNameSortKey>();
+let createdAtMsCache = new WeakMap<SampleItem, number>();
+
+export function clearCatalogSortCaches(): void {
+  nameSortKeyCache = new WeakMap<SampleItem, CachedNameSortKey>();
+  createdAtMsCache = new WeakMap<SampleItem, number>();
+}
 
 function getCachedCreatedAtMs(sample: SampleItem): number {
   let cached = createdAtMsCache.get(sample);
@@ -274,7 +282,10 @@ export function doesSampleMatchInitialView(
   if (filter.srFilter !== null && sample.sample_rate !== filter.srFilter) return false;
   if (
     filter.licenseGroup &&
-    !isSampleInLicenseGroup(sample.file_path, filter.licenseGroup)
+    !isSampleInLicenseGroup(
+      sample.folder_path || sample.file_path,
+      filter.licenseGroup
+    )
   ) {
     return false;
   }
@@ -301,7 +312,10 @@ export function filterBaseSamplesInMemory(
   licenseGroups: LicenseGroup[],
   binFilterActive: boolean,
   binSampleIds: number[],
-  duplicateOrderMap?: ReadonlyMap<number, number> | null
+  duplicateOrderMap?: ReadonlyMap<number, number> | null,
+  excludedTagIds?: readonly number[] | null,
+  taxonomyIndex?: TaxonomyWorkerIndex | null,
+  tagMatchMode: TagMatchMode = "all"
 ): SampleItem[] {
   const normFolder = folderFilter ? normalizePathForMatch(folderFilter) : null;
   const normPrefix = normFolder ? `${normFolder}/` : null;
@@ -314,13 +328,80 @@ export function filterBaseSamplesInMemory(
     : null;
   const targetGenreLower = selectedGenre ? selectedGenre.toLowerCase() : null;
 
+  // Build tag filter groups (each tag expands its descendants):
+  // - "all" (default): AND across every selected tag (narrowing intersection).
+  // - "any": OR within same facet, AND across distinct facets.
+  let facetAllowedGroups: Set<number>[] | null = null;
+  if (selectedTagIds.length > 0 && taxonomyIndex) {
+    if (tagMatchMode === "any") {
+      const byFacet = new Map<TaxonomyFacetSlug, Set<number>>();
+      for (let i = 0; i < selectedTagIds.length; i++) {
+        const tid = selectedTagIds[i];
+        const facet = taxonomyIndex.facetByTagId[tid] ?? "category";
+        let allowed = byFacet.get(facet);
+        if (!allowed) {
+          allowed = new Set<number>();
+          byFacet.set(facet, allowed);
+        }
+        const desc = taxonomyIndex.descendantsByTagId[tid];
+        if (desc && desc.length > 0) {
+          for (let d = 0; d < desc.length; d++) {
+            allowed.add(desc[d]);
+          }
+        } else {
+          allowed.add(tid);
+        }
+      }
+      facetAllowedGroups = Array.from(byFacet.values());
+    } else {
+      const seen = new Set<number>();
+      const groups: Set<number>[] = [];
+      for (let i = 0; i < selectedTagIds.length; i++) {
+        const tid = selectedTagIds[i];
+        if (seen.has(tid)) continue;
+        seen.add(tid);
+        const allowed = new Set<number>();
+        const desc = taxonomyIndex.descendantsByTagId[tid];
+        if (desc && desc.length > 0) {
+          for (let d = 0; d < desc.length; d++) {
+            allowed.add(desc[d]);
+          }
+        } else {
+          allowed.add(tid);
+        }
+        groups.push(allowed);
+      }
+      facetAllowedGroups = groups;
+    }
+  }
+
+  let excludedSet: Set<number> | null = null;
+  if (excludedTagIds && excludedTagIds.length > 0) {
+    excludedSet = new Set<number>();
+    for (let i = 0; i < excludedTagIds.length; i++) {
+      const tid = excludedTagIds[i];
+      const desc = taxonomyIndex?.descendantsByTagId[tid];
+      if (desc && desc.length > 0) {
+        for (let d = 0; d < desc.length; d++) {
+          excludedSet.add(desc[d]);
+        }
+      } else {
+        excludedSet.add(tid);
+      }
+    }
+  }
+
   const filtered = allSamples.filter((s) => {
     if (duplicateOrderMap && !duplicateOrderMap.has(s.id)) return false;
     if (recentOrderMap && !recentOrderMap.has(s.id)) return false;
     if (binIdSet && !binIdSet.has(s.id)) return false;
     if (favoriteOnly && !s.is_favorite) return false;
     if (targetGenreLower) {
-      if ((s.genre || "").toLowerCase() !== targetGenreLower) return false;
+      const primaryMatch = (s.genre || "").toLowerCase() === targetGenreLower;
+      const tagMatch =
+        !primaryMatch &&
+        s.tags.some((t) => t.name.toLowerCase() === targetGenreLower);
+      if (!primaryMatch && !tagMatch) return false;
     }
     if (activeLicenseGroup) {
       if (
@@ -338,7 +419,27 @@ export function filterBaseSamplesInMemory(
         return false;
       }
     }
-    if (selectedTagIds.length > 0) {
+    if (excludedSet) {
+      const tags = s.tags;
+      for (let i = 0; i < tags.length; i++) {
+        if (excludedSet.has(tags[i].id)) return false;
+      }
+    }
+    if (facetAllowedGroups) {
+      const tags = s.tags;
+      if (tags.length === 0) return false;
+      for (let g = 0; g < facetAllowedGroups.length; g++) {
+        const groupSet = facetAllowedGroups[g];
+        let matchedGroup = false;
+        for (let i = 0; i < tags.length; i++) {
+          if (groupSet.has(tags[i].id)) {
+            matchedGroup = true;
+            break;
+          }
+        }
+        if (!matchedGroup) return false;
+      }
+    } else if (selectedTagIds.length > 0) {
       const tags = s.tags;
       if (tags.length < selectedTagIds.length) return false;
       for (let r = 0; r < selectedTagIds.length; r++) {

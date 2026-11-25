@@ -17,6 +17,7 @@ export type {
   PendingFileConflictPrompt,
   PendingTrashRequest,
   SettingsTab,
+  StatusNoticeAction,
   StatusNoticePayload,
 } from "./storePayloads";
 
@@ -42,7 +43,8 @@ export type SidebarTab =
   | "tags"
   | "genres"
   | "licenses"
-  | "bin";
+  | "bin"
+  | "trash";
 
 export interface FolderTreeNode {
   name: string;
@@ -65,5 +67,9 @@ export interface StoreSliceContext {
   getProfileEpoch: () => number;
   prepareForProfileTransition: () => Promise<void>;
   resetFiltersOnProfileChange: (statusMessage: string) => void;
-  emitNotice: (message: string, kind?: "info" | "success" | "error") => void;
+  emitNotice: (
+    message: string,
+    kind?: "info" | "success" | "error",
+    action?: import("./storePayloads").StatusNoticeAction
+  ) => void;
 }

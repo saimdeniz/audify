@@ -256,7 +256,7 @@ fn create_collection_with_conn(
 }
 
 #[tauri::command]
-pub fn create_collection(
+pub async fn create_collection(
     state: State<'_, AppState>,
     name: String,
     color: Option<String>,
@@ -265,51 +265,82 @@ pub fn create_collection(
     rule_path: Option<String>,
     smart_query: Option<String>,
 ) -> Result<Collection, String> {
-    let conn = state.lock_db();
-    create_collection_with_conn(
-        &conn,
-        name,
-        color,
-        icon,
-        parent_id,
-        rule_path,
-        smart_query,
-    )
+    crate::db::run_write_op(&state, move |conn| {
+        create_collection_with_conn(conn, name, color, icon, parent_id, rule_path, smart_query)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn add_to_collection(
+pub async fn add_to_collection(
     state: State<'_, AppState>,
     collection_id: i64,
     sample_id: i64,
 ) -> Result<Collection, String> {
-    let conn = state.lock_db();
-    let active_id = get_active_profile_id(&conn);
-    ensure_manual_item_target(&conn, collection_id, active_id)?;
-    if !is_sample_visible_in_profile(&conn, active_id, sample_id) {
-        return Err("Sample not found in active profile".to_string());
-    }
+    crate::db::run_write_op(&state, move |conn| {
+        let active_id = get_active_profile_id(conn);
+        ensure_manual_item_target(conn, collection_id, active_id)?;
+        if !is_sample_visible_in_profile(conn, active_id, sample_id) {
+            return Err("Sample not found in active profile".to_string());
+        }
 
-    conn.execute(
-        "INSERT OR IGNORE INTO collection_items (collection_id, sample_id) VALUES (?1, ?2)",
-        params![collection_id, sample_id],
-    )
-    .map_err(|e| format!("Failed to add sample to collection: {}", e))?;
+        conn.execute(
+            "INSERT OR IGNORE INTO collection_items (collection_id, sample_id) VALUES (?1, ?2)",
+            params![collection_id, sample_id],
+        )
+        .map_err(|e| format!("Failed to add sample to collection: {}", e))?;
 
-    query_collection_by_id(&conn, collection_id)
+        query_collection_by_id(conn, collection_id)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn add_samples_to_collection_batch(
+pub async fn add_samples_to_collection_batch(
     state: State<'_, AppState>,
     collection_id: i64,
     sample_ids: Option<Vec<i64>>,
 ) -> Result<Collection, String> {
     let sample_ids = sample_ids.unwrap_or_default();
-    let mut conn = state.lock_db();
-    let active_id = get_active_profile_id(&conn);
-    ensure_manual_item_target(&conn, collection_id, active_id)?;
-    let visible_set = visible_sample_ids_in_profile(&conn, active_id, &sample_ids)?;
+    crate::db::run_write_op(&state, move |conn| {
+        let active_id = get_active_profile_id(conn);
+        ensure_manual_item_target(conn, collection_id, active_id)?;
+        let visible_set = visible_sample_ids_in_profile(conn, active_id, &sample_ids)?;
+        let visible_ids: Vec<i64> = sample_ids
+            .into_iter()
+            .filter(|sid| visible_set.contains(sid))
+            .collect();
+
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Failed to start database transaction: {}", e))?;
+
+        {
+            let mut stmt = tx
+                .prepare_cached(
+                    "INSERT OR IGNORE INTO collection_items (collection_id, sample_id) VALUES (?1, ?2)",
+                )
+                .map_err(|e| e.to_string())?;
+            for sid in visible_ids {
+                stmt.execute(params![collection_id, sid])
+                    .map_err(|e| format!("Failed to add sample to collection: {}", e))?;
+            }
+        }
+
+        tx.commit().map_err(|e| e.to_string())?;
+        query_collection_by_id(conn, collection_id)
+    })
+    .await
+}
+
+fn remove_samples_from_collection_with_conn(
+    conn: &mut Connection,
+    collection_id: i64,
+    sample_ids: Vec<i64>,
+) -> Result<Collection, String> {
+    let active_id = get_active_profile_id(conn);
+    ensure_manual_item_target(conn, collection_id, active_id)?;
+    let visible_set = visible_sample_ids_in_profile(conn, active_id, &sample_ids)?;
     let visible_ids: Vec<i64> = sample_ids
         .into_iter()
         .filter(|sid| visible_set.contains(sid))
@@ -320,53 +351,40 @@ pub fn add_samples_to_collection_batch(
         .map_err(|e| format!("Failed to start database transaction: {}", e))?;
 
     {
+        // Symmetric with `query_samples` and `get_collections`: removing from a parent
+        // collection removes the sample from both the parent and its child sub-collections,
+        // while removing from a child sub-collection only affects that child.
         let mut stmt = tx
-            .prepare(
-                "INSERT OR IGNORE INTO collection_items (collection_id, sample_id) VALUES (?1, ?2)",
+            .prepare_cached(
+                "DELETE FROM collection_items
+                 WHERE sample_id = ?1
+                   AND (collection_id = ?2
+                        OR collection_id IN (
+                            SELECT id FROM collections WHERE parent_id = ?2 AND profile_id = ?3
+                        ))",
             )
             .map_err(|e| e.to_string())?;
         for sid in visible_ids {
-            stmt.execute(params![collection_id, sid])
-                .map_err(|e| format!("Failed to add sample to collection: {}", e))?;
-        }
-    }
-
-    tx.commit().map_err(|e| e.to_string())?;
-    query_collection_by_id(&conn, collection_id)
-}
-
-#[tauri::command]
-pub fn remove_samples_from_collection(
-    state: State<'_, AppState>,
-    collection_id: i64,
-    sample_ids: Option<Vec<i64>>,
-) -> Result<Collection, String> {
-    let sample_ids = sample_ids.unwrap_or_default();
-    let mut conn = state.lock_db();
-    let active_id = get_active_profile_id(&conn);
-    ensure_manual_item_target(&conn, collection_id, active_id)?;
-    let visible_set = visible_sample_ids_in_profile(&conn, active_id, &sample_ids)?;
-    let visible_ids: Vec<i64> = sample_ids
-        .into_iter()
-        .filter(|sid| visible_set.contains(sid))
-        .collect();
-
-    let tx = conn
-        .transaction()
-        .map_err(|e| format!("Failed to start database transaction: {}", e))?;
-
-    {
-        let mut stmt = tx
-            .prepare("DELETE FROM collection_items WHERE collection_id = ?1 AND sample_id = ?2")
-            .map_err(|e| e.to_string())?;
-        for sid in visible_ids {
-            stmt.execute(params![collection_id, sid])
+            stmt.execute(params![sid, collection_id, active_id])
                 .map_err(|e| format!("Failed to remove sample from collection: {}", e))?;
         }
     }
 
     tx.commit().map_err(|e| e.to_string())?;
-    query_collection_by_id(&conn, collection_id)
+    query_collection_by_id(conn, collection_id)
+}
+
+#[tauri::command]
+pub async fn remove_samples_from_collection(
+    state: State<'_, AppState>,
+    collection_id: i64,
+    sample_ids: Option<Vec<i64>>,
+) -> Result<Collection, String> {
+    let sample_ids = sample_ids.unwrap_or_default();
+    crate::db::run_write_op(&state, move |conn| {
+        remove_samples_from_collection_with_conn(conn, collection_id, sample_ids)
+    })
+    .await
 }
 
 fn rename_collection_with_conn(
@@ -450,7 +468,7 @@ fn rename_collection_with_conn(
 }
 
 #[tauri::command]
-pub fn rename_collection(
+pub async fn rename_collection(
     state: State<'_, AppState>,
     collection_id: i64,
     new_name: String,
@@ -459,29 +477,126 @@ pub fn rename_collection(
     new_rule_path: Option<String>,
     new_smart_query: Option<String>,
 ) -> Result<Collection, String> {
-    let conn = state.lock_db();
-    rename_collection_with_conn(
-        &conn,
-        collection_id,
-        new_name,
-        new_color,
-        new_icon,
-        new_rule_path,
-        new_smart_query,
+    crate::db::run_write_op(&state, move |conn| {
+        rename_collection_with_conn(
+            conn,
+            collection_id,
+            new_name,
+            new_color,
+            new_icon,
+            new_rule_path,
+            new_smart_query,
+        )
+    })
+    .await
+}
+
+pub(crate) fn reparent_collection_with_conn(
+    conn: &Connection,
+    collection_id: i64,
+    new_parent_id: Option<i64>,
+) -> Result<Collection, String> {
+    let active_id = get_active_profile_id(conn);
+    ensure_collection_in_active_profile(conn, collection_id, active_id)?;
+    let current = query_collection_by_id(conn, collection_id)?;
+    if current
+        .smart_query
+        .as_deref()
+        .is_some_and(|q| !q.trim().is_empty())
+    {
+        return Err("Smart collections must remain top-level collections.".to_string());
+    }
+    if current.parent_id == new_parent_id {
+        return Ok(current);
+    }
+
+    if let Some(pid) = new_parent_id {
+        if pid == collection_id {
+            return Err("A collection cannot be nested inside itself.".to_string());
+        }
+        ensure_collection_in_active_profile(conn, pid, active_id)?;
+        if is_collection_smart(conn, pid, active_id)? {
+            return Err("Smart collections cannot contain sub-collections.".to_string());
+        }
+        let target_parent_of_parent: Option<i64> = conn
+            .query_row(
+                "SELECT parent_id FROM collections WHERE id = ?1 AND profile_id = ?2",
+                params![pid, active_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(None);
+        if target_parent_of_parent.is_some() {
+            return Err("Collections can only be nested 2 levels deep.".to_string());
+        }
+        let has_children: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM collections WHERE parent_id = ?1 AND profile_id = ?2)",
+                params![collection_id, active_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        if has_children {
+            return Err(
+                "Move or remove sub-collections before nesting this collection inside another."
+                    .to_string(),
+            );
+        }
+    }
+
+    let sibling_conflict: bool = conn
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM collections
+                WHERE profile_id = ?1
+                  AND COALESCE(parent_id, 0) = ?2
+                  AND LOWER(name) = LOWER(?3)
+                  AND id != ?4
+            )",
+            params![active_id, new_parent_id.unwrap_or(0), current.name, collection_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(false);
+    if sibling_conflict {
+        return Err("A collection with that name already exists at the target level.".to_string());
+    }
+
+    conn.execute(
+        "UPDATE collections SET parent_id = ?1 WHERE id = ?2 AND profile_id = ?3",
+        params![new_parent_id, collection_id, active_id],
     )
+    .map_err(|e| format!("Failed to move collection: {}", e))?;
+
+    query_collection_by_id(conn, collection_id)
 }
 
 #[tauri::command]
-pub fn delete_collection(state: State<'_, AppState>, collection_id: i64) -> Result<(), String> {
-    let conn = state.lock_db();
-    let active_id = get_active_profile_id(&conn);
-    ensure_collection_in_active_profile(&conn, collection_id, active_id)?;
-    conn.execute(
-        "DELETE FROM collections WHERE (id = ?1 OR parent_id = ?1) AND profile_id = ?2",
-        params![collection_id, active_id],
-    )
-    .map_err(|e| format!("Failed to delete collection: {}", e))?;
-    Ok(())
+pub async fn reparent_collection(
+    state: State<'_, AppState>,
+    collection_id: i64,
+    new_parent_id: Option<i64>,
+) -> Result<Collection, String> {
+    crate::db::run_write_op(&state, move |conn| {
+        reparent_collection_with_conn(conn, collection_id, new_parent_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_collection(
+    state: State<'_, AppState>,
+    collection_id: i64,
+) -> Result<(), String> {
+    crate::db::run_write_op(&state, move |conn| {
+        let active_id = get_active_profile_id(conn);
+        ensure_collection_in_active_profile(conn, collection_id, active_id)?;
+        conn.execute(
+            "DELETE FROM collections WHERE (id = ?1 OR parent_id = ?1) AND profile_id = ?2",
+            params![collection_id, active_id],
+        )
+        .map_err(|e| format!("Failed to delete collection: {}", e))?;
+        Ok(())
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -562,5 +677,100 @@ mod tests {
         let too_long = "a".repeat(513);
         assert!(sanitize_smart_query(Some(too_long), false).is_err());
         assert!(sanitize_smart_query(Some("whoosh\u{0007}".into()), false).is_err());
+    }
+
+    #[test]
+    fn removes_samples_from_parent_and_child_subcollections_symmetrically() {
+        let mut conn = test_conn();
+        conn.execute(
+            "INSERT INTO libraries (id, path, name, is_global) VALUES (1, 'D:/SFX', 'SFX', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO samples (id, library_id, file_path, file_name, extension)
+             VALUES (101, 1, 'D:/SFX/Hit.wav', 'Hit.wav', 'wav'),
+                    (102, 1, 'D:/SFX/Pad.wav', 'Pad.wav', 'wav')",
+            [],
+        )
+        .unwrap();
+
+        let parent = create_collection_with_conn(
+            &conn,
+            "Project A".into(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let child_sfx = create_collection_with_conn(
+            &conn,
+            "SFX".into(),
+            None,
+            None,
+            Some(parent.id),
+            None,
+            None,
+        )
+        .unwrap();
+        let child_music = create_collection_with_conn(
+            &conn,
+            "Music".into(),
+            None,
+            None,
+            Some(parent.id),
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Auto-routed samples live under child sub-collections
+        conn.execute(
+            "INSERT INTO collection_items (collection_id, sample_id) VALUES (?1, 101), (?2, 102)",
+            params![child_sfx.id, child_music.id],
+        )
+        .unwrap();
+        assert_eq!(query_collection_by_id(&conn, parent.id).unwrap().sample_count, 2);
+
+        // Removing from a child only deletes from that child
+        let after_child_rm =
+            remove_samples_from_collection_with_conn(&mut conn, child_music.id, vec![102]).unwrap();
+        assert_eq!(after_child_rm.sample_count, 0);
+        assert_eq!(query_collection_by_id(&conn, parent.id).unwrap().sample_count, 1);
+        assert_eq!(query_collection_by_id(&conn, child_sfx.id).unwrap().sample_count, 1);
+
+        // Removing from parent also deletes auto-routed samples residing in its child sub-collections
+        let after_parent_rm =
+            remove_samples_from_collection_with_conn(&mut conn, parent.id, vec![101]).unwrap();
+        assert_eq!(after_parent_rm.sample_count, 0);
+        assert_eq!(query_collection_by_id(&conn, child_sfx.id).unwrap().sample_count, 0);
+    }
+
+    #[test]
+    fn reparent_collection_nests_promotes_and_guards_smart_and_depth() {
+        let conn = test_conn();
+        let parent = create_collection_with_conn(&conn, "SFX Pack".into(), None, None, None, None, None).unwrap();
+        let child = create_collection_with_conn(&conn, "Whooshes".into(), None, None, None, None, None).unwrap();
+        let third = create_collection_with_conn(&conn, "Deep".into(), None, None, None, None, None).unwrap();
+        let smart = create_collection_with_conn(&conn, "SmartLoops".into(), None, None, None, None, Some("is:loop".into())).unwrap();
+
+        // Nest manual child under parent
+        let nested = reparent_collection_with_conn(&conn, child.id, Some(parent.id)).expect("nest collection");
+        assert_eq!(nested.parent_id, Some(parent.id));
+
+        // Reject 3rd level nesting (parent already has parent) and nesting a parent with children
+        assert!(reparent_collection_with_conn(&conn, third.id, Some(child.id)).is_err());
+        assert!(reparent_collection_with_conn(&conn, parent.id, Some(third.id)).is_err());
+        assert!(reparent_collection_with_conn(&conn, child.id, Some(child.id)).is_err());
+
+        // Reject smart collection as source or parent
+        assert!(reparent_collection_with_conn(&conn, smart.id, Some(parent.id)).is_err());
+        assert!(reparent_collection_with_conn(&conn, third.id, Some(smart.id)).is_err());
+
+        // Promote child back to top-level root
+        let promoted = reparent_collection_with_conn(&conn, child.id, None).expect("promote collection");
+        assert_eq!(promoted.parent_id, None);
     }
 }

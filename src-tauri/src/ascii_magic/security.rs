@@ -37,6 +37,9 @@ const ALWAYS_FORBIDDEN_IDENTIFIERS: &[&str] = &[
     "__proto__",
     "prototype",
     "postMessage",
+    "onmessage",
+    "caches",
+    "BroadcastChannel",
 ];
 
 const CONTEXT_SENSITIVE_GLOBALS: &[&str] = &["top", "parent", "frames", "location", "cookie"];
@@ -393,7 +396,7 @@ pub fn validate_piece_source_js(source: &str) -> Result<(), String> {
                             }
                         }
                     }
-                    if j > idx + 1
+                    if j == idx + 1
                         && tokens[j].kind == TokenKind::Ident
                         && matches!(
                             tokens[j].value.as_str(),

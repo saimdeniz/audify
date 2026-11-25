@@ -46,6 +46,7 @@ fn validate_readable_library_file(
 
     let canon_root = library_roots.get(&library_id)?;
     let raw_target = Path::new(trimmed);
+    crate::security::reject_symlink_ancestors(raw_target).ok()?;
     let sym = fs::symlink_metadata(raw_target).ok()?;
     if sym.file_type().is_symlink() || !sym.is_file() {
         return None;

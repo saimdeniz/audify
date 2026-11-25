@@ -8,8 +8,11 @@ import {
   AsciiPresetId,
   AutoTagRule,
   CollectionRuleTemplate,
+  ExportAudioPreset,
+  ExportLoudnessMode,
   KeyboardShortcuts,
   LicenseGroup,
+  MiniDockEdgeSide,
   Profile,
   ThemeMode,
   WallpaperKind,
@@ -145,6 +148,12 @@ export function applyProfileSettingsToStore(
     : [];
 
   const enableMica = resolveBool(parsed.enableMica, isBoot, cur.enableMica, false);
+  const sidebarCompactHover = resolveBool(
+    parsed.sidebarCompactHover,
+    isBoot,
+    cur.sidebarCompactHover,
+    false
+  );
   const themeTintIntensity =
     typeof parsed.themeTintIntensity === "number" &&
     Number.isFinite(parsed.themeTintIntensity)
@@ -298,6 +307,41 @@ export function applyProfileSettingsToStore(
       : "";
 
   const sliceMicroFade = resolveBool(parsed.sliceMicroFade, isBoot, cur.sliceMicroFade, false);
+  const exportAudioPreset: ExportAudioPreset =
+    parsed.exportAudioPreset === "wav_24" ||
+    parsed.exportAudioPreset === "nle_48k_24" ||
+    parsed.exportAudioPreset === "original"
+      ? parsed.exportAudioPreset
+      : isBoot
+      ? cur.exportAudioPreset
+      : "original";
+  const exportLoudnessMode: ExportLoudnessMode =
+    parsed.exportLoudnessMode === "peak_m1" ||
+    parsed.exportLoudnessMode === "lufs_m14" ||
+    parsed.exportLoudnessMode === "lufs_m24" ||
+    parsed.exportLoudnessMode === "off"
+      ? parsed.exportLoudnessMode
+      : isBoot
+      ? cur.exportLoudnessMode
+      : "off";
+  const skipLeadingSilence = resolveBool(
+    parsed.skipLeadingSilence,
+    isBoot,
+    cur.skipLeadingSilence,
+    false
+  );
+  const miniDockEdgePeek = resolveBool(
+    parsed.miniDockEdgePeek,
+    isBoot,
+    cur.miniDockEdgePeek,
+    false
+  );
+  const miniDockEdgeSide: MiniDockEdgeSide =
+    parsed.miniDockEdgeSide === "left" || parsed.miniDockEdgeSide === "right"
+      ? parsed.miniDockEdgeSide
+      : isBoot
+      ? cur.miniDockEdgeSide
+      : "right";
   const normalizePreview = resolveBool(
     parsed.normalizePreview,
     isBoot,
@@ -339,6 +383,11 @@ export function applyProfileSettingsToStore(
     playheadLatencyMs,
     audioOutputDeviceId,
     sliceMicroFade,
+    exportAudioPreset,
+    exportLoudnessMode,
+    skipLeadingSilence,
+    miniDockEdgePeek,
+    miniDockEdgeSide,
     normalizePreview,
     autoAnalyzeBpmKey,
     enableAdvancedFileOps,
@@ -353,6 +402,7 @@ export function applyProfileSettingsToStore(
     autoBinOnNleDrag,
     binSampleIds,
     enableMica,
+    sidebarCompactHover,
     themeTintIntensity,
     customBgImage,
     customBgBlur,

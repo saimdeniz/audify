@@ -1,16 +1,20 @@
-import React, { Suspense, lazy, useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ChevronDown, Hash, PictureInPicture2, Star } from "lucide-react";
+import {
+  Hash,
+  HelpCircle,
+  PanelLeft,
+  PanelLeftClose,
+  PictureInPicture2,
+  Star,
+} from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import { useSampleStore } from "../store/useSampleStore";
+import { resolveActiveBackgroundJob } from "../utils/activeBackgroundJob";
 import { beginWindowTitlebarDrag } from "../utils/drag";
 import { CollectionIcon } from "./CollectionIcon";
+import { StatusBarAudioDeviceButton } from "./StatusBarAudioDeviceButton";
 import { WindowCaptionControls } from "./WindowCaptionControls";
-
-const ProfileSwitcherPopover = lazy(() =>
-  import("./ProfileSwitcherPopover").then((m) => ({
-    default: m.ProfileSwitcherPopover,
-  }))
-);
 
 export const AudifyLogoIcon: React.FC<{ className?: string }> = ({
   className = "w-4 h-4",
@@ -36,6 +40,7 @@ export const TopHeaderBar: React.FC = React.memo(() => {
         s.favoriteOnly ||
         s.recentOnly ||
         s.selectedTagIds.length > 0 ||
+        s.excludedTagIds.length > 0 ||
         s.selectedGenre ||
         s.selectedCollectionId !== null ||
         s.selectedLicenseGroupId !== null ||
@@ -53,6 +58,7 @@ export const TopHeaderBar: React.FC = React.memo(() => {
         !s.folderFilter &&
         !s.recentOnly &&
         s.selectedTagIds.length === 0 &&
+        s.excludedTagIds.length === 0 &&
         !s.selectedGenre &&
         s.selectedCollectionId === null &&
         s.selectedLicenseGroupId === null &&
@@ -63,57 +69,15 @@ export const TopHeaderBar: React.FC = React.memo(() => {
         !s.similaritySession
     )
   );
-  const profiles = useSampleStore((s) => s.profiles);
-  const activeProfile = useSampleStore((s) => s.activeProfile);
-  const accentColor = useSampleStore((s) => s.accentColor);
   const filteredCount = useSampleStore((s) => s.samples.length);
   const libraries = useSampleStore((s) => s.libraries);
   const miniDockShortcut = useSampleStore((s) => s.shortcuts.toggleMiniDock);
-  const setSettingsOpen = useSampleStore((s) => s.setSettingsOpen);
+  const sidebarCollapsed = useSampleStore((s) => s.sidebarCollapsed);
+  const sidebarCompactHover = useSampleStore((s) => s.sidebarCompactHover);
   const toggleMiniDock = useSampleStore((s) => s.toggleMiniDock);
-  const switchProfile = useSampleStore((s) => s.switchProfile);
-  const createProfile = useSampleStore((s) => s.createProfile);
-
-  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
-  const profileButtonRef = useRef<HTMLButtonElement | null>(null);
-  const [profileMenuPos, setProfileMenuPos] = useState<{
-    top: number;
-    left: number;
-  }>({ top: 34, left: 80 });
-
-  useLayoutEffect(() => {
-    if (!isProfileMenuOpen) return;
-    const update = () => {
-      const rect = profileButtonRef.current?.getBoundingClientRect();
-      if (!rect || (rect.width === 0 && rect.height === 0)) return;
-      const top = Math.min(window.innerHeight - 240, rect.bottom + 4);
-      const left = Math.max(8, Math.min(rect.left, window.innerWidth - 240));
-      setProfileMenuPos({ top, left });
-    };
-    update();
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
-  }, [isProfileMenuOpen]);
-
-  useEffect(() => {
-    if (!isProfileMenuOpen) return;
-    const onWindowClick = () => {
-      setIsProfileMenuOpen(false);
-    };
-    const onKeyDownCapture = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        setIsProfileMenuOpen(false);
-      }
-    };
-    window.addEventListener("click", onWindowClick);
-    window.addEventListener("keydown", onKeyDownCapture, true);
-    return () => {
-      window.removeEventListener("click", onWindowClick);
-      window.removeEventListener("keydown", onKeyDownCapture, true);
-    };
-  }, [isProfileMenuOpen]);
+  const toggleSidebarCollapsed = useSampleStore(
+    (s) => s.toggleSidebarCollapsed
+  );
 
   const activeLibraries = libraries.filter(
     (l) => l.is_global !== false || l.assigned_to_profile !== false
@@ -179,8 +143,8 @@ export const TopHeaderBar: React.FC = React.memo(() => {
       onDoubleClick={handleTitlebarDoubleClick}
       className="h-[32px] bg-surface-1 border-b border-line flex items-center justify-between pl-2.5 pr-0 shrink-0 select-none cursor-default relative z-30"
     >
-      {/* Left: Brand Logo + Fast Workspace Profile Switcher */}
-      <div className="flex items-center space-x-3">
+      {/* Left: Brand Logo + Compact Sidebar Toggle */}
+      <div className="flex items-center space-x-2.5">
         <div
           data-tauri-drag-region
           className="flex items-center space-x-1.5 pointer-events-none"
@@ -191,49 +155,33 @@ export const TopHeaderBar: React.FC = React.memo(() => {
           </span>
         </div>
 
-        {/* Profile Switcher Dropdown */}
-        <div
+        <button
+          type="button"
           data-no-drag="true"
-          className="relative"
-          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={toggleSidebarCollapsed}
+          aria-pressed={sidebarCollapsed}
+          title={
+            sidebarCollapsed
+              ? sidebarCompactHover
+                ? "Expand sidebar (currently Compact Hover mode)"
+                : "Expand sidebar"
+              : sidebarCompactHover
+              ? "Compact sidebar (hover icon rail to peek)"
+              : "Collapse sidebar to icon rail"
+          }
+          className={`w-[22px] h-[22px] rounded-sm border flex items-center justify-center shrink-0 transition-colors cursor-pointer ${
+            sidebarCollapsed
+              ? "bg-accent-soft border-accent text-accent-fg"
+              : "bg-surface-3 border-line text-fg-2 hover:text-fg hover:border-accent"
+          }`}
         >
-          <button
-            ref={profileButtonRef}
-            type="button"
-            onClick={() => setIsProfileMenuOpen((v) => !v)}
-            className="h-[22px] px-2 bg-surface-3 hover:border-accent border border-line rounded-sm flex items-center space-x-1.5 text-[11px] font-mono text-fg whitespace-nowrap"
-            title="Switch Workspace Profile"
-          >
-            <span
-              className="w-2 h-2 rounded-[2px] inline-block shrink-0 shadow-xs"
-              style={{
-                backgroundColor:
-                  activeProfile?.color || accentColor || "#F59E0B",
-              }}
-            />
-            <span className="max-w-[140px] truncate">
-              {activeProfile?.name || (hasInitialized ? "Default Studio" : "Loading...")}
-            </span>
-            <ChevronDown className="w-3 h-3 text-fg-2 shrink-0" />
-          </button>
-
-          {isProfileMenuOpen && (
-            <Suspense fallback={null}>
-              <ProfileSwitcherPopover
-                profileMenuPos={profileMenuPos}
-                profiles={profiles}
-                activeProfile={activeProfile}
-                onClose={() => setIsProfileMenuOpen(false)}
-                onSwitchProfile={switchProfile}
-                onCreateProfile={createProfile}
-                onOpenManageProfiles={() => {
-                  setIsProfileMenuOpen(false);
-                  setSettingsOpen(true, "profiles");
-                }}
-              />
-            </Suspense>
+          {sidebarCollapsed ? (
+            <PanelLeft className="w-3.5 h-3.5 shrink-0" />
+          ) : (
+            <PanelLeftClose className="w-3.5 h-3.5 shrink-0" />
           )}
-        </div>
+        </button>
       </div>
 
       {/* Right: Sample Counter + Window Controls */}
@@ -268,12 +216,25 @@ export const TopHeaderBar: React.FC = React.memo(() => {
 export const BottomStatusBar: React.FC = React.memo(() => {
   const hasInitialized = useSampleStore((s) => s.hasInitialized);
   const activeProfileName = useSampleStore((s) => s.activeProfile?.name);
-  const isScanning = useSampleStore((s) => s.isScanning);
-  const scanProgress = useSampleStore((s) => s.scanProgress);
-  const isScanningDuplicates = useSampleStore((s) => s.isScanningDuplicates);
-  const duplicateScanProgress = useSampleStore(
-    (s) => s.duplicateScanProgress
+  const jobSnapshot = useSampleStore(
+    useShallow((s) => ({
+      isScanning: s.isScanning,
+      scanProgress: s.scanProgress,
+      isDetectingGenres: s.isDetectingGenres,
+      genreDetectProgress: s.genreDetectProgress,
+      isApplyingAutoTags: s.isApplyingAutoTags,
+      autoTagProgress: s.autoTagProgress,
+      isAnalyzingBpmKey: s.isAnalyzingBpmKey,
+      bpmKeyProgress: s.bpmKeyProgress,
+      isDownloadingAiModel: s.isDownloadingAiModel,
+      aiDownloadProgress: s.aiDownloadProgress,
+      isAnalyzingAi: s.isAnalyzingAi,
+      aiIndexProgress: s.aiIndexProgress,
+      isScanningDuplicates: s.isScanningDuplicates,
+      duplicateScanProgress: s.duplicateScanProgress,
+    }))
   );
+  const activeJob = resolveActiveBackgroundJob(jobSnapshot);
   const statusMessage = useSampleStore((s) => s.statusMessage);
   const selectedSampleSize = useSampleStore(
     (s) => s.selectedSample?.file_size ?? null
@@ -283,60 +244,67 @@ export const BottomStatusBar: React.FC = React.memo(() => {
   const favoriteOnly = useSampleStore((s) => s.favoriteOnly);
   const selectedCollectionId = useSampleStore((s) => s.selectedCollectionId);
   const selectedTagCount = useSampleStore((s) => s.selectedTagIds.length);
+  const excludedTagCount = useSampleStore((s) => s.excludedTagIds.length);
+  const selectedGenre = useSampleStore((s) => s.selectedGenre);
   const collections = useSampleStore((s) => s.collections);
   const inAppDragSample = useSampleStore((s) => s.inAppDragSample);
   const inAppDragCount = useSampleStore((s) => s.inAppDragSamples.length);
   const setStatusMessage = useSampleStore((s) => s.setStatusMessage);
 
+  const hasActiveJob = activeJob !== null;
   useEffect(() => {
-    if (!statusMessage || isScanning) return;
+    if (!statusMessage || hasActiveJob) return;
     const timer = window.setTimeout(() => {
       setStatusMessage(null);
     }, 3500);
     return () => window.clearTimeout(timer);
-  }, [statusMessage, isScanning, setStatusMessage]);
+  }, [statusMessage, hasActiveJob, setStatusMessage]);
 
-  const pct = scanProgress ? Math.round(scanProgress.percentage) : 0;
-  const dupPct = duplicateScanProgress
-    ? Math.min(100, Math.max(0, Math.round(duplicateScanProgress.percentage)))
-    : 0;
   const activeCol =
     selectedCollectionId !== null
       ? collections.find((c) => c.id === selectedCollectionId)
       : undefined;
 
   return (
-    <footer className="h-[24px] bg-surface-1 border-t border-line px-3 flex items-center justify-between font-mono tabular-nums text-[11px] text-fg-2 shrink-0 select-none">
+    <footer
+      role="status"
+      aria-live="polite"
+      className="h-[24px] bg-surface-1 border-t border-line px-3 flex items-center justify-between font-mono tabular-nums text-[11px] text-fg-2 shrink-0 select-none"
+    >
       <div className="flex items-center space-x-3 min-w-0 truncate">
-        {isScanning && scanProgress ? (
-          <div className="flex items-center space-x-2">
-            <span className="text-accent-fg font-semibold">
-              Scanning [{scanProgress.processed}/{scanProgress.total}] ({pct}%)
+        {activeJob ? (
+          <div
+            data-testid="main-job-progress-bar"
+            className="flex items-center space-x-2 min-w-0"
+          >
+            <span className="text-accent-fg font-semibold shrink-0">
+              {activeJob.label}
+              {activeJob.countLabel ? ` [${activeJob.countLabel}]` : ""} (
+              {activeJob.percentage}%)
             </span>
-            <div className="w-[140px] h-[6px] bg-surface-0 border border-line rounded-2xs overflow-hidden">
+            <div className="w-[140px] h-[6px] bg-surface-0 border border-line rounded-2xs overflow-hidden shrink-0">
               <div
-                className="h-full bg-accent"
-                style={{ width: `${pct}%` }}
+                className={`h-full bg-accent transition-[width] duration-75 ${
+                  activeJob.indeterminate ? "animate-pulse" : ""
+                }`}
+                style={{
+                  width: activeJob.indeterminate
+                    ? "28%"
+                    : `${activeJob.percentage}%`,
+                }}
               />
             </div>
-            <span className="text-fg-3 truncate max-w-[320px]">
-              {scanProgress.current_file}
-            </span>
-          </div>
-        ) : isScanningDuplicates && duplicateScanProgress ? (
-          <div className="flex items-center space-x-2">
-            <span className="text-accent-fg font-semibold">
-              {duplicateScanProgress.stage_label} ({dupPct}%)
-            </span>
-            <div className="w-[140px] h-[6px] bg-surface-0 border border-line rounded-2xs overflow-hidden">
-              <div
-                className="h-full bg-accent transition-[width] duration-75"
-                style={{ width: `${dupPct}%` }}
-              />
-            </div>
-            {duplicateScanProgress.current_file && (
-              <span className="text-fg-3 truncate max-w-[280px]">
-                {duplicateScanProgress.current_file}
+            {activeJob.detail && (
+              <span className="text-fg-3 truncate max-w-[300px]">
+                {activeJob.detail}
+              </span>
+            )}
+            {activeJob.activeCount > 1 && (
+              <span
+                className="px-1 rounded-2xs bg-accent-soft border border-accent/40 text-accent-fg text-[9.5px] font-semibold shrink-0"
+                title={`${activeJob.activeCount} background tasks running`}
+              >
+                +{activeJob.activeCount - 1}
               </span>
             )}
           </div>
@@ -375,11 +343,23 @@ export const BottomStatusBar: React.FC = React.memo(() => {
             <span>Favorites</span>
           </span>
         )}
+        {selectedGenre && (
+          <span className="text-accent-fg inline-flex items-center space-x-0.5">
+            <span>♫ {selectedGenre}</span>
+          </span>
+        )}
         {selectedTagCount > 0 && (
           <span className="text-accent-fg inline-flex items-center space-x-0.5">
             <Hash className="w-3 h-3" />
             <span>
-              {selectedTagCount} tag{selectedTagCount > 1 ? "s" : ""}
+              {selectedTagCount} filter{selectedTagCount > 1 ? "s" : ""}
+            </span>
+          </span>
+        )}
+        {excludedTagCount > 0 && (
+          <span className="text-fg-2 inline-flex items-center space-x-0.5">
+            <span>
+              NOT {excludedTagCount}
             </span>
           </span>
         )}
@@ -401,6 +381,20 @@ export const BottomStatusBar: React.FC = React.memo(() => {
             {(selectedSampleSize / 1024).toFixed(0)} KB
           </span>
         )}
+        <StatusBarAudioDeviceButton />
+        <button
+          type="button"
+          onClick={() => {
+            window.dispatchEvent(
+              new CustomEvent("audify:toggle-shortcuts-cheatsheet")
+            );
+          }}
+          className="h-[18px] w-[18px] rounded-xs border border-transparent hover:border-line hover:bg-surface-2 text-fg-3 hover:text-accent-fg inline-flex items-center justify-center transition-colors shrink-0"
+          title="Keyboard Shortcuts (? / F1)"
+          aria-label="Keyboard Shortcuts (? / F1)"
+        >
+          <HelpCircle className="w-3 h-3" />
+        </button>
       </div>
     </footer>
   );

@@ -296,7 +296,7 @@ fn replace_folder_or_prefix(
     }
     let norm = normalize_clean_path(trimmed);
     let exact_match = if cfg!(windows) {
-        norm.eq_ignore_ascii_case(norm_old_root)
+        norm.to_lowercase() == norm_old_root.to_lowercase()
     } else {
         norm == norm_old_root
     };
@@ -304,9 +304,7 @@ fn replace_folder_or_prefix(
         return Some(norm_new_root.to_string());
     }
     let rel_opt = if cfg!(windows) {
-        norm.get(..old_prefix_slash.len())
-            .filter(|head| head.to_lowercase() == old_prefix_lower)
-            .and_then(|_| norm.get(old_prefix_slash.len()..))
+        crate::commands::strip_unicode_prefix_ci(&norm, old_prefix_lower)
     } else {
         norm.strip_prefix(old_prefix_slash)
     };

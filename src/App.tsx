@@ -1,6 +1,5 @@
-import React, { Suspense, useEffect } from "react";
-import { AppAtmosphereViewport } from "./components/AppAtmosphereViewport";
-import { CreditToastBanner, StatusNoticeToast } from "./components/AppToasts";
+import React, { Suspense, useEffect, useState } from "react";
+import { Z_INDEX } from "./constants/zIndex";
 import { AudioEngine } from "./components/AudioEngine";
 import { GlobalTooltip } from "./components/GlobalTooltip";
 import { LeftSidebar } from "./components/LeftSidebar";
@@ -13,6 +12,13 @@ import {
   isStandaloneSettingsWindow,
 } from "./store/storageHelpers";
 import { useSampleStore } from "./store/useSampleStore";
+import { attachBodyAriaTitleMirror } from "./utils/domBodyObserver";
+
+const AppAtmosphereViewport = React.lazy(() =>
+  import("./components/AppAtmosphereViewport").then((m) => ({
+    default: m.AppAtmosphereViewport,
+  }))
+);
 
 const SettingsModal = React.lazy(() =>
   import("./components/SettingsModal").then((m) => ({
@@ -32,6 +38,21 @@ const FileOpsModals = React.lazy(() =>
 const BatchRenameModal = React.lazy(() =>
   import("./components/modals/BatchRenameModal").then((m) => ({
     default: m.BatchRenameModal,
+  }))
+);
+const ShortcutsCheatsheetModal = React.lazy(() =>
+  import("./components/modals/ShortcutsCheatsheetModal").then((m) => ({
+    default: m.ShortcutsCheatsheetModal,
+  }))
+);
+const StatusNoticeToast = React.lazy(() =>
+  import("./components/AppToasts").then((m) => ({
+    default: m.StatusNoticeToast,
+  }))
+);
+const CreditToastBanner = React.lazy(() =>
+  import("./components/AppToasts").then((m) => ({
+    default: m.CreditToastBanner,
   }))
 );
 
@@ -54,23 +75,26 @@ export const App: React.FC = () => {
   const pauseCreditToast = useSampleStore((s) => s.pauseCreditToast);
   const resumeCreditToast = useSampleStore((s) => s.resumeCreditToast);
   const clearStatusNotice = useSampleStore((s) => s.clearStatusNotice);
+  const pauseStatusNotice = useSampleStore((s) => s.pauseStatusNotice);
+  const resumeStatusNotice = useSampleStore((s) => s.resumeStatusNotice);
 
   useEffect(() => {
     void useSampleStore.getState().initialize();
   }, []);
 
+  const hasBackdrop =
+    themeMode !== "contrast" &&
+    hasActiveVisualBackdrop(wallpaperKind, customBgImage, asciiMagicSlug);
+
   // Sync data-has-bg attribute on root html when any image or ASCII backdrop is active
   useEffect(() => {
     const root = document.documentElement;
-    const isActive =
-      themeMode !== "contrast" &&
-      hasActiveVisualBackdrop(wallpaperKind, customBgImage, asciiMagicSlug);
-    if (isActive) {
+    if (hasBackdrop) {
       root.setAttribute("data-has-bg", "true");
     } else {
       root.removeAttribute("data-has-bg");
     }
-  }, [wallpaperKind, customBgImage, asciiMagicSlug, themeMode]);
+  }, [hasBackdrop]);
 
   // Surface otherwise-silent async failures in the status bar instead of the dev console only.
   useEffect(() => {
@@ -85,59 +109,8 @@ export const App: React.FC = () => {
     return () => window.removeEventListener("unhandledrejection", onRejection);
   }, []);
 
-  // Mirror title -> aria-label on icon buttons for accessibility
-  useEffect(() => {
-    const label = (root: ParentNode) => {
-      root
-        .querySelectorAll<HTMLElement>("button[title]:not([aria-label])")
-        .forEach((b) => {
-          const t = b.getAttribute("title");
-          if (t) {
-            b.setAttribute("aria-label", t);
-            b.setAttribute("data-aria-from-title", "true");
-          }
-        });
-    };
-    label(document);
-    const observer = new MutationObserver((records) => {
-      for (const r of records) {
-        if (r.type === "attributes" && r.target instanceof HTMLElement) {
-          const el = r.target;
-          if (el.matches("button[title]")) {
-            const t = el.getAttribute("title");
-            if (
-              t &&
-              (!el.hasAttribute("aria-label") ||
-                el.hasAttribute("data-aria-from-title"))
-            ) {
-              el.setAttribute("aria-label", t);
-              el.setAttribute("data-aria-from-title", "true");
-            }
-          }
-          continue;
-        }
-        r.addedNodes.forEach((n) => {
-          if (n instanceof HTMLElement) {
-            if (n.matches("button[title]:not([aria-label])")) {
-              const t = n.getAttribute("title");
-              if (t) {
-                n.setAttribute("aria-label", t);
-                n.setAttribute("data-aria-from-title", "true");
-              }
-            }
-            label(n);
-          }
-        });
-      }
-    });
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["title"],
-    });
-    return () => observer.disconnect();
-  }, []);
+  // Mirror title -> aria-label on icon buttons for accessibility (shared body observer)
+  useEffect(() => attachBodyAriaTitleMirror(), []);
 
   // Disable browser default right-click context menu globally
   useEffect(() => {
@@ -149,6 +122,18 @@ export const App: React.FC = () => {
   }, []);
 
   useAppGlobalShortcuts();
+  const [showShortcutsGuide, setShowShortcutsGuide] = useState(false);
+
+  useEffect(() => {
+    const onToggleGuide = () => setShowShortcutsGuide((prev) => !prev);
+    window.addEventListener("audify:toggle-shortcuts-cheatsheet", onToggleGuide);
+    return () => {
+      window.removeEventListener(
+        "audify:toggle-shortcuts-cheatsheet",
+        onToggleGuide
+      );
+    };
+  }, []);
 
   const isStandaloneSettings = isStandaloneSettingsWindow();
 
@@ -163,10 +148,14 @@ export const App: React.FC = () => {
         </Suspense>
 
         {statusNotice && (
-          <StatusNoticeToast
-            notice={statusNotice}
-            onDismiss={clearStatusNotice}
-          />
+          <Suspense fallback={null}>
+            <StatusNoticeToast
+              notice={statusNotice}
+              onDismiss={clearStatusNotice}
+              onPause={pauseStatusNotice}
+              onResume={resumeStatusNotice}
+            />
+          </Suspense>
         )}
 
         <GlobalTooltip />
@@ -181,7 +170,11 @@ export const App: React.FC = () => {
     >
       <AudioEngine />
 
-      <AppAtmosphereViewport />
+      {hasBackdrop && (
+        <Suspense fallback={null}>
+          <AppAtmosphereViewport />
+        </Suspense>
+      )}
 
       {/* Main UI Content Layer */}
       <div className="relative z-10 flex flex-col h-full w-full overflow-hidden">
@@ -208,21 +201,40 @@ export const App: React.FC = () => {
         className="pointer-events-none absolute inset-0 z-40 border border-line"
       />
 
-      {creditToast && (
-        <CreditToastBanner
-          toast={creditToast}
-          onDismiss={clearCreditToast}
-          onPause={pauseCreditToast}
-          onResume={resumeCreditToast}
-        />
-      )}
-
-      {/* Modal-Visible Feedback & Error Toast (Renders above SettingsModal z-50) */}
-      {statusNotice && (isSettingsOpen || statusNotice.kind === "error") && (
-        <StatusNoticeToast
-          notice={statusNotice}
-          onDismiss={clearStatusNotice}
-        />
+      {/* Stacked Bottom-Right Toast Container (prevents overlap between CreditToast & StatusNotice) */}
+      {(creditToast ||
+        (statusNotice &&
+          (isSettingsOpen ||
+            statusNotice.kind === "error" ||
+            Boolean(statusNotice.actionLabel)))) && (
+        <div
+          style={{ zIndex: Z_INDEX.statusToast }}
+          className="fixed bottom-8 right-4 flex flex-col-reverse items-end gap-2 pointer-events-none"
+        >
+          <Suspense fallback={null}>
+            {statusNotice &&
+              (isSettingsOpen ||
+                statusNotice.kind === "error" ||
+                Boolean(statusNotice.actionLabel)) && (
+                <StatusNoticeToast
+                  notice={statusNotice}
+                  onDismiss={clearStatusNotice}
+                  onPause={pauseStatusNotice}
+                  onResume={resumeStatusNotice}
+                  stacked={true}
+                />
+              )}
+            {creditToast && (
+              <CreditToastBanner
+                toast={creditToast}
+                onDismiss={clearCreditToast}
+                onPause={pauseCreditToast}
+                onResume={resumeCreditToast}
+                stacked={true}
+              />
+            )}
+          </Suspense>
+        </div>
       )}
 
       {isSettingsOpen && (
@@ -239,6 +251,13 @@ export const App: React.FC = () => {
       {hasBatchRenameModal && (
         <Suspense fallback={null}>
           <BatchRenameModal />
+        </Suspense>
+      )}
+      {showShortcutsGuide && (
+        <Suspense fallback={null}>
+          <ShortcutsCheatsheetModal
+            onClose={() => setShowShortcutsGuide(false)}
+          />
         </Suspense>
       )}
       <GlobalTooltip />

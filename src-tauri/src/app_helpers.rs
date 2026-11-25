@@ -3,7 +3,6 @@ use crate::{security, win_drag};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
 use std::time::Duration;
 
 pub const MAX_DRAG_ICON_BYTES: usize = 2 * 1024 * 1024;
@@ -12,8 +11,24 @@ pub const AUDIFY_WEBVIEW_ARGS: &str =
     "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required";
 
 static SETTINGS_HIDE_SEQ: AtomicU64 = AtomicU64::new(0);
-static SETTINGS_LIFECYCLE_LOCK: Mutex<()> = Mutex::new(());
-const SETTINGS_IDLE_DESTROY_DELAY_SECS: u64 = 25;
+static SETTINGS_VISIBLE: AtomicBool = AtomicBool::new(false);
+static SETTINGS_CREATING: AtomicBool = AtomicBool::new(false);
+const SETTINGS_IDLE_DESTROY_DELAY_SECS: u64 = 8;
+
+struct ResetSettingsCreatingGuard;
+impl Drop for ResetSettingsCreatingGuard {
+    fn drop(&mut self) {
+        SETTINGS_CREATING.store(false, Ordering::SeqCst);
+    }
+}
+
+pub fn on_settings_window_destroyed() {
+    // Never clear `SETTINGS_CREATING` here (owned exclusively by `ResetSettingsCreatingGuard`),
+    // and ignore stale `Destroyed` events arriving while a fresh Settings window is being built.
+    if !SETTINGS_CREATING.load(Ordering::SeqCst) {
+        SETTINGS_VISIBLE.store(false, Ordering::SeqCst);
+    }
+}
 
 static MAIN_WINDOW_FOCUSED: AtomicBool = AtomicBool::new(true);
 static SETTINGS_WINDOW_FOCUSED: AtomicBool = AtomicBool::new(false);
@@ -78,26 +93,36 @@ pub fn on_window_focus_changed(app: &tauri::AppHandle, label: &str, focused: boo
 pub fn on_settings_close_requested(window: &tauri::Window) {
     use tauri::{Emitter, Manager};
 
-    let _guard = SETTINGS_LIFECYCLE_LOCK.lock().ok();
+    SETTINGS_VISIBLE.store(false, Ordering::SeqCst);
     let seq = SETTINGS_HIDE_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
     let _ = window.emit_to("settings", "audify:settings-visibility", false);
     let _ = window.hide();
-    drop(_guard);
+    crate::win_memory::set_webview_low_memory(window.app_handle(), "settings", true);
     on_window_focus_changed(window.app_handle(), "settings", false);
 
     let app_handle = window.app_handle().clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(SETTINGS_IDLE_DESTROY_DELAY_SECS));
-        let _guard = SETTINGS_LIFECYCLE_LOCK.lock().ok();
-        if SETTINGS_HIDE_SEQ.load(Ordering::SeqCst) != seq {
+        if SETTINGS_HIDE_SEQ.load(Ordering::SeqCst) != seq
+            || SETTINGS_VISIBLE.load(Ordering::SeqCst)
+            || SETTINGS_CREATING.load(Ordering::SeqCst)
+        {
             return;
         }
-        if let Some(settings_win) = app_handle.get_webview_window("settings") {
-            let visible = settings_win.is_visible().unwrap_or(false);
-            if !visible {
+        // Dispatch destroy on the main thread with an atomic seq re-check so it can never
+        // ABBA-deadlock with window events or race against a concurrent reopen.
+        let app_for_main = app_handle.clone();
+        let _ = app_handle.run_on_main_thread(move || {
+            if SETTINGS_HIDE_SEQ.load(Ordering::SeqCst) != seq
+                || SETTINGS_VISIBLE.load(Ordering::SeqCst)
+                || SETTINGS_CREATING.load(Ordering::SeqCst)
+            {
+                return;
+            }
+            if let Some(settings_win) = app_for_main.get_webview_window("settings") {
                 let _ = settings_win.destroy();
             }
-        }
+        });
     });
 }
 
@@ -146,7 +171,7 @@ pub async fn start_native_file_drag(
             Ok(out)
         };
 
-        if let Ok(read_conn) = crate::db::open_read_conn(&state_owned.user_dir) {
+        if let Ok(read_conn) = state_owned.acquire_read_conn() {
             validate_all(&read_conn)
         } else {
             let conn = state_owned.lock_db();
@@ -218,9 +243,11 @@ pub async fn start_native_file_drag(
 }
 
 #[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct CrossWindowSyncPayload {
     source: String,
     kind: String,
+    msg_id: Option<String>,
 }
 
 fn allowlisted_settings_tab(raw: Option<&str>) -> &'static str {
@@ -284,18 +311,36 @@ pub async fn open_settings_window(
     let clean_theme = allowlisted_theme_mode(theme.as_deref());
     let bg = theme_window_bg_color(Some(clean_theme));
 
-    SETTINGS_HIDE_SEQ.fetch_add(1, Ordering::SeqCst);
-    let _lifecycle_guard = SETTINGS_LIFECYCLE_LOCK.lock().ok();
+    let open_seq = SETTINGS_HIDE_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+    SETTINGS_VISIBLE.store(true, Ordering::SeqCst);
+
+    // Serialize concurrent clicks while building a fresh settings window
+    if SETTINGS_CREATING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        if let Some(existing) = app.get_webview_window("settings") {
+            let _ = existing.emit_to("settings", "audify:settings-select-tab", clean_tab);
+            let _ = existing.show();
+            let _ = existing.set_focus();
+        }
+        return Ok(());
+    }
+    let _creating_guard = ResetSettingsCreatingGuard;
 
     if let Some(existing) = app.get_webview_window("settings") {
+        crate::win_memory::set_webview_low_memory(&app, "settings", false);
         let _ = existing.set_background_color(Some(bg));
         let _ = existing.set_always_on_top(pin_top);
         let _ = existing.emit_to("settings", "audify:settings-visibility", true);
         let _ = existing.emit_to("settings", "audify:settings-select-tab", clean_tab);
         let _ = existing.unminimize();
-        let _ = existing.show();
-        let _ = existing.set_focus();
-        return Ok(());
+        // Only short-circuit if the existing window actually survived and showed; if an idle
+        // destroy raced right before show(), fall through and build a fresh Settings window.
+        if existing.show().is_ok() {
+            let _ = existing.set_focus();
+            return Ok(());
+        }
     }
 
     let url = format!(
@@ -334,6 +379,11 @@ pub async fn open_settings_window(
     let win_clone = win.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(60));
+        if SETTINGS_HIDE_SEQ.load(Ordering::SeqCst) != open_seq
+            || !SETTINGS_VISIBLE.load(Ordering::SeqCst)
+        {
+            return;
+        }
         let _ = win_clone.show();
         let _ = win_clone.set_focus();
     });
@@ -345,11 +395,13 @@ pub fn broadcast_state_sync(
     app: tauri::AppHandle,
     window: tauri::Window,
     kind: String,
+    msg_id: Option<String>,
 ) -> Result<(), String> {
     use tauri::Emitter;
     let payload = CrossWindowSyncPayload {
         source: window.label().to_string(),
         kind,
+        msg_id,
     };
     app.emit("audify:cross-window-sync", payload)
         .map_err(|e| e.to_string())

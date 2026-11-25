@@ -177,6 +177,11 @@ export function paintText(
   }
 }
 
+const TONE_HIST_BINS = 512;
+let sharedToneVals = new Float32Array(0);
+let sharedToneKeys: Array<string | null> = [];
+const sharedToneHist = new Uint32Array(TONE_HIST_BINS);
+
 export function paintTone(
   ctx: CanvasRenderingContext2D,
   frame: AsciiMagicFrame,
@@ -198,8 +203,15 @@ export function paintTone(
   const cols = T[0]?.length ?? 0;
   if (rows === 0 || cols === 0) return;
 
-  const vals = new Float32Array(rows * cols);
-  const keys = new Array<string | null>(rows * cols);
+  const cellCount = rows * cols;
+  if (sharedToneVals.length < cellCount) {
+    sharedToneVals = new Float32Array(cellCount);
+  }
+  const vals = sharedToneVals;
+  if (sharedToneKeys.length < cellCount) {
+    sharedToneKeys = new Array<string | null>(cellCount);
+  }
+  const keys = sharedToneKeys;
   const overlayText: Array<readonly [number, number, string, string | null]> = [];
   const pictureLike = Boolean(opts.all) || Math.abs(cw - ch) < 0.01;
   const shade = pictureLike ? null : createShadeTester(T);
@@ -212,10 +224,12 @@ export function paintTone(
       const idx = r * cols + c;
       if (gch === " ") {
         vals[idx] = -1;
+        keys[idx] = null;
         continue;
       }
       if (!pictureLike && shade && !shade(gch)) {
         vals[idx] = -1;
+        keys[idx] = null;
         overlayText.push([r, c, gch, hx]);
         continue;
       }
@@ -226,12 +240,13 @@ export function paintTone(
 
   let vmax = 0;
   let count = 0;
-  for (let i = 0; i < vals.length; i++) {
+  for (let i = 0; i < cellCount; i++) {
     if (vals[i] > vmax) vmax = vals[i];
   }
-  const HB = 512;
-  const hist = new Uint32Array(HB);
-  for (let i = 0; i < vals.length; i++) {
+  const HB = TONE_HIST_BINS;
+  const hist = sharedToneHist;
+  hist.fill(0);
+  for (let i = 0; i < cellCount; i++) {
     if (vals[i] >= 0) {
       hist[Math.min(HB - 1, Math.floor((vals[i] / (vmax || 1)) * HB))]++;
       count++;

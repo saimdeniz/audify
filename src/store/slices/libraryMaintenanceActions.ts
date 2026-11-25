@@ -337,10 +337,16 @@ export function createLibraryMaintenanceActions(ctx: StoreSliceContext) {
       const { libraries, isScanning } = get();
       if (isScanning || libraries.length === 0) return;
 
-      for (const lib of libraries) {
+      const epoch = getProfileEpoch();
+      const targets = [...libraries];
+      for (const lib of targets) {
+        if (epoch !== getProfileEpoch()) return;
         await get().scanSpecificPath(lib.path, true);
       }
-      safeSetItem(AUDIFY_STORAGE_KEYS.peaksV3Rms600, "done");
+      if (epoch !== getProfileEpoch()) return;
+      safeSetItem(AUDIFY_STORAGE_KEYS.peaksV3Rms600, "done", {
+        broadcast: false,
+      });
     },
   };
 }

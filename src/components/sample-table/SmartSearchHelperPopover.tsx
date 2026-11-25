@@ -17,8 +17,10 @@ const SMART_SEARCH_CHIPS = [
   { token: "bpm:90-130", desc: "90 to 130 BPM" },
   { token: "key:Am", desc: "Exact Key (Am / 8A)" },
   { token: "key:~8A", desc: "Harmonic Mix Keys (8A, 7A, 9A, 8B)" },
-  { token: "tag:", desc: "By Tag" },
-  { token: "genre:", desc: "By Genre / Mood" },
+  { token: "tag:", desc: "By Tag / Sub-tag (e.g. tag:animals/dog)" },
+  { token: "genre:", desc: "By Genre" },
+  { token: "mood:", desc: "By Mood (e.g. mood:dark)" },
+  { token: "source:", desc: "By Source / Pack (e.g. source:pokemon)" },
   { token: "folder:", desc: "By Folder" },
   { token: "ext:wav", desc: "WAV Only" },
   { token: "channels:stereo", desc: "Stereo Only (or mono)" },
@@ -36,6 +38,7 @@ interface SmartSearchHelperPopoverProps {
   setSearchQuery: (q: string) => void;
   setSmartSearchSynonyms: (v: boolean) => void;
   setShowSearchHelper: React.Dispatch<React.SetStateAction<boolean>>;
+  onOperatorInserted?: (nextCursorPos: number) => void;
 }
 
 export const SmartSearchHelperPopover: React.FC<
@@ -49,6 +52,7 @@ export const SmartSearchHelperPopover: React.FC<
   setSearchQuery,
   setSmartSearchSynonyms,
   setShowSearchHelper,
+  onOperatorInserted,
 }) => {
   const [coords, setCoords] = useState<{ top: number; left: number }>({
     top: 68,
@@ -64,14 +68,28 @@ export const SmartSearchHelperPopover: React.FC<
       const w = Math.min(368, window.innerWidth - 24);
       const top = Math.min(window.innerHeight - 180, rect.bottom + 4);
       const left = Math.max(8, Math.min(rect.left, window.innerWidth - w - 8));
-      setCoords({ top, left });
+      setCoords((prev) =>
+        prev.top === top && prev.left === left ? prev : { top, left }
+      );
+    };
+    const onScroll = (ev: Event) => {
+      const el = anchorRef?.current;
+      if (!el) return;
+      const target = ev.target;
+      if (
+        target === window ||
+        target === document ||
+        (target instanceof Node && target.contains(el))
+      ) {
+        updatePos();
+      }
     };
     updatePos();
     window.addEventListener("resize", updatePos);
-    window.addEventListener("scroll", updatePos, true);
+    window.addEventListener("scroll", onScroll, true);
     return () => {
       window.removeEventListener("resize", updatePos);
-      window.removeEventListener("scroll", updatePos, true);
+      window.removeEventListener("scroll", onScroll, true);
     };
   }, [anchorRef]);
 
@@ -87,7 +105,7 @@ export const SmartSearchHelperPopover: React.FC<
         zIndex: Z_INDEX.floatingMenu,
       }}
       onClick={(e) => e.stopPropagation()}
-      className="w-[368px] max-w-[calc(100vw-24px)] bg-surface-2 backdrop-blur-md border border-line-strong rounded-md shadow-2xl p-2 space-y-2 font-mono text-[10px]"
+      className="w-[368px] max-w-[calc(100vw-24px)] bg-surface-2 audify-overlay-surface border border-line-strong rounded-md shadow-2xl p-2 space-y-2 font-mono text-[10px]"
     >
     <div className="flex items-center justify-between border-b border-line pb-1">
       <span className="text-fg font-semibold tracking-wider uppercase text-[9.5px]">
@@ -126,11 +144,25 @@ export const SmartSearchHelperPopover: React.FC<
                   .filter((w) => w.toLowerCase() !== chip.token.toLowerCase())
                   .join(" ");
                 setSearchQuery(next);
+                searchInputRef.current?.focus();
               } else {
                 const next = trimmed ? `${trimmed} ${chip.token}` : chip.token;
                 setSearchQuery(next);
+                if (chip.token.endsWith(":")) {
+                  setShowSearchHelper(false);
+                  const nextLen = next.length;
+                  requestAnimationFrame(() => {
+                    const input = searchInputRef.current;
+                    if (input) {
+                      input.focus();
+                      input.setSelectionRange(nextLen, nextLen);
+                    }
+                    onOperatorInserted?.(nextLen);
+                  });
+                } else {
+                  searchInputRef.current?.focus();
+                }
               }
-              searchInputRef.current?.focus();
             }}
             className={`h-[22px] px-1.5 rounded-xs border flex items-center justify-between transition-colors ${
               isPresent

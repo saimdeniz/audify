@@ -342,7 +342,7 @@ pub(crate) fn move_samples_to_folder_with_conn(
 }
 
 #[tauri::command]
-pub fn move_samples_to_folder(
+pub async fn move_samples_to_folder(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     ai_state: State<'_, AiTaggerState>,
@@ -353,37 +353,42 @@ pub fn move_samples_to_folder(
 ) -> Result<FolderDropResult, String> {
     crate::library_watcher::suppress_watcher_if_managed(&app, 2500);
     let sample_ids = sample_ids.unwrap_or_default();
-    let (target_dir_pb, norm_target_folder, candidates) = {
-        let conn = state.lock_db();
-        load_move_candidates(
-            &conn,
-            &state.user_dir,
-            &sample_ids,
-            target_library_id,
-            &target_folder_path,
-        )?
-    };
-    let outcome = execute_move_disk(
-        &state.user_dir,
-        target_library_id,
-        &target_dir_pb,
-        &norm_target_folder,
-        &candidates,
-        conflict_policy.as_deref().unwrap_or("prompt"),
-    )?;
-    let res = match outcome {
-        MoveDiskOutcome::EarlyConflict(conflict) => return Ok(conflict),
-        other => {
-            let mut conn = state.lock_db();
-            commit_move_db(
-                &mut conn,
-                &state.user_dir,
+    let state_owned = state.inner().clone();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        let (target_dir_pb, norm_target_folder, candidates) = {
+            let conn = state_owned.lock_db();
+            load_move_candidates(
+                &conn,
+                &state_owned.user_dir,
+                &sample_ids,
                 target_library_id,
-                norm_target_folder,
-                other,
+                &target_folder_path,
             )?
+        };
+        let outcome = execute_move_disk(
+            &state_owned.user_dir,
+            target_library_id,
+            &target_dir_pb,
+            &norm_target_folder,
+            &candidates,
+            conflict_policy.as_deref().unwrap_or("prompt"),
+        )?;
+        match outcome {
+            MoveDiskOutcome::EarlyConflict(conflict) => Ok(conflict),
+            other => {
+                let mut conn = state_owned.lock_db();
+                commit_move_db(
+                    &mut conn,
+                    &state_owned.user_dir,
+                    target_library_id,
+                    norm_target_folder,
+                    other,
+                )
+            }
         }
-    };
+    })
+    .await
+    .map_err(|e| format!("Move samples task failed: {}", e))??;
     let updates: Vec<(i64, i64, &str)> = res
         .moved_records
         .iter()
@@ -394,7 +399,7 @@ pub fn move_samples_to_folder(
 }
 
 #[tauri::command]
-pub fn relocate_moved_samples(
+pub async fn relocate_moved_samples(
     app: AppHandle,
     state: State<'_, AppState>,
     ai_state: State<'_, AiTaggerState>,
@@ -405,16 +410,19 @@ pub fn relocate_moved_samples(
         return Ok(Vec::new());
     }
     crate::library_watcher::suppress_watcher_if_managed(&app, 2500);
-    let label = op_label.as_deref().unwrap_or("UNDO_MOVE");
-    let plans = {
-        let conn = state.lock_db();
-        relocate::prepare_relocate_plans(&conn, &state.user_dir, &entries)?
-    };
-    let completed = relocate::execute_relocate_disk(&plans, &state.user_dir)?;
-    let res = {
-        let mut conn = state.lock_db();
-        relocate::commit_relocate_db(&mut conn, &state.user_dir, &plans, &completed, label)?
-    };
+    let state_owned = state.inner().clone();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        let label = op_label.as_deref().unwrap_or("UNDO_MOVE");
+        let plans = {
+            let conn = state_owned.lock_db();
+            relocate::prepare_relocate_plans(&conn, &state_owned.user_dir, &entries)?
+        };
+        let completed = relocate::execute_relocate_disk(&plans, &state_owned.user_dir)?;
+        let mut conn = state_owned.lock_db();
+        relocate::commit_relocate_db(&mut conn, &state_owned.user_dir, &plans, &completed, label)
+    })
+    .await
+    .map_err(|e| format!("Relocate samples task failed: {}", e))??;
     let updates: Vec<(i64, i64, &str)> = res
         .iter()
         .map(|r| (r.sample_id, r.new_library_id, r.new_path.as_str()))

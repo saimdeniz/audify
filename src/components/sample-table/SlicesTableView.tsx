@@ -71,6 +71,7 @@ export const SlicesTableView: React.FC = () => {
   const sliceSortKey = useSampleStore((s) => s.sliceSortKey);
   const sliceSortDir = useSampleStore((s) => s.sliceSortDir);
   const searchQuery = useSampleStore((s) => s.searchQuery);
+  const folderFilter = useSampleStore((s) => s.folderFilter);
   const selectedSliceIds = useSampleStore((s) => s.selectedSliceIds);
   const activeSliceId = useSampleStore((s) => s.activeSliceId);
   const selectedSample = useSampleStore((s) => s.selectedSample);
@@ -182,6 +183,7 @@ export const SlicesTableView: React.FC = () => {
     () =>
       getVisibleSortedSlices(activeSourceList, {
         searchQuery,
+        folderFilter,
         sliceHideMissing: isSliceTrashMode ? false : sliceHideMissing,
         sliceFavoriteOnly: isSliceTrashMode ? false : sliceFavoriteOnly,
         slicePitchOnly: isSliceTrashMode ? false : slicePitchOnly,
@@ -192,6 +194,7 @@ export const SlicesTableView: React.FC = () => {
       activeSourceList,
       isSliceTrashMode,
       searchQuery,
+      folderFilter,
       sliceHideMissing,
       sliceFavoriteOnly,
       slicePitchOnly,
@@ -234,10 +237,12 @@ export const SlicesTableView: React.FC = () => {
     getScrollElement: () => parentRef.current,
     estimateSize: () => SLICE_ROW_HEIGHT,
     overscan: 14,
-    scrollMargin: 26,
   });
 
+  const prevActiveSliceIdRef = useRef<number | null>(null);
   useEffect(() => {
+    if (activeSliceId === prevActiveSliceIdRef.current) return;
+    prevActiveSliceIdRef.current = activeSliceId;
     if (activeSliceId === null) return;
     const idx = visibleSlices.findIndex((s) => s.id === activeSliceId);
     if (idx >= 0) {

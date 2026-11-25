@@ -8,6 +8,7 @@ import { useSampleStore } from "../store/useSampleStore";
 import { KeyboardShortcuts } from "../types";
 import { beginWindowTitlebarDrag } from "../utils/drag";
 import { useDialogFocusTrap } from "../utils/modalFocus";
+import { SettingsJobProgressStrip } from "./settings/SettingsJobProgressStrip";
 import { SettingsSectionHeader } from "./settings/SettingsSectionHeader";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import { WindowCaptionControls } from "./WindowCaptionControls";
@@ -63,7 +64,7 @@ const SettingsModalInner: React.FC<{ standalone?: boolean }> = ({
   const [collectionsSubTab, setCollectionsSubTab] = useState<
     "list" | "templates"
   >("list");
-  const [tagsSubTab, setTagsSubTab] = useState<"rules" | "library">("rules");
+  const [tagsSubTab, setTagsSubTab] = useState<"library" | "rules">("library");
   const [recordingAction, setRecordingAction] = useState<
     keyof KeyboardShortcuts | null
   >(null);
@@ -334,6 +335,9 @@ const SettingsModalInner: React.FC<{ standalone?: boolean }> = ({
             </div>
           </div>
         </div>
+
+        {/* CONTEXTUAL BACKGROUND JOB PROGRESS FOOTER (0px when idle) */}
+        <SettingsJobProgressStrip />
       </div>
     </div>
   );

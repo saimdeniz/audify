@@ -8,6 +8,7 @@ use crate::security::{
     validate_audio_path_in_scope, validate_safe_audio_stem,
 };
 use rusqlite::{params, Connection};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 pub(super) struct RelocatePlan {
@@ -28,6 +29,7 @@ pub(super) fn prepare_relocate_plans(
     entries: &[SampleRelocateEntry],
 ) -> Result<Vec<RelocatePlan>, String> {
     let mut plans = Vec::with_capacity(entries.len());
+    let mut seen_targets: HashSet<String> = HashSet::with_capacity(entries.len());
     for item in entries {
         let (old_lib_id, cur_file_path, cur_file_name, is_trashed, src_ro): (
             i64,
@@ -107,6 +109,18 @@ pub(super) fn prepare_relocate_plans(
         let final_dst_pb = clean_dst_parent.join(&final_name);
         let norm_old = normalize_clean_path(&resolved_src.to_string_lossy());
         let norm_new = normalize_clean_path(&final_dst_pb.to_string_lossy());
+
+        let target_key = if cfg!(windows) {
+            norm_new.to_lowercase()
+        } else {
+            norm_new.clone()
+        };
+        if !seen_targets.insert(target_key) {
+            return Err(format!(
+                "Multiple items in this operation target the same filename '{}'",
+                final_name
+            ));
+        }
 
         if !norm_old.eq_ignore_ascii_case(&norm_new)
             && std::fs::symlink_metadata(&final_dst_pb).is_ok()

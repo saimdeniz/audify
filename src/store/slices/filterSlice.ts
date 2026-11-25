@@ -1,6 +1,14 @@
-import { SampleRateFilter, SortDir, SortKey, TypeFilter } from "../../types";
+import {
+  SampleRateFilter,
+  SortDir,
+  SortKey,
+  TypeFilter,
+} from "../../types";
+import { resolveTagFacetSlug } from "../../utils/taxonomyTree";
 import { clearSmartSearchCache } from "../../utils/smartSearch";
+import { shouldUseCatalogWorker } from "../../workers/catalogWorkerClient";
 import { applyClientFacetFilters, reconcileSelectionAfterFilter } from "../filterEngine";
+import { resetPlayheadClock } from "../playheadClock";
 import {
   AUDIFY_STORAGE_KEYS,
   loadSavedSort,
@@ -10,6 +18,8 @@ import {
 } from "../storageHelpers";
 import type { MainFilterRequest, StoreSliceContext } from "../types";
 import { bumpMemoryFilterSeq } from "../workerBridge";
+import { cancelPendingSimilaritySearch } from "./aiSlice";
+import { createTagFilterActions } from "./tagFilterActions";
 
 export function createFilterSlice(
   ctx: StoreSliceContext,
@@ -31,6 +41,9 @@ export function createFilterSlice(
   const clearFilters = (preserveSimilarity: boolean) => {
     opts.clearSearchDebounceTimer();
     clearSmartSearchCache();
+    if (!preserveSimilarity) {
+      cancelPendingSimilaritySearch();
+    }
     persistNavigationFilters(null, null, false, null);
     const prevSim = get().similaritySession;
     const restoreSort =
@@ -50,6 +63,8 @@ export function createFilterSlice(
       favoriteOnly: false,
       recentOnly: false,
       selectedTagIds: [],
+      excludedTagIds: [],
+      tagMatchMode: "all",
       selectedGenre: null,
       selectedCollectionId: null,
       typeFilter: "all",
@@ -71,6 +86,20 @@ export function createFilterSlice(
     if (!applyInstantMemoryFilter({ preserveMultiSelect: false })) {
       void get().fetchSamples({ preserveMultiSelect: false });
     }
+  };
+
+  const canOffloadFacetToWorker = (): boolean => {
+    const st = get();
+    if (st.trashFilterActive || !shouldUseCatalogWorker(st.allProfileSamples.length)) {
+      return false;
+    }
+    if (st.selectedCollectionId !== null) {
+      const activeCol = st.collections.find((c) => c.id === st.selectedCollectionId);
+      if (!activeCol?.smart_query?.trim()) {
+        return false;
+      }
+    }
+    return true;
   };
 
   return {
@@ -144,23 +173,29 @@ export function createFilterSlice(
     },
 
     setFolderFilter: (folder: string | null) => {
-      const fav = get().favoriteOnly;
-      const dups = get().duplicatesFilterActive;
-      const trash = get().trashFilterActive;
-      if (!trash) {
+      const st = get();
+      const fav = st.favoriteOnly;
+      const bin = st.binFilterActive;
+      const dups = st.duplicatesFilterActive;
+      const trash = st.trashFilterActive;
+      const slices = st.slicesFilterActive;
+      if (!trash && !bin && !slices && !dups) {
         persistNavigationFilters(folder, null, fav, null);
       }
       set({
         folderFilter: folder,
         selectedLicenseGroupId: null,
-        binFilterActive: false,
+        binFilterActive: bin,
         trashFilterActive: trash,
         duplicatesFilterActive: dups,
-        slicesFilterActive: false,
+        slicesFilterActive: slices,
         favoriteOnly: fav,
         recentOnly: false,
         selectedCollectionId: null,
       });
+      if (slices || (trash && st.trashViewTab === "slices")) {
+        return;
+      }
       if (!applyInstantMemoryFilter({ preserveMultiSelect: false })) {
         void get().fetchSamples({ preserveMultiSelect: false });
       }
@@ -180,6 +215,7 @@ export function createFilterSlice(
         trashFilterActive: false,
         selectedCollectionId: null,
         selectedTagIds: [],
+        excludedTagIds: [],
         selectedGenre: null,
         ...restoreSort,
       });
@@ -202,6 +238,7 @@ export function createFilterSlice(
         trashFilterActive: false,
         selectedCollectionId: null,
         selectedTagIds: [],
+        excludedTagIds: [],
         selectedGenre: null,
         ...restoreSort,
       });
@@ -225,38 +262,7 @@ export function createFilterSlice(
       }
     },
 
-    toggleTagFilter: (tagId: number) => {
-      const current = get().selectedTagIds;
-      const exists = current.includes(tagId);
-      const next = exists ? current.filter((id) => id !== tagId) : [...current, tagId];
-      set({ selectedTagIds: next });
-      if (!applyInstantMemoryFilter({ preserveMultiSelect: true })) {
-        void get().fetchSamples({ preserveMultiSelect: true });
-      }
-    },
-
-    selectOrToggleTagFilter: (tagId: number, append: boolean) => {
-      const current = get().selectedTagIds;
-      let next: number[];
-      if (append) {
-        next = current.includes(tagId)
-          ? current.filter((id) => id !== tagId)
-          : [...current, tagId];
-      } else {
-        next = current.length === 1 && current[0] === tagId ? [] : [tagId];
-      }
-      set({ selectedTagIds: next });
-      if (!applyInstantMemoryFilter({ preserveMultiSelect: true })) {
-        void get().fetchSamples({ preserveMultiSelect: true });
-      }
-    },
-
-    clearTagFilters: () => {
-      set({ selectedTagIds: [] });
-      if (!applyInstantMemoryFilter({ preserveMultiSelect: true })) {
-        void get().fetchSamples({ preserveMultiSelect: true });
-      }
-    },
+    ...createTagFilterActions(ctx),
 
     setSelectedGenre: (genre: string | null) => {
       const next = get().selectedGenre === genre ? null : genre;
@@ -288,6 +294,11 @@ export function createFilterSlice(
     },
 
     setTypeFilter: (typeFilter: TypeFilter) => {
+      if (canOffloadFacetToWorker()) {
+        set({ typeFilter });
+        applyInstantMemoryFilter({ preserveMultiSelect: true });
+        return;
+      }
       bumpMemoryFilterSeq();
       opts.bumpFetchSeq();
       const {
@@ -313,16 +324,35 @@ export function createFilterSlice(
         selectedSampleIds,
         true
       );
+      const selectionChanged =
+        (reconciled.nextSelected?.id ?? null) !== (selectedSample?.id ?? null);
+      if (selectionChanged) {
+        resetPlayheadClock(0);
+      }
       set({
         typeFilter,
         samples: filtered,
         selectedSample: reconciled.nextSelected,
         selectedSampleIds: reconciled.nextSelectedIds,
         lastSelectedIndex: reconciled.nextSelectedIndex,
+        ...(selectionChanged
+          ? {
+              sliceRange: null,
+              currentTimeSec: 0,
+              durationSec: reconciled.nextSelected
+                ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
+                : 0,
+            }
+          : {}),
       });
     },
 
     setSrFilter: (srFilter: SampleRateFilter) => {
+      if (canOffloadFacetToWorker()) {
+        set({ srFilter });
+        applyInstantMemoryFilter({ preserveMultiSelect: true });
+        return;
+      }
       bumpMemoryFilterSeq();
       opts.bumpFetchSeq();
       const {
@@ -348,12 +378,26 @@ export function createFilterSlice(
         selectedSampleIds,
         true
       );
+      const selectionChanged =
+        (reconciled.nextSelected?.id ?? null) !== (selectedSample?.id ?? null);
+      if (selectionChanged) {
+        resetPlayheadClock(0);
+      }
       set({
         srFilter,
         samples: filtered,
         selectedSample: reconciled.nextSelected,
         selectedSampleIds: reconciled.nextSelectedIds,
         lastSelectedIndex: reconciled.nextSelectedIndex,
+        ...(selectionChanged
+          ? {
+              sliceRange: null,
+              currentTimeSec: 0,
+              durationSec: reconciled.nextSelected
+                ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
+                : 0,
+            }
+          : {}),
       });
     },
 
@@ -400,6 +444,11 @@ export function createFilterSlice(
         } else {
           safeRemoveItem(AUDIFY_STORAGE_KEYS.sort);
         }
+      }
+      if (canOffloadFacetToWorker()) {
+        set({ sortKey: nextKey, sortDir: nextDir });
+        applyInstantMemoryFilter({ preserveMultiSelect: true });
+        return;
       }
       const nextSamples = applyClientFacetFilters(
         rawSamples,
@@ -448,6 +497,7 @@ export function createFilterSlice(
         favoriteOnly: false,
         recentOnly: false,
         selectedTagIds: [] as number[],
+        excludedTagIds: [] as number[],
         selectedGenre: null as string | null,
         selectedCollectionId: null as number | null,
         ...restoreSort,
@@ -462,10 +512,20 @@ export function createFilterSlice(
           nextBase.selectedTagIds = [req.id];
           persistNavigationFilters(null, null, false, null);
           break;
-        case "genre":
-          nextBase.selectedGenre = req.name;
+        case "genre": {
+          const matchedTag = get().tags.find(
+            (t) =>
+              t.name.toLowerCase() === req.name.toLowerCase() &&
+              (resolveTagFacetSlug(t) === "genre" || resolveTagFacetSlug(t) === "mood")
+          );
+          if (matchedTag) {
+            nextBase.selectedTagIds = [matchedTag.id];
+          } else {
+            nextBase.selectedGenre = req.name;
+          }
           persistNavigationFilters(null, null, false, null);
           break;
+        }
         case "license":
           nextBase.selectedLicenseGroupId = req.id;
           persistNavigationFilters(null, req.id, false, null);

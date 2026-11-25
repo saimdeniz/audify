@@ -5,8 +5,10 @@ import {
   runCatalogWorkerFilter,
   runCatalogWorkerSmartCounts,
   syncCatalogWorkerPool,
+  syncCatalogWorkerTaxonomy,
 } from "../workers/catalogWorkerClient";
 import { reconcileSelectionAfterFilter } from "./filterEngine";
+import { resetPlayheadClock } from "./playheadClock";
 import { buildDuplicateOrderMap } from "./slices/duplicateSlice";
 import type { SampleStoreState } from "./types";
 
@@ -98,6 +100,10 @@ export function dispatchWorkerInstantMemoryFilter(params: {
     recentOnly,
     recentSampleIds,
     selectedTagIds,
+    excludedTagIds,
+    tagMatchMode,
+    tags,
+    tagFacets,
     selectedGenre,
     selectedLicenseGroupId,
     licenseGroups,
@@ -112,6 +118,7 @@ export function dispatchWorkerInstantMemoryFilter(params: {
     similaritySession,
   } = snapshotState;
 
+  syncCatalogWorkerTaxonomy(tags, tagFacets);
   const poolEpoch = syncCatalogWorkerPool(allProfileSamples);
   const memSeq = ++latestMemFilterSeq;
   const dupOrderMap = buildDuplicateOrderMap(
@@ -125,6 +132,8 @@ export function dispatchWorkerInstantMemoryFilter(params: {
     recentOnly,
     recentSampleIds,
     selectedTagIds,
+    excludedTagIds,
+    tagMatchMode,
     selectedGenre,
     selectedLicenseGroupId,
     licenseGroups,
@@ -180,6 +189,11 @@ export function dispatchWorkerInstantMemoryFilter(params: {
       live.selectedSampleIds,
       preserveMultiSelect
     );
+    const selectionChanged =
+      (reconciled.nextSelected?.id ?? null) !== (live.selectedSample?.id ?? null);
+    if (selectionChanged) {
+      resetPlayheadClock(0);
+    }
 
     set({
       rawSamples: searchedResult,
@@ -187,9 +201,12 @@ export function dispatchWorkerInstantMemoryFilter(params: {
       selectedSample: reconciled.nextSelected,
       selectedSampleIds: reconciled.nextSelectedIds,
       lastSelectedIndex: reconciled.nextSelectedIndex,
+      ...(selectionChanged ? { sliceRange: null, currentTimeSec: 0 } : {}),
       durationSec: reconciled.nextSelected
         ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
-        : live.durationSec,
+        : selectionChanged
+          ? 0
+          : live.durationSec,
     });
   });
 }

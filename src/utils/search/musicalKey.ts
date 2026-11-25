@@ -108,3 +108,38 @@ export function getHarmonicCamelotNeighbors(camelotKey: string): string[] {
   const relLetter = letter === "A" ? "B" : "A";
   return [`${num}${letter}`, `${prev}${letter}`, `${next}${letter}`, `${num}${relLetter}`];
 }
+
+export interface TransposedMusicalKey {
+  fromKey: string;
+  toKey: string;
+  fromCamelot: string;
+  toCamelot: string;
+}
+
+/**
+ * Transposes a musical key or Camelot code by `semitones`, returning both
+ * original and transposed musical + Camelot key labels (e.g. `Am -> Cm`).
+ */
+export function transposeMusicalKey(
+  rawKey: string,
+  semitones: number
+): TransposedMusicalKey | null {
+  if (!rawKey || !Number.isFinite(semitones)) return null;
+  const norm = normalizeMusicalOrCamelotKey(rawKey);
+  if (!norm) return null;
+
+  const isMinor = norm.camelotKey.endsWith("A");
+  const table = isMinor ? MINOR_DISPLAY_AND_CAMELOT : MAJOR_DISPLAY_AND_CAMELOT;
+  const baseIdx = table.findIndex(([, cam]) => cam === norm.camelotKey);
+  if (baseIdx < 0) return null;
+
+  const shift = Math.round(semitones);
+  const nextIdx = (((baseIdx + shift) % 12) + 12) % 12;
+  const [toKey, toCamelot] = table[nextIdx];
+  return {
+    fromKey: norm.musicalKey,
+    toKey,
+    fromCamelot: norm.camelotKey,
+    toCamelot,
+  };
+}

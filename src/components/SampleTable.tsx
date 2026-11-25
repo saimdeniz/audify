@@ -14,17 +14,28 @@ import {
   resolveDuplicateScopeLabel,
 } from "../store/slices/duplicateSlice";
 import { useSampleStore } from "../store/useSampleStore";
-import { Collection, SampleItem } from "../types";
+import { SampleItem } from "../types";
+import { buildCollectionHierarchy } from "../utils/collectionTree";
 import {
   EMPTY_SAMPLE_MAP,
   EMPTY_SAMPLES,
   getCachedSampleByIdMap,
 } from "../utils/sampleLookup";
 import { formatShortcutDisplay } from "../utils/shortcuts";
+import { getSharedTaxonomyIndex } from "../utils/taxonomyTree";
 import { WaveformDisplayConfig } from "./MiniWaveform";
-import { DragDropFeedbackOverlay } from "./sample-table/DragDropFeedbackOverlay";
-import { FilterDrawer } from "./sample-table/FilterDrawer";
 import { SampleFilterToolbar } from "./sample-table/SampleFilterToolbar";
+
+const LazyDragDropFeedbackOverlay = lazy(() =>
+  import("./sample-table/DragDropFeedbackOverlay").then((m) => ({
+    default: m.DragDropFeedbackOverlay,
+  }))
+);
+const LazyFilterDrawer = lazy(() =>
+  import("./sample-table/FilterDrawer").then((m) => ({
+    default: m.FilterDrawer,
+  }))
+);
 
 const LazyActiveFilterBanner = lazy(() =>
   import("./sample-table/ActiveFilterBanner").then((m) => ({
@@ -37,7 +48,11 @@ const LazySampleBatchActionBar = lazy(() =>
     default: m.SampleBatchActionBar,
   }))
 );
-import { SampleTableEmptyState } from "./sample-table/SampleTableEmptyState";
+const SampleTableEmptyState = lazy(() =>
+  import("./sample-table/SampleTableEmptyState").then((m) => ({
+    default: m.SampleTableEmptyState,
+  }))
+);
 import { SampleTableHeader } from "./sample-table/SampleTableHeader";
 import { SampleTableRowsPane } from "./sample-table/SampleTableRowsPane";
 import { ContextMenuState, RowPopoverPosition } from "./sample-table/tableLayout";
@@ -64,6 +79,8 @@ export const SampleTable: React.FC = () => {
   const hasInitialized = useSampleStore((s) => s.hasInitialized);
   const libraries = useSampleStore((s) => s.libraries);
   const samples = useSampleStore((s) => s.samples);
+  const tagFacets = useSampleStore((s) => s.tagFacets);
+  const tags = useSampleStore((s) => s.tags);
   const genres = useSampleStore((s) => s.genres);
   const collections = useSampleStore((s) => s.collections);
   const selectedTagIds = useSampleStore((s) => s.selectedTagIds);
@@ -97,6 +114,7 @@ export const SampleTable: React.FC = () => {
         s.srFilter !== null ||
         s.selectedGenre ||
         s.selectedTagIds.length > 0 ||
+        s.excludedTagIds.length > 0 ||
         s.searchQuery.toLowerCase().includes("bpm:") ||
         s.searchQuery.toLowerCase().includes("key:")
     )
@@ -142,6 +160,13 @@ export const SampleTable: React.FC = () => {
     void scanDuplicates();
   }, [scanDuplicates]);
 
+  const handleTableScroll = useCallback(() => {
+    setHoverOverflowTags((prev) => (prev ? null : prev));
+    setRowTagPopover((prev) => (prev ? null : prev));
+    setRowGenrePopover((prev) => (prev ? null : prev));
+    setContextMenu((prev) => (prev ? null : prev));
+  }, []);
+
   const duplicateHasResult = Boolean(
     duplicateScanCache[
       makeDuplicateScopeKey(
@@ -186,6 +211,7 @@ export const SampleTable: React.FC = () => {
     colWidths,
     setColWidths,
     toggleVisibleCol,
+    applyVisibleColsPreset,
     resetTableLayout,
     columnsContentWidth,
     totalTableWidth,
@@ -206,38 +232,23 @@ export const SampleTable: React.FC = () => {
     [duplicatesFilterActive, duplicateScanResult]
   );
 
-  const { rootCollections, childrenByParentId } = useMemo(() => {
-    const roots: Collection[] = [];
-    const childrenMap = new Map<number, Collection[]>();
+  const { rootCollections, childrenByParentId } = useMemo(
+    () =>
+      buildCollectionHierarchy(collections, {
+        excludeSmart: true,
+        sortRoots: true,
+      }),
+    [collections]
+  );
 
-    for (const c of collections) {
-      if (c.smart_query?.trim()) continue;
-      if (c.parent_id) {
-        const list = childrenMap.get(c.parent_id) || [];
-        list.push(c);
-        childrenMap.set(c.parent_id, list);
-      } else {
-        roots.push(c);
-      }
-    }
-
-    for (const [, list] of childrenMap.entries()) {
-      list.sort((a, b) =>
-        a.name.localeCompare(b.name, undefined, {
-          numeric: true,
-          sensitivity: "base",
-        })
-      );
-    }
-    roots.sort((a, b) =>
-      a.name.localeCompare(b.name, undefined, {
-        numeric: true,
-        sensitivity: "base",
-      })
+  const isSmartCollectionActive = useMemo(() => {
+    if (selectedCollectionId === null) return false;
+    return Boolean(
+      collections
+        .find((c) => c.id === selectedCollectionId)
+        ?.smart_query?.trim()
     );
-
-    return { rootCollections: roots, childrenByParentId: childrenMap };
-  }, [collections]);
+  }, [collections, selectedCollectionId]);
 
   const selectedIdSet = useMemo(
     () => new Set(selectedSampleIds),
@@ -271,6 +282,11 @@ export const SampleTable: React.FC = () => {
       .map((id) => sampleByIdMap.get(id))
       .filter((s): s is SampleItem => Boolean(s));
   }, [selectedSampleIds, sampleByIdMap]);
+
+  const taxonomyIndex = useMemo(
+    () => getSharedTaxonomyIndex(tags, tagFacets),
+    [tags, tagFacets]
+  );
 
   const genreColorMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -345,6 +361,7 @@ export const SampleTable: React.FC = () => {
             setColumnOrder={setColumnOrder}
             visibleCols={visibleCols}
             toggleVisibleCol={toggleVisibleCol}
+            applyVisibleColsPreset={applyVisibleColsPreset}
             colWidths={colWidths}
             setColWidths={setColWidths}
             resetTableLayout={resetTableLayout}
@@ -353,21 +370,23 @@ export const SampleTable: React.FC = () => {
           />
 
           {!hasInitialized || libraries.length === 0 || samples.length === 0 ? (
-            <SampleTableEmptyState
-              hasLibraries={libraries.length > 0}
-              isInitializing={!hasInitialized}
-              isScanning={isScanning}
-              isScanningDuplicates={
-                duplicatesFilterActive && isScanningDuplicates
-              }
-              duplicatesFilterActive={duplicatesFilterActive}
-              duplicateHasResult={duplicateHasResult}
-              duplicateScopeLabel={duplicateScopeLabel}
-              duplicateScanModeLabel={duplicateScanModeLabel}
-              onScanDuplicates={handleScanDuplicates}
-              onAddFolder={handleAddFolder}
-              onResetFilters={resetAllFilters}
-            />
+            <Suspense fallback={<div className="flex-1" />}>
+              <SampleTableEmptyState
+                hasLibraries={libraries.length > 0}
+                isInitializing={!hasInitialized}
+                isScanning={isScanning}
+                isScanningDuplicates={
+                  duplicatesFilterActive && isScanningDuplicates
+                }
+                duplicatesFilterActive={duplicatesFilterActive}
+                duplicateHasResult={duplicateHasResult}
+                duplicateScopeLabel={duplicateScopeLabel}
+                duplicateScanModeLabel={duplicateScanModeLabel}
+                onScanDuplicates={handleScanDuplicates}
+                onAddFolder={handleAddFolder}
+                onResetFilters={resetAllFilters}
+              />
+            </Suspense>
           ) : (
             <SampleTableRowsPane
               parentRef={parentRef}
@@ -377,20 +396,22 @@ export const SampleTable: React.FC = () => {
               selectedIdSet={selectedIdSet}
               selectedTagSet={selectedTagSet}
               selectedCollectionId={selectedCollectionId}
+              isSmartCollectionActive={isSmartCollectionActive}
               selectedGenre={selectedGenre}
               similaritySession={similaritySession}
               isSimilarityMode={isSimilarityMode}
               duplicateMetaBySampleId={duplicateMetaBySampleId}
               aiSuggestionsBySampleId={aiSuggestionsBySampleId}
-              rowTagPopover={rowTagPopover}
-              rowGenrePopover={rowGenrePopover}
-              hoverOverflowTags={hoverOverflowTags}
+              activeTagPopoverSampleId={rowTagPopover?.sampleId ?? null}
+              activeGenrePopoverSampleId={rowGenrePopover?.sampleId ?? null}
               setHoverOverflowTags={setHoverOverflowTags}
+              onTableScroll={handleTableScroll}
               columnOrder={columnOrder}
               visibleCols={visibleCols}
               colWidths={colWidths}
               totalTableWidth={totalTableWidth}
               genreColorMap={genreColorMap}
+              taxonomyIndex={taxonomyIndex}
               waveformDisplay={waveformDisplay}
               favoriteShortcutLabel={favoriteShortcutLabel}
               onRowClick={handleRowClick}
@@ -403,9 +424,11 @@ export const SampleTable: React.FC = () => {
         </>
       )}
 
-      <DragDropFeedbackOverlay />
+      <Suspense fallback={null}>
+        <LazyDragDropFeedbackOverlay />
+      </Suspense>
 
-      {selectedSampleIds.length > 1 && !slicesFilterActive && (
+      {selectedSampleIds.length > 1 && !showSlicesTable && (
         <Suspense fallback={null}>
           <LazySampleBatchActionBar
             selectedSampleIds={selectedSampleIds}
@@ -419,7 +442,9 @@ export const SampleTable: React.FC = () => {
         </Suspense>
       )}
 
-      <FilterDrawer />
+      <Suspense fallback={null}>
+        <LazyFilterDrawer />
+      </Suspense>
 
       {contextMenu && (
         <Suspense fallback={null}>

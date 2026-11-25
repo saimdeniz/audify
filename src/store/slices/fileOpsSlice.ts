@@ -22,6 +22,7 @@ export function createFileOpsSlice(ctx: StoreSliceContext) {
     return releaseAudioFileHandleIfMatching(
       {
         activeSampleId: state.selectedSample?.id ?? null,
+        activeFilePath: state.selectedSample?.file_path ?? null,
         isPlaying: state.isPlaying,
         currentTimeSec: state.currentTimeSec,
         stopPlaying: () => state.setIsPlaying(false),
@@ -45,6 +46,7 @@ export function createFileOpsSlice(ctx: StoreSliceContext) {
         get,
         applyInstantMemoryFilter,
         emitNotice,
+        getProfileEpoch: ctx.getProfileEpoch,
         releaseMatchingAudioHandle,
         pushBoundedHistory,
       });

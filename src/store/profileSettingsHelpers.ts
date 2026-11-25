@@ -61,6 +61,7 @@ export function buildProfileStoragePairs(
     | "autoBinOnNleDrag"
     | "binSampleIds"
     | "enableMica"
+    | "sidebarCompactHover"
     | "themeTintIntensity"
     | "customBgImage"
     | "customBgBlur"
@@ -79,6 +80,11 @@ export function buildProfileStoragePairs(
     | "autoRouteCollectionDrops"
     | "customSliceExportPath"
     | "sliceMicroFade"
+    | "exportAudioPreset"
+    | "exportLoudnessMode"
+    | "skipLeadingSilence"
+    | "miniDockEdgePeek"
+    | "miniDockEdgeSide"
     | "normalizePreview"
     | "autoAnalyzeBpmKey"
     | "enableAdvancedFileOps"
@@ -112,6 +118,10 @@ export function buildProfileStoragePairs(
     [AUDIFY_STORAGE_KEYS.binSampleIds, JSON.stringify(resolvedFields.binSampleIds)],
     [AUDIFY_STORAGE_KEYS.enableMica, String(resolvedFields.enableMica)],
     [
+      AUDIFY_STORAGE_KEYS.sidebarCompactHover,
+      String(resolvedFields.sidebarCompactHover),
+    ],
+    [
       AUDIFY_STORAGE_KEYS.themeTintIntensity,
       String(resolvedFields.themeTintIntensity),
     ],
@@ -144,6 +154,17 @@ export function buildProfileStoragePairs(
     ],
     [AUDIFY_STORAGE_KEYS.customSliceExportPath, resolvedFields.customSliceExportPath],
     [AUDIFY_STORAGE_KEYS.sliceMicroFade, String(resolvedFields.sliceMicroFade)],
+    [AUDIFY_STORAGE_KEYS.exportAudioPreset, resolvedFields.exportAudioPreset],
+    [AUDIFY_STORAGE_KEYS.exportLoudnessMode, resolvedFields.exportLoudnessMode],
+    [
+      AUDIFY_STORAGE_KEYS.skipLeadingSilence,
+      String(resolvedFields.skipLeadingSilence),
+    ],
+    [
+      AUDIFY_STORAGE_KEYS.miniDockEdgePeek,
+      String(resolvedFields.miniDockEdgePeek),
+    ],
+    [AUDIFY_STORAGE_KEYS.miniDockEdgeSide, resolvedFields.miniDockEdgeSide],
     [AUDIFY_STORAGE_KEYS.normalizePreview, String(resolvedFields.normalizePreview)],
     [
       AUDIFY_STORAGE_KEYS.autoAnalyzeBpmKey,
@@ -230,6 +251,11 @@ export function buildProfileSettingsJsonFromStore(get: StoreGet): string {
     playheadLatencyMs: s.playheadLatencyMs,
     audioOutputDeviceId: s.audioOutputDeviceId,
     sliceMicroFade: s.sliceMicroFade,
+    exportAudioPreset: s.exportAudioPreset,
+    exportLoudnessMode: s.exportLoudnessMode,
+    skipLeadingSilence: s.skipLeadingSilence,
+    miniDockEdgePeek: s.miniDockEdgePeek,
+    miniDockEdgeSide: s.miniDockEdgeSide,
     normalizePreview: s.normalizePreview,
     autoAnalyzeBpmKey: s.autoAnalyzeBpmKey,
     autoPreview: s.autoPreview,
@@ -240,6 +266,7 @@ export function buildProfileSettingsJsonFromStore(get: StoreGet): string {
     autoBinOnNleDrag: s.autoBinOnNleDrag,
     binSampleIds: s.binSampleIds,
     enableMica: s.enableMica,
+    sidebarCompactHover: s.sidebarCompactHover,
     themeTintIntensity: s.themeTintIntensity,
     customBgImage: s.customBgImage,
     customBgBlur: s.customBgBlur,

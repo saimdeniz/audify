@@ -85,11 +85,30 @@ fn is_smart_search_skip_token(token: &str) -> bool {
     {
         return true;
     }
-    if t.starts_with('-')
-        || t.starts_with('!')
+    // Preserve numeric dB/take literals like `-12dB` and `#1` as searchable FTS terms
+    if let Some(rest) = t.strip_prefix('-') {
+        let is_numeric_literal = rest
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false);
+        if !is_numeric_literal {
+            return true;
+        }
+    }
+    if let Some(rest) = t.strip_prefix('#') {
+        let is_numeric_literal = rest
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false);
+        if !is_numeric_literal {
+            return true;
+        }
+    }
+    if t.starts_with('!')
         || t.starts_with('<')
         || t.starts_with('>')
-        || t.starts_with('#')
         || t.starts_with('@')
         || t.contains(':')
     {
@@ -231,8 +250,12 @@ fn expand_token_to_fts_clause(
     }
     let folded = clean_fts_term(&fold_turkish_to_ascii(&base));
 
+    const MAX_FTS_VARIANTS_PER_TOKEN: usize = 24;
     let mut variant_exprs: Vec<String> = Vec::new();
     let push_unique = |list: &mut Vec<String>, expr: Option<String>| {
+        if list.len() >= MAX_FTS_VARIANTS_PER_TOKEN {
+            return;
+        }
         if let Some(e) = expr {
             if !e.is_empty() && !list.contains(&e) {
                 list.push(e);

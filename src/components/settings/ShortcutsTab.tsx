@@ -71,6 +71,16 @@ const SHORTCUT_GROUPS: {
         desc: "Star or unstar selected sample(s)",
       },
       {
+        key: "openTagPicker",
+        label: "Assign / manage tags",
+        desc: "Open rapid tag picker for selected sample(s)",
+      },
+      {
+        key: "openGenrePicker",
+        label: "Assign / manage genres",
+        desc: "Open rapid genre & mood picker for selected sample(s)",
+      },
+      {
         key: "addToBin",
         label: "Add to Session Bin",
         desc: "Send selected sample(s) to temporary Bin",
@@ -89,6 +99,16 @@ const SHORTCUT_GROUPS: {
         key: "findSimilar",
         label: "Find similar sounds (AI)",
         desc: "Search acoustically similar tracks from selected sample",
+      },
+      {
+        key: "markSliceIn",
+        label: "Mark slice In",
+        desc: "Set waveform slice start at current playhead (I)",
+      },
+      {
+        key: "markSliceOut",
+        label: "Mark slice Out",
+        desc: "Set waveform slice end at current playhead (O)",
       },
       {
         key: "saveSlice",
@@ -218,7 +238,7 @@ export const ShortcutsTab: React.FC<ShortcutsTabProps> = ({
             { label: "Select contiguous range", key: "SHIFT + CLICK" },
             { label: "Select all filtered", key: "CTRL + A" },
             { label: "Clear slice / selection", key: "ESC" },
-            { label: "Quick assign tag #1 – #9", key: "KEYS 1 – 9" },
+            { label: "Exclude tag / mood filter", key: "ALT + CLICK" },
             ...(enableLicensesSystem
               ? [{ label: "Copy credits", key: "CTRL + SHIFT + C" }]
               : []),

@@ -121,6 +121,7 @@ export const WindowCaptionControls: React.FC<WindowCaptionControlsProps> =
           {showMinimize && (
             <button
               type="button"
+              data-window-caption="true"
               onMouseDown={(e) => e.preventDefault()}
               onClick={handleMinimize}
               aria-label="Minimize"
@@ -152,6 +153,7 @@ export const WindowCaptionControls: React.FC<WindowCaptionControlsProps> =
           {showMaximize && (
             <button
               type="button"
+              data-window-caption="true"
               onMouseDown={(e) => e.preventDefault()}
               onClick={handleToggleMaximize}
               aria-label={maximized ? "Restore" : "Maximize"}
@@ -207,6 +209,7 @@ export const WindowCaptionControls: React.FC<WindowCaptionControlsProps> =
 
           <button
             type="button"
+            data-window-caption="true"
             onMouseDown={(e) => e.preventDefault()}
             onClick={handleClose}
             aria-label={closeTitle}

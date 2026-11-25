@@ -371,15 +371,20 @@ pub(crate) fn batch_rename_samples_with_conn(
 }
 
 #[tauri::command]
-pub fn batch_rename_samples(
+pub async fn batch_rename_samples(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     ai_state: State<'_, AiTaggerState>,
     entries: Vec<BatchRenameEntryInput>,
 ) -> Result<Vec<BatchRenameRecord>, String> {
     crate::library_watcher::suppress_watcher_if_managed(&app, 2500);
-    let mut conn = state.lock_db();
-    let res = batch_rename_samples_with_conn(&mut conn, &state.user_dir, &entries)?;
+    let state_owned = state.inner().clone();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = state_owned.lock_db();
+        batch_rename_samples_with_conn(&mut conn, &state_owned.user_dir, &entries)
+    })
+    .await
+    .map_err(|e| format!("Batch rename task failed: {}", e))??;
     let updates: Vec<(i64, i64, &str)> = res
         .iter()
         .map(|r| (r.sample_id, r.library_id, r.new_path.as_str()))

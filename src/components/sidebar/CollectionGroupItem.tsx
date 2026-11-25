@@ -123,11 +123,6 @@ export const CollectionGroupItem: React.FC<CollectionGroupItemProps> = ({
             setDragHoverTarget(rootTargetKey);
           }
         }}
-        onMouseLeave={() => {
-          if (dragHoverTarget === rootTargetKey) {
-            setDragHoverTarget(null);
-          }
-        }}
         afterLabel={
           !isSmartCollection && rootCol.rule_path ? (
             <span
@@ -262,11 +257,6 @@ export const CollectionGroupItem: React.FC<CollectionGroupItemProps> = ({
               }
               onMouseEnter={() => {
                 if (isDraggingInApp) setDragHoverTarget(childTargetKey);
-              }}
-              onMouseLeave={() => {
-                if (dragHoverTarget === childTargetKey) {
-                  setDragHoverTarget(null);
-                }
               }}
               afterLabel={
                 child.rule_path ? (

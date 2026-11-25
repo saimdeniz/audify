@@ -4,20 +4,23 @@ mod os_shell;
 mod path_guards;
 
 pub use inputs::{
-    detect_image_magic, has_parent_dir_traversal, is_dos_device_name, is_personal_path,
-    is_safe_existing_bg_image, is_valid_collection_icon, sanitize_hex_color_or_default,
-    sanitize_settings_paths, validate_hex_color, validate_safe_audio_stem,
-    whitelist_and_sanitize_settings, ALLOWED_PROFILE_SETTINGS_KEYS,
+    detect_image_magic, detect_wallpaper_media_magic, has_parent_dir_traversal, is_dos_device_name,
+    is_personal_path, is_safe_existing_bg_image, is_valid_collection_icon,
+    sanitize_hex_color_or_default, sanitize_settings_paths, validate_hex_color,
+    validate_safe_audio_stem, whitelist_and_sanitize_settings, ALLOWED_BG_IMAGE_EXTS,
+    ALLOWED_BG_MEDIA_EXTS, ALLOWED_BG_VIDEO_EXTS, ALLOWED_PROFILE_SETTINGS_KEYS,
 };
 pub use json_io::{
-    is_zip_magic, read_bounded_bytes, read_bounded_string, validate_archive_export_path,
-    validate_archive_import_path, validate_json_export_path, validate_json_import_path,
-    MAX_CUSTOM_BG_BYTES, MAX_JSON_IMPORT_BYTES, MAX_LEGACY_PROFILE_JSON_BYTES,
-    MAX_PROFILE_UNCOMPRESSED_BYTES, MAX_SNAPSHOT_ARCHIVE_BYTES,
+    is_zip_magic, open_bounded_file, read_bounded_bytes, read_bounded_string,
+    validate_archive_export_path, validate_archive_import_path, validate_json_export_path,
+    validate_json_import_path, MAX_CUSTOM_BG_BYTES, MAX_CUSTOM_BG_VIDEO_BYTES,
+    MAX_JSON_IMPORT_BYTES, MAX_LEGACY_PROFILE_JSON_BYTES, MAX_PROFILE_UNCOMPRESSED_BYTES,
+    MAX_SNAPSHOT_ARCHIVE_BYTES,
 };
 pub use os_shell::{
     move_files_to_os_recycle_bin, open_directory_in_shell, reveal_file_in_explorer,
 };
+pub(crate) use path_guards::reject_symlink_ancestors;
 pub use path_guards::{
     collect_profile_slice_dirs, display_leaf, ensure_inside, ensure_not_inside_user_dir,
     ensure_safe_export_dir, has_ntfs_ads_colon, is_forbidden_os_or_root_path, is_safe_library_dir,
@@ -118,6 +121,29 @@ mod tests {
         );
         assert_eq!(detect_image_magic(b"MZ\x90\x00NotAnImageAtAll"), None);
         assert_eq!(detect_image_magic(b"<html><script>"), None);
+    }
+
+    #[test]
+    fn wallpaper_media_magic_verifies_mp4_and_webm() {
+        // Valid ISO BMFF MP4 header (`ftypisom`)
+        let mp4_hdr = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00";
+        assert_eq!(detect_wallpaper_media_magic(mp4_hdr), Some("mp4"));
+
+        // Valid WebM EBML header containing "webm" DocType
+        let webm_hdr = b"\x1A\x45\xDF\xA3\x9F\x42\x86\x81\x01\x42\x82\x84webm\x42\x87\x81\x02";
+        assert_eq!(detect_wallpaper_media_magic(webm_hdr), Some("webm"));
+
+        // Non-WebM Matroska container must be rejected
+        let mkv_hdr = b"\x1A\x45\xDF\xA3\x9F\x42\x86\x81\x01\x42\x82\x88matroska";
+        assert_eq!(detect_wallpaper_media_magic(mkv_hdr), None);
+
+        // Executable masquerading as video must be rejected
+        assert_eq!(detect_wallpaper_media_magic(b"MZ\x90\x00ftypisom"), None);
+        // Invalid box size (< 8 and != 0) must be rejected
+        assert_eq!(
+            detect_wallpaper_media_magic(b"\x00\x00\x00\x04ftypisom"),
+            None
+        );
     }
 
     #[test]

@@ -3,10 +3,15 @@ import { useExternalFolderDrop } from "../hooks/useExternalFolderDrop";
 import { useLeftSidebarDragDrop } from "../hooks/useLeftSidebarDragDrop";
 import { useSampleStore } from "../store/useSampleStore";
 import { filterVisibleLibraries } from "../utils/format";
-import { FoldersTreeTab } from "./sidebar/FoldersTreeTab";
 import { LibraryViewsSection } from "./sidebar/LibraryViewsSection";
 import { SidebarNavRail } from "./sidebar/SidebarNavRail";
+import { useSidebarHoverOverlay } from "./sidebar/useSidebarHoverOverlay";
 
+const FoldersTreeTab = lazy(() =>
+  import("./sidebar/FoldersTreeTab").then((m) => ({
+    default: m.FoldersTreeTab,
+  }))
+);
 const CollectionsTreeTab = lazy(() =>
   import("./sidebar/CollectionsTreeTab").then((m) => ({
     default: m.CollectionsTreeTab,
@@ -27,31 +32,12 @@ const LicensesTreeTab = lazy(() =>
     default: m.LicensesTreeTab,
   }))
 );
-const SessionBinTab = lazy(() =>
-  import("./sidebar/SessionBinTab").then((m) => ({
-    default: m.SessionBinTab,
-  }))
-);
 
-export type SidebarTab =
-  | "folders"
-  | "collections"
-  | "tags"
-  | "genres"
-  | "licenses"
-  | "bin";
+import type { SidebarTab } from "../store/types";
+export type { SidebarTab };
 
 interface LeftSidebarProps {
   mode?: "docked" | "mini-overlay";
-}
-
-function hasOpenFloatingPortal(): boolean {
-  if (typeof document === "undefined") return false;
-  return Boolean(
-    document.querySelector(
-      "[data-context-menu-portal], [data-quick-create-portal], [data-color-picker-portal]"
-    )
-  );
 }
 
 export const LeftSidebar: React.FC<LeftSidebarProps> = ({
@@ -68,6 +54,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   const duplicatesFilterActive = useSampleStore(
     (s) => s.duplicatesFilterActive
   );
+  const slicesFilterActive = useSampleStore((s) => s.slicesFilterActive);
   const recentSampleIds = useSampleStore((s) => s.recentSampleIds);
   const selectedTagIds = useSampleStore((s) => s.selectedTagIds);
   const selectedGenre = useSampleStore((s) => s.selectedGenre);
@@ -93,135 +80,88 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
       : 0
   );
 
+  const sidebarCollapsed = useSampleStore((s) => s.sidebarCollapsed);
+  const sidebarCompactHover = useSampleStore((s) => s.sidebarCompactHover);
+
   const setSettingsOpen = useSampleStore((s) => s.setSettingsOpen);
   const setFavoriteOnly = useSampleStore((s) => s.setFavoriteOnly);
   const setRecentOnly = useSampleStore((s) => s.setRecentOnly);
+  const setBinFilterActive = useSampleStore((s) => s.setBinFilterActive);
   const setTrashFilterActive = useSampleStore((s) => s.setTrashFilterActive);
-  const setTypeFilter = useSampleStore((s) => s.setTypeFilter);
+  const setSidebarCollapsed = useSampleStore((s) => s.setSidebarCollapsed);
   const clearRecentSamples = useSampleStore((s) => s.clearRecentSamples);
   const selectAllFiles = useSampleStore((s) => s.selectAllFiles);
   const resetAllFilters = useSampleStore((s) => s.resetAllFilters);
+
+  const isMainHoverCompact =
+    !isMiniOverlay && sidebarCollapsed && sidebarCompactHover;
+  const isHoverOverlayMode = isMiniOverlay || isMainHoverCompact;
 
   const sidebarRef = useRef<HTMLElement | null>(null);
   const railRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [activeTab, setActiveTab] = useState<SidebarTab>("folders");
-  const [isOverlayOpen, setIsOverlayOpen] = useState(false);
-
-  const hoverOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const hoverCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const hoverTabTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const clearHoverTimers = useCallback(() => {
-    if (hoverOpenTimerRef.current) {
-      clearTimeout(hoverOpenTimerRef.current);
-      hoverOpenTimerRef.current = null;
-    }
-    if (hoverCloseTimerRef.current) {
-      clearTimeout(hoverCloseTimerRef.current);
-      hoverCloseTimerRef.current = null;
-    }
-    if (hoverTabTimerRef.current) {
-      clearTimeout(hoverTabTimerRef.current);
-      hoverTabTimerRef.current = null;
-    }
-  }, []);
-
-  const scheduleOverlayClose = useCallback(() => {
-    if (!isMiniOverlay) return;
-    if (hoverOpenTimerRef.current) {
-      clearTimeout(hoverOpenTimerRef.current);
-      hoverOpenTimerRef.current = null;
-    }
-    if (hoverTabTimerRef.current) {
-      clearTimeout(hoverTabTimerRef.current);
-      hoverTabTimerRef.current = null;
-    }
-    if (hoverCloseTimerRef.current) {
-      clearTimeout(hoverCloseTimerRef.current);
-    }
-    hoverCloseTimerRef.current = setTimeout(() => {
-      hoverCloseTimerRef.current = null;
-      if (
-        hasOpenFloatingPortal() ||
-        useSampleStore.getState().inAppDragSample !== null
-      ) {
-        return;
-      }
-      setIsOverlayOpen(false);
-    }, 135);
-  }, [isMiniOverlay]);
-
-  const handleRailTabHoverEnter = useCallback(
-    (tab: SidebarTab) => {
-      if (!isMiniOverlay) return;
-      if (hoverCloseTimerRef.current) {
-        clearTimeout(hoverCloseTimerRef.current);
-        hoverCloseTimerRef.current = null;
-      }
-      if (!isOverlayOpen) {
-        if (hoverOpenTimerRef.current) {
-          clearTimeout(hoverOpenTimerRef.current);
-        }
-        hoverOpenTimerRef.current = setTimeout(() => {
-          hoverOpenTimerRef.current = null;
-          window.dispatchEvent(new CustomEvent("audify:hide-tooltip"));
-          setActiveTab(tab);
-          setIsOverlayOpen(true);
-        }, 65);
-      } else {
-        if (hoverTabTimerRef.current) {
-          clearTimeout(hoverTabTimerRef.current);
-        }
-        hoverTabTimerRef.current = setTimeout(() => {
-          hoverTabTimerRef.current = null;
-          setActiveTab(tab);
-        }, 115);
-      }
-    },
-    [isMiniOverlay, isOverlayOpen]
-  );
-
-  const handleOverlayPanelEnter = useCallback(() => {
-    if (!isMiniOverlay) return;
-    clearHoverTimers();
-  }, [isMiniOverlay, clearHoverTimers]);
+  const lastLibraryTabRef = useRef<SidebarTab>("folders");
+  const prevScopedFiltersRef = useRef({
+    bin: binFilterActive,
+    trash: trashFilterActive,
+    slices: slicesFilterActive,
+    duplicates: duplicatesFilterActive,
+  });
+  const {
+    isOverlayOpen,
+    setIsOverlayOpen,
+    scheduleOverlayClose,
+    handleRailTabHoverEnter,
+    handleOverlayPanelEnter,
+  } = useSidebarHoverOverlay({
+    isHoverOverlayMode,
+    railRef,
+    panelRef,
+    setActiveTab,
+  });
 
   useEffect(() => {
-    return () => clearHoverTimers();
-  }, [clearHoverTimers]);
+    if (activeTab !== "bin" && activeTab !== "trash") {
+      lastLibraryTabRef.current = activeTab;
+    }
+  }, [activeTab]);
 
-  // Dismiss Mini Dock floating sidebar overlay on outside click or Escape
   useEffect(() => {
-    if (!isMiniOverlay || !isOverlayOpen) return;
-    const onMouseDownCapture = (e: MouseEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (!target) return;
-      if (
-        railRef.current?.contains(target) ||
-        panelRef.current?.contains(target) ||
-        target.closest(
-          "[data-context-menu-portal], [data-quick-create-portal], [data-color-picker-portal]"
-        )
-      ) {
-        return;
-      }
-      setIsOverlayOpen(false);
+    const prev = prevScopedFiltersRef.current;
+    if (trashFilterActive && !prev.trash) {
+      setActiveTab("trash");
+    } else if (!trashFilterActive && prev.trash) {
+      setActiveTab((cur) =>
+        cur === "trash" ? lastLibraryTabRef.current : cur
+      );
+    }
+
+    if (binFilterActive && !prev.bin) {
+      setActiveTab("bin");
+    } else if (!binFilterActive && prev.bin) {
+      setActiveTab((cur) => (cur === "bin" ? lastLibraryTabRef.current : cur));
+    }
+
+    if (
+      (slicesFilterActive && !prev.slices) ||
+      (duplicatesFilterActive && !prev.duplicates)
+    ) {
+      setActiveTab("folders");
+    }
+
+    prevScopedFiltersRef.current = {
+      bin: binFilterActive,
+      trash: trashFilterActive,
+      slices: slicesFilterActive,
+      duplicates: duplicatesFilterActive,
     };
-    const onKeyDownCapture = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !hasOpenFloatingPortal()) {
-        e.preventDefault();
-        e.stopPropagation();
-        setIsOverlayOpen(false);
-      }
-    };
-    window.addEventListener("mousedown", onMouseDownCapture, true);
-    window.addEventListener("keydown", onKeyDownCapture, true);
-    return () => {
-      window.removeEventListener("mousedown", onMouseDownCapture, true);
-      window.removeEventListener("keydown", onKeyDownCapture, true);
-    };
-  }, [isMiniOverlay, isOverlayOpen]);
+  }, [
+    binFilterActive,
+    trashFilterActive,
+    slicesFilterActive,
+    duplicatesFilterActive,
+  ]);
 
   useEffect(() => {
     if (!enableLicensesSystem && activeTab === "licenses") {
@@ -243,7 +183,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
     cancelDragTabSwitch,
     scheduleDragTabSwitch,
   } = useLeftSidebarDragDrop({
-    isMiniOverlay,
+    isMiniOverlay: isHoverOverlayMode,
+    isOverlayOpen,
     isDraggingInApp,
     sidebarRef,
     railRef,
@@ -254,7 +195,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 
   const isExternalFileDragActive = useExternalFolderDrop({
     enableAdvancedFileOps,
-    isMiniOverlay,
+    isMiniOverlay: isHoverOverlayMode,
+    isOverlayOpen,
     dragHoverTargetRef,
     isExternalFileDragRef,
     updateDragHoverTarget,
@@ -292,6 +234,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
     !favoriteOnly &&
     !recentOnly &&
     !duplicatesFilterActive &&
+    !slicesFilterActive &&
     !folderFilter &&
     selectedCollectionId === null &&
     selectedLicenseGroupId === null &&
@@ -302,29 +245,115 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
     selectedGenre === null;
 
   const isDroppableActiveTab =
-    (activeTab === "folders" && enableAdvancedFileOps) ||
+    (activeTab === "folders" &&
+      enableAdvancedFileOps &&
+      !favoriteOnly &&
+      !binFilterActive &&
+      !trashFilterActive &&
+      !slicesFilterActive &&
+      !duplicatesFilterActive) ||
     activeTab === "collections" ||
     activeTab === "tags" ||
-    activeTab === "genres" ||
-    activeTab === "bin";
+    activeTab === "genres";
 
-  const showContentColumn = !isMiniOverlay || isOverlayOpen;
+  const showContentColumn = isHoverOverlayMode
+    ? isOverlayOpen
+    : !sidebarCollapsed;
+  const shouldRenderPanel = isHoverOverlayMode || !sidebarCollapsed;
+
+  const handlePrimaryTabSelect = useCallback(
+    (tab: SidebarTab) => {
+      if (trashFilterActive) {
+        setTrashFilterActive(false);
+      } else if (binFilterActive && tab === "folders") {
+        setBinFilterActive(false);
+      }
+      setActiveTab(tab);
+      if (isHoverOverlayMode) {
+        setIsOverlayOpen(true);
+      } else if (sidebarCollapsed) {
+        setSidebarCollapsed(false);
+      }
+    },
+    [
+      trashFilterActive,
+      binFilterActive,
+      setTrashFilterActive,
+      setBinFilterActive,
+      isHoverOverlayMode,
+      sidebarCollapsed,
+      setSidebarCollapsed,
+      setIsOverlayOpen,
+    ]
+  );
+
+  const handleBinRailSelect = useCallback(() => {
+    if (binFilterActive) {
+      if (showContentColumn && activeTab !== "bin") {
+        setActiveTab("bin");
+        return;
+      }
+      setBinFilterActive(false);
+      if (isHoverOverlayMode) setIsOverlayOpen(false);
+      return;
+    }
+    setBinFilterActive(true);
+    setActiveTab("bin");
+    if (isHoverOverlayMode) setIsOverlayOpen(false);
+  }, [
+    binFilterActive,
+    showContentColumn,
+    activeTab,
+    setBinFilterActive,
+    isHoverOverlayMode,
+    setIsOverlayOpen,
+  ]);
+
+  const handleTrashRailSelect = useCallback(() => {
+    if (trashFilterActive) {
+      if (showContentColumn && activeTab !== "trash") {
+        setActiveTab("trash");
+        return;
+      }
+      setTrashFilterActive(false);
+      if (isHoverOverlayMode) setIsOverlayOpen(false);
+      return;
+    }
+    setTrashFilterActive(true);
+    setActiveTab("trash");
+    if (isHoverOverlayMode) setIsOverlayOpen(false);
+  }, [
+    trashFilterActive,
+    showContentColumn,
+    activeTab,
+    setTrashFilterActive,
+    isHoverOverlayMode,
+    setIsOverlayOpen,
+  ]);
 
   return (
     <aside
       ref={sidebarRef}
       className={
         isMiniOverlay
-          ? "w-[30px] bg-surface-rail border-r border-line flex flex-row shrink-0 select-none relative z-30"
-          : "w-[296px] bg-surface-1 border-r border-line flex flex-row shrink-0 select-none overflow-hidden relative"
+          ? "w-[40px] bg-surface-rail border-r border-line flex flex-row shrink-0 select-none relative z-50 overflow-visible"
+          : isMainHoverCompact
+          ? "w-[40px] bg-surface-rail border-r border-line flex flex-row shrink-0 select-none relative z-50 overflow-visible"
+          : sidebarCollapsed
+          ? "w-[40px] bg-surface-rail border-r border-line flex flex-row shrink-0 select-none overflow-hidden relative"
+          : "w-[320px] bg-surface-1 border-r border-line flex flex-row shrink-0 select-none overflow-hidden relative"
       }
     >
       <SidebarNavRail
         railRef={railRef}
         isMiniOverlay={isMiniOverlay}
+        isHoverOverlayMode={isHoverOverlayMode}
         showContentColumn={showContentColumn}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
+        onPrimaryTabSelect={handlePrimaryTabSelect}
+        onBinRailSelect={handleBinRailSelect}
+        onTrashRailSelect={handleTrashRailSelect}
         setIsOverlayOpen={setIsOverlayOpen}
         isDraggingInApp={isDraggingInApp}
         isExternalFileDragActive={isExternalFileDragActive}
@@ -339,7 +368,6 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         selectedCollectionId={selectedCollectionId}
         selectedTagIdsCount={selectedTagIds.length}
         selectedGenre={selectedGenre}
-        favoriteOnly={favoriteOnly}
         validBinCount={validBinCount}
         binFilterActive={binFilterActive}
         trashedCount={totalTrashedCount}
@@ -349,28 +377,37 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         scheduleDragTabSwitch={scheduleDragTabSwitch}
         cancelDragTabSwitch={cancelDragTabSwitch}
         updateDragHoverTarget={updateDragHoverTarget}
-        setFavoriteOnly={setFavoriteOnly}
+        setBinFilterActive={setBinFilterActive}
         setTrashFilterActive={setTrashFilterActive}
         setSettingsOpen={setSettingsOpen}
       />
 
-      {showContentColumn && (
+      {shouldRenderPanel && (
         <div
           ref={panelRef}
           data-sidebar="true"
-          data-mica-overlay={isMiniOverlay ? "true" : undefined}
+          data-mica-overlay={isHoverOverlayMode ? "true" : undefined}
+          aria-hidden={isHoverOverlayMode && !isOverlayOpen ? true : undefined}
           onMouseEnter={handleOverlayPanelEnter}
           onMouseLeave={() => {
-            if (isMiniOverlay) scheduleOverlayClose();
+            if (isHoverOverlayMode) scheduleOverlayClose();
           }}
           className={
-            isMiniOverlay
-              ? "absolute left-[30px] top-0 bottom-0 w-[min(252px,calc(100vw-32px))] bg-surface-1 border-r border-line-strong shadow-2xl flex flex-col overflow-hidden z-40"
+            isHoverOverlayMode
+              ? `absolute left-[40px] ${
+                  isMiniOverlay
+                    ? "w-[min(280px,calc(100vw-42px))]"
+                    : "w-[280px]"
+                } top-0 bottom-0 bg-surface-1 border-r border-line-strong shadow-2xl flex flex-col overflow-hidden z-40 transition-[transform,opacity] duration-150 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none will-change-transform ${
+                  isOverlayOpen
+                    ? "opacity-100 translate-x-0 pointer-events-auto"
+                    : "opacity-0 -translate-x-2 pointer-events-none"
+                }`
               : "flex-1 min-w-0 flex flex-col overflow-hidden"
           }
         >
           <LibraryViewsSection
-            isMiniOverlay={isMiniOverlay}
+            isMiniOverlay={isHoverOverlayMode}
             isAllActive={isAllActive}
             isDraggingInApp={isDraggingInApp}
             inAppDragCount={inAppDragCount}
@@ -378,7 +415,6 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             dropFlashTarget={dropFlashTarget}
             favoriteOnly={favoriteOnly}
             recentOnly={recentOnly}
-            typeFilter={typeFilter}
             totalSamplesCount={totalSamplesCount}
             totalFavoritesCount={totalFavoritesCount}
             recentSamplesCount={recentSamplesCount}
@@ -388,7 +424,6 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             setFavoriteOnly={setFavoriteOnly}
             setRecentOnly={setRecentOnly}
             clearRecentSamples={clearRecentSamples}
-            setTypeFilter={setTypeFilter}
             updateDragHoverTarget={updateDragHoverTarget}
           />
 
@@ -401,54 +436,49 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 : ""
             }`}
           >
-            {dropFlashTarget === "bin" && activeTab === "bin" && (
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-0 z-30 ring-1 ring-inset ring-accent bg-accent-soft transition-opacity"
-              />
-            )}
-            {activeTab === "folders" && (
-              <FoldersTreeTab
-                dragHoverTarget={dragHoverTarget}
-                setDragHoverTarget={updateDragHoverTarget}
-                dropFlashTarget={dropFlashTarget}
-                isExternalFileDragActive={isExternalFileDragActive}
-              />
-            )}
-            {activeTab !== "folders" && (
-              <Suspense fallback={null}>
-                {activeTab === "collections" && (
-                  <CollectionsTreeTab
-                    dragHoverTarget={dragHoverTarget}
-                    setDragHoverTarget={updateDragHoverTarget}
-                    dropFlashTarget={dropFlashTarget}
-                  />
-                )}
-                {activeTab === "tags" && (
-                  <TagsSidebarTab
-                    dragHoverTarget={dragHoverTarget}
-                    setDragHoverTarget={updateDragHoverTarget}
-                    dropFlashTarget={dropFlashTarget}
-                  />
-                )}
-                {activeTab === "genres" && (
-                  <GenresSidebarTab
-                    dragHoverTarget={dragHoverTarget}
-                    setDragHoverTarget={updateDragHoverTarget}
-                    dropFlashTarget={dropFlashTarget}
-                  />
-                )}
-                {activeTab === "licenses" && enableLicensesSystem && (
-                  <LicensesTreeTab />
-                )}
-                {activeTab === "bin" && (
-                  <SessionBinTab
-                    dragHoverTarget={dragHoverTarget}
-                    setDragHoverTarget={updateDragHoverTarget}
-                  />
-                )}
-              </Suspense>
-            )}
+            <Suspense fallback={null}>
+              {(activeTab === "folders" ||
+                activeTab === "bin" ||
+                activeTab === "trash") && (
+                <FoldersTreeTab
+                  forcedScope={
+                    activeTab === "bin"
+                      ? "bin"
+                      : activeTab === "trash"
+                      ? "trash"
+                      : undefined
+                  }
+                  dragHoverTarget={dragHoverTarget}
+                  setDragHoverTarget={updateDragHoverTarget}
+                  dropFlashTarget={dropFlashTarget}
+                  isExternalFileDragActive={isExternalFileDragActive}
+                />
+              )}
+              {activeTab === "collections" && (
+                <CollectionsTreeTab
+                  dragHoverTarget={dragHoverTarget}
+                  setDragHoverTarget={updateDragHoverTarget}
+                  dropFlashTarget={dropFlashTarget}
+                />
+              )}
+              {activeTab === "tags" && (
+                <TagsSidebarTab
+                  dragHoverTarget={dragHoverTarget}
+                  setDragHoverTarget={updateDragHoverTarget}
+                  dropFlashTarget={dropFlashTarget}
+                />
+              )}
+              {activeTab === "genres" && (
+                <GenresSidebarTab
+                  dragHoverTarget={dragHoverTarget}
+                  setDragHoverTarget={updateDragHoverTarget}
+                  dropFlashTarget={dropFlashTarget}
+                />
+              )}
+              {activeTab === "licenses" && enableLicensesSystem && (
+                <LicensesTreeTab />
+              )}
+            </Suspense>
           </div>
         </div>
       )}

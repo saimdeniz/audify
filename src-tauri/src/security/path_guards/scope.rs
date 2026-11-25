@@ -56,6 +56,7 @@ pub fn validate_path_in_libraries_or_cache(
     }
 
     let raw_target = Path::new(trimmed);
+    super::reject_symlink_ancestors(raw_target)?;
     let sym = fs::symlink_metadata(raw_target).map_err(|_| {
         format!(
             "Path does not exist or cannot be accessed: {}",
@@ -123,8 +124,11 @@ pub fn validate_path_in_libraries_or_cache(
         }
     }
 
-    // 3. Active profile's valid customSliceExportPath
+    // 3. Active profile's valid customSliceExportPath (must never overlap user_dir)
     for slice_dir in collect_profile_slice_dirs(conn, true) {
+        if ensure_not_inside_user_dir(user_dir, &slice_dir).is_err() {
+            continue;
+        }
         if let Ok(base_canon) = slice_dir.canonicalize() {
             if target_canon.starts_with(&base_canon) {
                 return Ok(strip_verbatim_prefix(&target_canon));
@@ -132,7 +136,7 @@ pub fn validate_path_in_libraries_or_cache(
         }
     }
 
-    // 4. Active profile's configured licenseGroups folders (for Show in Explorer on Licenses tab)
+    // 4. Active profile's configured licenseGroups folders (must never overlap user_dir)
     if let Ok(mut stmt) = conn.prepare("SELECT settings_json FROM profiles WHERE is_active = 1") {
         if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
             for json_str in rows.flatten() {
@@ -143,6 +147,9 @@ pub fn validate_path_in_libraries_or_cache(
                                 for f_val in folders {
                                     if let Some(f_str) = f_val.as_str() {
                                         if let Ok(safe_dir) = is_safe_library_dir(f_str.trim()) {
+                                            if ensure_not_inside_user_dir(user_dir, &safe_dir).is_err() {
+                                                continue;
+                                            }
                                             if let Ok(base_canon) = safe_dir.canonicalize() {
                                                 if target_canon.starts_with(&base_canon) {
                                                     return Ok(strip_verbatim_prefix(&target_canon));
@@ -222,7 +229,9 @@ impl AuthorizedAudioScope {
         }
 
         for slice_dir in collect_profile_slice_dirs(conn, true) {
-            push_dir(&slice_dir);
+            if ensure_not_inside_user_dir(user_dir, &slice_dir).is_ok() {
+                push_dir(&slice_dir);
+            }
         }
 
         Self {
@@ -232,7 +241,7 @@ impl AuthorizedAudioScope {
     }
 
     pub fn has_authorized_prefix(&self, raw: &str) -> bool {
-        if raw.contains("..") {
+        if crate::security::has_parent_dir_traversal(raw) {
             return false;
         }
         self.raw_prefixes
@@ -255,6 +264,7 @@ impl AuthorizedAudioScope {
                 "Access denied: path is outside registered libraries and audio cache".to_string(),
             );
         }
+        super::reject_symlink_ancestors(Path::new(trimmed))?;
         match fs::symlink_metadata(trimmed) {
             Ok(sym) if sym.file_type().is_symlink() => {
                 return Err("Symbolic links and junctions are not allowed".to_string());

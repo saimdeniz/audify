@@ -18,6 +18,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 }));
 
 import { DEFAULT_SHORTCUTS } from "../constants/shortcuts";
+import { resetPlayheadClock } from "../store/playheadClock";
 import { useSampleStore } from "../store/useSampleStore";
 import { useAppGlobalShortcuts } from "./useAppGlobalShortcuts";
 
@@ -415,5 +416,187 @@ describe("useAppGlobalShortcuts search focus & playback transport", () => {
     } finally {
       window.history.replaceState({}, "", origSearch || "/");
     }
+  });
+
+  it("marks waveform slice In (I / Turkish ı) and Out (O) from the current playhead", () => {
+    const sample = {
+      id: 99,
+      library_id: 1,
+      file_path: "F:/data/sounds/music.wav",
+      file_name: "music.wav",
+      folder_path: "F:/data/sounds",
+      extension: "wav",
+      duration_ms: 10000,
+      sample_rate: 48000,
+      channels: 2,
+      bit_depth: 24,
+      file_size: 960000,
+      is_favorite: false,
+      is_loop: false,
+      genre: "",
+      artist: "",
+      album: "",
+      year: "",
+      peaks_json: "[]",
+      created_at: "",
+      tags: [],
+    };
+    const setSliceRange = vi.fn((range) => useSampleStore.setState({ sliceRange: range }));
+    useSampleStore.setState({
+      shortcuts: { ...DEFAULT_SHORTCUTS },
+      selectedSample: sample,
+      durationSec: 10,
+      sliceRange: null,
+      setSliceRange,
+      isSettingsOpen: false,
+      batchRenameSampleIds: null,
+      pendingTrashRequest: null,
+      pendingFileConflictPrompt: null,
+    });
+
+    renderHook(() => useAppGlobalShortcuts());
+
+    resetPlayheadClock(2.5);
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ı", code: "KeyI", bubbles: true, cancelable: true })
+    );
+    expect(useSampleStore.getState().sliceRange).toEqual({
+      startSec: 2.5,
+      endSec: 10,
+    });
+
+    resetPlayheadClock(6.25);
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "o", code: "KeyO", bubbles: true, cancelable: true })
+    );
+    expect(useSampleStore.getState().sliceRange).toEqual({
+      startSec: 2.5,
+      endSec: 6.25,
+    });
+
+    // Extending Out forward after scrubbing past the previous Out point
+    resetPlayheadClock(8.0);
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "o", code: "KeyO", bubbles: true, cancelable: true })
+    );
+    expect(useSampleStore.getState().sliceRange).toEqual({
+      startSec: 2.5,
+      endSec: 8.0,
+    });
+  });
+
+  it("supports DAW keyboard muscle memory: Shift+Arrows, PageDown, Seek, Alt slice trim, Home/End, and Enter replay", () => {
+    const mk = (id: number) => ({
+      id,
+      library_id: 1,
+      file_path: `F:/data/sounds/track_${id}.wav`,
+      file_name: `track_${id}.wav`,
+      folder_path: "F:/data/sounds",
+      extension: "wav",
+      duration_ms: 10000,
+      sample_rate: 48000,
+      channels: 2,
+      bit_depth: 24,
+      file_size: 960000,
+      is_favorite: false,
+      is_loop: false,
+      genre: "",
+      artist: "",
+      album: "",
+      year: "",
+      peaks_json: "[]",
+      created_at: "",
+      tags: [],
+    });
+    const list = Array.from({ length: 20 }, (_, i) => mk(i + 1));
+    const selectRelativeSample = vi.fn();
+    const requestSeek = vi.fn();
+    const setSliceRange = vi.fn((range) =>
+      useSampleStore.setState({ sliceRange: range })
+    );
+
+    useSampleStore.setState({
+      shortcuts: { ...DEFAULT_SHORTCUTS },
+      samples: list,
+      selectedSample: list[0],
+      selectedSampleIds: [1],
+      lastSelectedIndex: null,
+      isPlaying: false,
+      durationSec: 10,
+      sliceRange: { startSec: 2.0, endSec: 5.0 },
+      selectRelativeSample,
+      requestSeek,
+      setSliceRange,
+      isSettingsOpen: false,
+      batchRenameSampleIds: null,
+      pendingTrashRequest: null,
+      pendingFileConflictPrompt: null,
+    });
+
+    renderHook(() => useAppGlobalShortcuts());
+
+    // Shift+ArrowDown extends selection from 1 -> [1, 2] even when lastSelectedIndex was null
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", shiftKey: true, bubbles: true, cancelable: true })
+    );
+    expect(useSampleStore.getState().selectedSampleIds).toEqual([1, 2]);
+    expect(useSampleStore.getState().selectedSample?.id).toBe(2);
+
+    // Restore sliceRange (cleared on row change) to test seek, trim, Enter & Home/End
+    useSampleStore.setState({ sliceRange: { startSec: 2.0, endSec: 5.0 } });
+
+    // PageDown jumps +15 rows
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "PageDown", bubbles: true, cancelable: true })
+    );
+    expect(selectRelativeSample).toHaveBeenCalledWith(15);
+
+    // ArrowRight seeks +0.5s, Shift+ArrowLeft seeks -0.1s
+    resetPlayheadClock(3.0);
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })
+    );
+    expect(requestSeek).toHaveBeenCalledWith(3.5, false);
+
+    resetPlayheadClock(3.5);
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowLeft", shiftKey: true, bubbles: true, cancelable: true })
+    );
+    expect(requestSeek).toHaveBeenCalledWith(3.4, false);
+
+    // Alt+ArrowRight nudges slice end +50ms; Alt+Shift+ArrowLeft nudges slice start -50ms
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", altKey: true, bubbles: true, cancelable: true })
+    );
+    expect(useSampleStore.getState().sliceRange).toEqual({
+      startSec: 2.0,
+      endSec: 5.05,
+    });
+
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowLeft", altKey: true, shiftKey: true, bubbles: true, cancelable: true })
+    );
+    expect(useSampleStore.getState().sliceRange).toEqual({
+      startSec: 1.95,
+      endSec: 5.05,
+    });
+
+    // Enter replays from active slice start (1.95s) with autoPlay=true
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })
+    );
+    expect(requestSeek).toHaveBeenCalledWith(1.95, true);
+
+    // Home jumps to slice start (1.95s); without slice jumps to 0s
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Home", bubbles: true, cancelable: true })
+    );
+    expect(requestSeek).toHaveBeenCalledWith(1.95, false);
+
+    useSampleStore.setState({ sliceRange: null });
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Home", bubbles: true, cancelable: true })
+    );
+    expect(requestSeek).toHaveBeenCalledWith(0, false);
   });
 });

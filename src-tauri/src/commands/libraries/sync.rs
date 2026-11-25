@@ -1,10 +1,13 @@
 use super::folders::validate_and_resolve_scan_paths;
-use super::sync_commit::commit_synced_samples_with_status;
+use super::sync_commit::{
+    apply_pre_batch_reconcile, commit_scanned_batch, commit_synced_samples_with_status,
+    finalize_library_sync,
+};
 use crate::commands::Library;
 use crate::db::{get_active_profile_id, AppState, AutoTagCategoryConfig, AutoTagRule};
 use crate::scanner::{
-    parse_rules_from_settings, path_lookup_key, scan_directory_with_progress, ExistingFileMeta,
-    ScanProgressPayload,
+    parse_rules_from_settings, path_lookup_key, scan_directory_in_batches,
+    scan_directory_with_progress, ExistingFileMeta, ScanProgressPayload, DEFAULT_SCAN_BATCH_SIZE,
 };
 use crate::security::ensure_not_inside_user_dir;
 use rusqlite::{params, Connection};
@@ -33,7 +36,8 @@ pub(super) fn prepare_sync_db_state(
     safe_root: &Path,
     norm_lib_path: &str,
     norm_scan_prefix: &str,
-) -> Result<PreparedSyncTuple, String> {
+    allow_create_library: bool,
+) -> Result<Option<PreparedSyncTuple>, String> {
     let lib_name = safe_root
         .file_name()
         .and_then(|n| n.to_str())
@@ -65,6 +69,9 @@ pub(super) fn prepare_sync_db_state(
         .map_err(|e| format!("Failed to update library: {}", e))?;
         let _ = old_path;
         existing_id
+    } else if !allow_create_library {
+        // Background/watcher sync must never re-insert a library that the user already removed.
+        return Ok(None);
     } else {
         conn.execute(
             "INSERT INTO libraries (path, name, last_scanned_at, is_global)
@@ -84,10 +91,12 @@ pub(super) fn prepare_sync_db_state(
     };
 
     let active_id = get_active_profile_id(conn);
-    let _ = conn.execute(
-        "INSERT OR IGNORE INTO profile_libraries (profile_id, library_id) VALUES (?1, ?2)",
-        params![active_id, lib_id],
-    );
+    if allow_create_library {
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO profile_libraries (profile_id, library_id) VALUES (?1, ?2)",
+            params![active_id, lib_id],
+        );
+    }
 
     let settings_json: String = conn
         .query_row(
@@ -138,7 +147,7 @@ pub(super) fn prepare_sync_db_state(
         );
     }
 
-    Ok((lib_id, active_id, existing, rules, categories))
+    Ok(Some((lib_id, active_id, existing, rules, categories)))
 }
 
 /// Core synchronous library sync helper callable from internal commands and unit tests.
@@ -162,8 +171,11 @@ pub(crate) fn sync_library_with_conn_and_status(
     let (safe_root, norm_lib_path, scan_dir, norm_scan_prefix) =
         validate_and_resolve_scan_paths(library_path, target_folder)?;
 
-    let (lib_id, active_profile_id, existing_entries, rules, categories) =
-        prepare_sync_db_state(conn, &safe_root, &norm_lib_path, &norm_scan_prefix)?;
+    let Some((lib_id, active_profile_id, existing_entries, rules, categories)) =
+        prepare_sync_db_state(conn, &safe_root, &norm_lib_path, &norm_scan_prefix, true)?
+    else {
+        return Err("Library not found".to_string());
+    };
 
     let existing_meta: HashMap<String, ExistingFileMeta> = existing_entries
         .iter()
@@ -215,19 +227,29 @@ pub(crate) async fn run_incremental_sync_owned(
     target_folder: Option<String>,
     force: bool,
     emit_progress: bool,
-) -> Result<(Library, bool), String> {
+    allow_create_library: bool,
+) -> Result<Option<(Library, bool)>, String> {
     let app_clone = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let (safe_root, norm_lib_path, scan_dir, norm_scan_prefix) =
             validate_and_resolve_scan_paths(&library_path, target_folder.as_deref())?;
         ensure_not_inside_user_dir(&state_owned.user_dir, &safe_root)?;
 
-        let _ = app_clone.asset_protocol_scope().allow_directory(&safe_root, true);
-
-        let (lib_id, active_profile_id, existing_entries, rules, categories) = {
+        let prepared = {
             let conn = state_owned.lock_db();
-            prepare_sync_db_state(&conn, &safe_root, &norm_lib_path, &norm_scan_prefix)?
+            prepare_sync_db_state(
+                &conn,
+                &safe_root,
+                &norm_lib_path,
+                &norm_scan_prefix,
+                allow_create_library,
+            )?
         };
+        let Some((lib_id, active_profile_id, existing_entries, rules, categories)) = prepared else {
+            return Ok(None);
+        };
+
+        let _ = app_clone.asset_protocol_scope().allow_directory(&safe_root, true);
 
         let existing_meta: HashMap<String, ExistingFileMeta> = existing_entries
             .iter()
@@ -243,39 +265,66 @@ pub(crate) async fn run_incremental_sync_owned(
             .collect();
 
         let app_prog = app_clone.clone();
-        let scan_output = scan_directory_with_progress(
+        let app_batch = app_clone.clone();
+        let mut pre_renamed = 0usize;
+        let mut total_upserted = 0usize;
+
+        let scan_summary = scan_directory_in_batches(
             &norm_lib_path,
             &scan_dir,
             &existing_meta,
             force,
             &rules,
             &categories,
+            DEFAULT_SCAN_BATCH_SIZE,
             |payload: ScanProgressPayload| {
                 if emit_progress {
                     let _ = app_prog.emit("scan-progress", payload);
                 }
             },
-        );
+            |seen_paths| {
+                let mut conn = state_owned.lock_db();
+                pre_renamed =
+                    apply_pre_batch_reconcile(&mut conn, lib_id, &existing_entries, seen_paths)?;
+                Ok(())
+            },
+            |batch| {
+                let committed = {
+                    let mut conn = state_owned.lock_db();
+                    commit_scanned_batch(&mut conn, lib_id, force, &batch, &rules)?
+                };
+                total_upserted += committed;
+                if emit_progress && committed > 0 {
+                    let _ = app_batch.emit(
+                        "scan-batch-committed",
+                        serde_json::json!({
+                            "library_id": lib_id,
+                            "committed": total_upserted,
+                        }),
+                    );
+                }
+                Ok(())
+            },
+        )?;
 
         let mut conn = state_owned.lock_db();
-        let (updated, changed) = commit_synced_samples_with_status(
+        let (updated, changed) = finalize_library_sync(
             &mut conn,
             lib_id,
             active_profile_id,
-            target_folder.is_none(),
             force,
+            total_upserted,
+            pre_renamed,
             &existing_entries,
-            &scan_output.scanned_samples,
-            &scan_output.seen_paths,
-            &scan_output.mtime_backfills,
-            &rules,
+            &scan_summary.seen_paths,
+            &scan_summary.mtime_backfills,
         )?;
         if changed {
             app_clone
                 .state::<crate::ai_tagger::AiTaggerState>()
                 .invalidate_vector_cache();
         }
-        Ok((updated, changed))
+        Ok(Some((updated, changed)))
     })
     .await
     .map_err(|e| format!("Scanner thread join error: {}", e))?
@@ -292,19 +341,26 @@ pub async fn sync_library_incremental(
     let _watcher_guard = crate::library_watcher::ManualScanWatcherGuard::enter(&app);
     let force = force_rebuild.unwrap_or(false);
     let state_owned = state.inner().clone();
-    let (updated, _) = run_incremental_sync_owned(
+    let Some((updated, _)) = run_incremental_sync_owned(
         app.clone(),
         state_owned,
         library_path,
         target_folder,
         force,
         true,
+        true,
     )
-    .await?;
-    {
-        let conn = state.lock_db();
-        crate::reconcile_library_asset_scopes(&app, &conn, None);
-    }
+    .await?
+    else {
+        return Err("Library not found".to_string());
+    };
+    let state_reconcile = state.inner().clone();
+    let app_reconcile = app.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        let conn = state_reconcile.lock_db();
+        crate::reconcile_library_asset_scopes(&app_reconcile, &conn, None);
+    })
+    .await;
     Ok(updated)
 }
 
@@ -315,14 +371,18 @@ pub async fn sync_library_background(
     library_path: String,
 ) -> Result<BackgroundLibrarySyncResult, String> {
     let _watcher_guard = crate::library_watcher::ManualScanWatcherGuard::enter(&app);
-    let (library, changed) = run_incremental_sync_owned(
+    let Some((library, changed)) = run_incremental_sync_owned(
         app.clone(),
         state.inner().clone(),
         library_path,
         None,
         false,
         false,
+        false,
     )
-    .await?;
+    .await?
+    else {
+        return Err("Library is no longer registered".to_string());
+    };
     Ok(BackgroundLibrarySyncResult { library, changed })
 }

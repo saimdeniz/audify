@@ -1,35 +1,37 @@
-use crate::commands::{resolve_or_create_auto_tag, AutoTagPreviewResult};
+use crate::commands::{
+    resolve_or_create_auto_tag, AutoTagPreviewResult, BatchJobProgressPayload,
+};
 use crate::db::{
-    get_active_profile_id, open_read_conn, AppState, AutoTagRule, SAMPLE_TAGS_FTS_TRIGGERS_SQL,
+    get_active_profile_id, AppState, AutoTagRule, SAMPLE_TAGS_FTS_TRIGGERS_SQL,
 };
 use crate::scanner::{detect_is_loop, match_auto_tags, parse_rules_from_settings};
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
-struct SampleAutoTagInput {
-    id: i64,
-    file_path: String,
-    file_name: String,
-    duration_ms: i64,
-    old_is_loop: bool,
-    loop_is_manual: bool,
+pub(super) struct SampleAutoTagInput {
+    pub id: i64,
+    pub file_path: String,
+    pub file_name: String,
+    pub duration_ms: i64,
+    pub old_is_loop: bool,
+    pub loop_is_manual: bool,
 }
 
-struct ComputedSampleTags {
-    sample_id: i64,
-    new_is_loop: Option<bool>,
-    tags: Vec<String>,
+pub(super) struct ComputedSampleTags {
+    pub sample_id: i64,
+    pub new_is_loop: Option<bool>,
+    pub tags: Vec<String>,
 }
 
-struct PreparedAutoTagPlan {
-    active_id: i64,
-    rules: Vec<AutoTagRule>,
-    computed: Vec<ComputedSampleTags>,
-    assigned_count: usize,
+pub(super) struct PreparedAutoTagPlan {
+    pub active_id: i64,
+    pub rules: Vec<AutoTagRule>,
+    pub computed: Vec<ComputedSampleTags>,
+    pub assigned_count: usize,
 }
 
-const ACTIVE_PROFILE_VISIBLE_SAMPLES_SQL: &str = "
+pub(super) const ACTIVE_PROFILE_VISIBLE_SAMPLES_SQL: &str = "
     SELECT s.id
     FROM samples s
     INNER JOIN libraries l ON l.id = s.library_id
@@ -55,7 +57,7 @@ fn read_active_profile_settings(conn: &Connection) -> (i64, String) {
     (active_id, settings_json)
 }
 
-fn read_auto_tag_inputs(
+pub(super) fn read_auto_tag_inputs(
     conn: &Connection,
 ) -> Result<(i64, String, Vec<SampleAutoTagInput>), String> {
     let (active_id, settings_json) = read_active_profile_settings(conn);
@@ -90,16 +92,30 @@ fn read_auto_tag_inputs(
     Ok((active_id, settings_json, rows.flatten().collect()))
 }
 
-fn compute_auto_tag_plan(
+pub(super) fn compute_auto_tag_plan(
     active_id: i64,
     settings_json: &str,
     samples: Vec<SampleAutoTagInput>,
 ) -> PreparedAutoTagPlan {
+    compute_auto_tag_plan_with_progress(active_id, settings_json, samples, |_, _, _, _| {})
+}
+
+fn compute_auto_tag_plan_with_progress<F>(
+    active_id: i64,
+    settings_json: &str,
+    samples: Vec<SampleAutoTagInput>,
+    mut on_progress: F,
+) -> PreparedAutoTagPlan
+where
+    F: FnMut(usize, usize, usize, &str),
+{
     let (rules, categories) = parse_rules_from_settings(settings_json);
-    let mut computed = Vec::with_capacity(samples.len());
+    let total = samples.len();
+    let step = (total / 120).clamp(16, 250);
+    let mut computed = Vec::with_capacity(total);
     let mut assigned_count: usize = 0;
 
-    for sample in samples {
+    for (idx, sample) in samples.into_iter().enumerate() {
         let (effective_is_loop, new_is_loop) = if sample.loop_is_manual {
             (sample.old_is_loop, None)
         } else {
@@ -126,6 +142,10 @@ fn compute_auto_tag_plan(
                 tags,
             });
         }
+        let done = idx + 1;
+        if done == 1 || done == total || done.is_multiple_of(step) {
+            on_progress(done, total, assigned_count, &sample.file_name);
+        }
     }
 
     PreparedAutoTagPlan {
@@ -136,7 +156,19 @@ fn compute_auto_tag_plan(
     }
 }
 
+#[cfg(test)]
 fn commit_auto_tag_plan(conn: &mut Connection, plan: &PreparedAutoTagPlan) -> Result<usize, String> {
+    commit_auto_tag_plan_with_progress(conn, plan, |_, _, _, _| {})
+}
+
+fn commit_auto_tag_plan_with_progress<F>(
+    conn: &mut Connection,
+    plan: &PreparedAutoTagPlan,
+    mut on_progress: F,
+) -> Result<usize, String>
+where
+    F: FnMut(&str, usize, usize, f64),
+{
     let tx = conn
         .transaction()
         .map_err(|e| format!("Failed to start database transaction: {}", e))?;
@@ -162,16 +194,26 @@ fn commit_auto_tag_plan(conn: &mut Connection, plan: &PreparedAutoTagPlan) -> Re
     )
     .map_err(|e| e.to_string())?;
 
+    // Only clear rule-generated tags in the `tags` domain; NEVER touch `genres`-domain links
+    // (auto-detected genres, moods, custom genre facets) or AI/manual assignments.
     let delete_sql = format!(
         "DELETE FROM sample_tags
          WHERE is_manual = 0
            AND COALESCE(source, 'auto') IN ('auto', 'auto_rule')
+           AND tag_id NOT IN (
+               SELECT t.id FROM tags t
+               INNER JOIN tag_facets f ON f.id = t.facet_id
+               WHERE f.domain = 'genres'
+           )
            AND sample_id IN ({})",
         ACTIVE_PROFILE_VISIBLE_SAMPLES_SQL
     );
     tx.execute(&delete_sql, params![plan.active_id])
         .map_err(|e| e.to_string())?;
 
+    let computed_total = plan.computed.len();
+    let save_step = (computed_total / 25).clamp(16, 250);
+    on_progress("Saving tag links", 0, computed_total, 72.0);
     {
         let mut update_loop_stmt = tx
             .prepare("UPDATE samples SET is_loop = ?1 WHERE id = ?2 AND loop_is_manual = 0")
@@ -183,7 +225,7 @@ fn commit_auto_tag_plan(conn: &mut Connection, plan: &PreparedAutoTagPlan) -> Re
             )
             .map_err(|e| e.to_string())?;
 
-        for item in &plan.computed {
+        for (idx, item) in plan.computed.iter().enumerate() {
             if let Some(detected) = item.new_is_loop {
                 let _ = update_loop_stmt.execute(params![detected, item.sample_id]);
             }
@@ -193,24 +235,23 @@ fn commit_auto_tag_plan(conn: &mut Connection, plan: &PreparedAutoTagPlan) -> Re
                     let _ = insert_stmt.execute(params![item.sample_id, tag_id]);
                 }
             }
+            let done_idx = idx + 1;
+            if done_idx == computed_total || done_idx.is_multiple_of(save_step) {
+                let pct = 72.0 + (done_idx as f64 / computed_total.max(1) as f64) * 20.0;
+                on_progress("Saving tag links", done_idx, computed_total, pct);
+            }
         }
     }
 
-    // Prune ONLY auto-generated tags (`is_manual = 0`) that are no longer referenced anywhere.
-    let _ = tx.execute(
-        "DELETE FROM tags WHERE is_manual = 0 AND id NOT IN (SELECT DISTINCT tag_id FROM sample_tags)",
-        [],
-    );
+    // Prune ONLY auto-generated orphan leaf tags (protecting manual tags, system roots, and parents).
+    let _ = crate::db::prune_orphan_auto_tags(&tx);
 
+    on_progress("Updating search index", computed_total, computed_total, 95.0);
     let fts_sql = format!(
         "UPDATE samples_fts
-         SET tags_text = COALESCE((
-             SELECT GROUP_CONCAT(t.name, ' ') || ' ' || REPLACE(REPLACE(GROUP_CONCAT(t.name, ' '), 'ı', 'i'), 'İ', 'i')
-             FROM sample_tags st
-             INNER JOIN tags t ON t.id = st.tag_id
-             WHERE st.sample_id = samples_fts.rowid
-         ), '')
+         SET tags_text = {}
          WHERE rowid IN ({})",
+        crate::db::FTS_TAGS_TEXT_SUBQUERY_SQL,
         ACTIVE_PROFILE_VISIBLE_SAMPLES_SQL
     );
     tx.execute(&fts_sql, params![plan.active_id])
@@ -233,22 +274,95 @@ pub(crate) fn apply_auto_tag_rules_with_conn(conn: &mut Connection) -> Result<us
 }
 
 #[tauri::command]
-pub async fn apply_auto_tag_rules_to_library(state: State<'_, AppState>) -> Result<usize, String> {
+pub async fn apply_auto_tag_rules_to_library(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
     let state_cloned = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let (active_id, settings_json, samples) = match open_read_conn(&state_cloned.user_dir) {
+    let app_worker = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let emit_progress = |stage: &str,
+                             processed: usize,
+                             total: usize,
+                             percentage: f64,
+                             current_item: &str,
+                             matched_count: usize,
+                             done: bool| {
+            let _ = app_worker.emit(
+                "auto-tag-progress",
+                BatchJobProgressPayload {
+                    stage_label: stage.to_string(),
+                    processed,
+                    total,
+                    percentage: percentage.clamp(0.0, 100.0),
+                    current_item: current_item.to_string(),
+                    matched_count,
+                    done,
+                },
+            );
+        };
+
+        let (active_id, settings_json, samples) = match state_cloned.acquire_read_conn() {
             Ok(read_conn) => read_auto_tag_inputs(&read_conn)?,
             Err(_) => {
                 let conn = state_cloned.lock_db();
                 read_auto_tag_inputs(&conn)?
             }
         };
-        let plan = compute_auto_tag_plan(active_id, &settings_json, samples);
+        let total = samples.len();
+        emit_progress("Matching rules", 0, total, 0.0, "", 0, false);
+
+        let plan = compute_auto_tag_plan_with_progress(
+            active_id,
+            &settings_json,
+            samples,
+            |processed, tot, matched, file_name| {
+                let pct = if tot > 0 {
+                    (processed as f64 / tot as f64) * 70.0
+                } else {
+                    70.0
+                };
+                emit_progress("Matching rules", processed, tot, pct, file_name, matched, false);
+            },
+        );
+        let matched_total = plan.assigned_count;
+
         let mut conn = state_cloned.lock_db();
-        commit_auto_tag_plan(&mut conn, &plan)
+        let snapshot =
+            super::auto_tags_undo::capture_auto_tag_undo_snapshot(&conn, plan.active_id)?;
+        let assigned = commit_auto_tag_plan_with_progress(
+            &mut conn,
+            &plan,
+            |stage, processed, tot, pct| {
+                emit_progress(stage, processed, tot, pct, "", matched_total, false);
+            },
+        )?;
+        *state_cloned
+            .last_auto_tag_undo
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(snapshot);
+
+        emit_progress("Rules applied", total, total, 100.0, "", assigned, true);
+        Ok(assigned)
     })
     .await
-    .map_err(|e| format!("Auto-tag worker error: {}", e))?
+    .map_err(|e| format!("Auto-tag worker error: {}", e))?;
+
+    if result.is_err() {
+        let _ = app.emit(
+            "auto-tag-progress",
+            BatchJobProgressPayload {
+                stage_label: "Apply rules failed".to_string(),
+                processed: 0,
+                total: 0,
+                percentage: 100.0,
+                current_item: String::new(),
+                matched_count: 0,
+                done: true,
+            },
+        );
+    }
+    result
 }
 
 fn preview_auto_tag_rule_with_conn(
@@ -288,21 +402,25 @@ fn preview_auto_tag_rule_with_conn(
 
     let mut match_count = 0;
     let mut sample_names = Vec::new();
+    let target_tag_name = rule.tag_name.clone();
     let rules_slice = [rule];
 
     for item in rows.flatten() {
-        let (file_path, file_name, duration_ms, is_loop) = item;
+        let (file_path, file_name, duration_ms, _is_loop) = item;
         let matched = match_auto_tags(
             &file_path,
             &file_name,
             duration_ms,
-            is_loop,
+            false,
             &rules_slice,
             &categories,
         );
-        if !matched.is_empty() {
+        if matched
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case(target_tag_name.trim()))
+        {
             match_count += 1;
-            if sample_names.len() < 5 {
+            if sample_names.len() < 12 {
                 sample_names.push(file_name);
             }
         }
@@ -315,15 +433,14 @@ fn preview_auto_tag_rule_with_conn(
 }
 
 #[tauri::command]
-pub fn preview_auto_tag_rule(
+pub async fn preview_auto_tag_rule(
     state: State<'_, AppState>,
     rule: AutoTagRule,
 ) -> Result<AutoTagPreviewResult, String> {
-    if let Ok(read_conn) = open_read_conn(&state.user_dir) {
-        return preview_auto_tag_rule_with_conn(&read_conn, rule);
-    }
-    let conn = state.lock_db();
-    preview_auto_tag_rule_with_conn(&conn, rule)
+    crate::db::run_read_query(&state, move |conn| {
+        preview_auto_tag_rule_with_conn(conn, rule)
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -462,5 +579,317 @@ mod tests {
             crate::security::validate_hex_color(&snare_color).is_ok(),
             "invalid rule tag color must fall back to valid hex"
         );
+    }
+
+    #[test]
+    fn preview_auto_tag_rule_ignores_is_loop_false_positives_and_caps_at_12() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        init_schema_on_conn(&conn).expect("init schema");
+        conn.execute(
+            "INSERT INTO libraries (id, path, name, is_global) VALUES (1, 'C:/SFX', 'SFX', 1)",
+            [],
+        )
+        .unwrap();
+
+        for i in 1..=15 {
+            conn.execute(
+                "INSERT INTO samples (library_id, file_path, file_name, extension, duration_ms, is_loop)
+                 VALUES (1, ?1, ?2, 'mp3', 1200, 1)",
+                params![
+                    format!("C:/SFX/mc/berry_bush_break_{}.mp3", i),
+                    format!("berry_bush_break_{}.mp3", i)
+                ],
+            )
+            .unwrap();
+        }
+        for i in 1..=15 {
+            conn.execute(
+                "INSERT INTO samples (library_id, file_path, file_name, extension, duration_ms, is_loop)
+                 VALUES (1, ?1, ?2, 'wav', 450, 0)",
+                params![
+                    format!("C:/SFX/weapons/sword_slash_{}.wav", i),
+                    format!("sword_slash_{}.wav", i)
+                ],
+            )
+            .unwrap();
+        }
+
+        let rule = AutoTagRule {
+            id: "r-sword".to_string(),
+            tag_name: "Melee".to_string(),
+            tag_color: "#EF4444".to_string(),
+            keywords: vec!["sword".to_string(), "slash".to_string()],
+            enabled: true,
+            include_paths: Some(Vec::new()),
+            exclude_paths: Some(Vec::new()),
+            rel_include_paths: Vec::new(),
+            rel_exclude_paths: Vec::new(),
+            category: None,
+            min_duration_ms: None,
+            max_duration_ms: None,
+            facet_slug: Some("category".to_string()),
+            parent_tag_name: Some("Action & Combat".to_string()),
+        };
+
+        let preview = super::preview_auto_tag_rule_with_conn(&conn, rule).expect("preview");
+        assert_eq!(preview.match_count, 15, "is_loop non-matching files must never be counted");
+        assert_eq!(preview.sample_names.len(), 12, "preview list should show up to 12 names");
+        assert!(
+            preview
+                .sample_names
+                .iter()
+                .all(|n| n.starts_with("sword_slash_")),
+            "unexpected non-matching sample in preview: {:?}",
+            preview.sample_names
+        );
+    }
+
+    #[test]
+    fn apply_auto_tags_preserves_genres_domain_tags_and_never_prunes_them() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        init_schema_on_conn(&conn).expect("init schema");
+
+        conn.execute(
+            "INSERT INTO libraries (id, path, name, is_global) VALUES (1, 'C:/Music', 'Music', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO samples (id, library_id, file_path, file_name, extension, duration_ms, genre)
+             VALUES (1, 1, 'C:/Music/acoustic_theme.mp3', 'acoustic_theme.mp3', 'mp3', 12000, 'Acoustic')",
+            [],
+        )
+        .unwrap();
+
+        // Seed both a legacy 'auto' Genre tag and a new 'auto_genre' Mood tag in genres-domain facets.
+        conn.execute(
+            "INSERT INTO tags (id, name, color, is_manual, facet_id, path)
+             VALUES
+               (201, 'Acoustic', '#3B82F6', 0, 2, '/201/'),
+               (202, 'Chill', '#EC4899', 0, 3, '/202/')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sample_tags (sample_id, tag_id, is_manual, source)
+             VALUES
+               (1, 201, 0, 'auto'),
+               (1, 202, 0, 'auto_genre')",
+            [],
+        )
+        .unwrap();
+
+        apply_auto_tag_rules_with_conn(&mut conn).expect("apply auto tags");
+
+        let surviving_links: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sample_tags WHERE sample_id = 1 AND tag_id IN (201, 202)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            surviving_links, 2,
+            "Apply rules must never delete genres-domain sample_tags links"
+        );
+
+        let surviving_tags: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tags WHERE id IN (201, 202)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            surviving_tags, 2,
+            "Apply rules must never prune auto-detected Genre or Mood tags"
+        );
+    }
+
+    #[test]
+    fn preview_impact_and_atomic_undo_restore_auto_tags_and_pruned_rows() {
+        use crate::commands::taxonomy::auto_tags_undo::{
+            capture_auto_tag_undo_snapshot, preview_auto_tag_rules_impact_with_conn,
+            restore_auto_tag_undo_snapshot_with_conn,
+        };
+        use crate::db::ensure_taxonomy_tag;
+
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        init_schema_on_conn(&conn).expect("init schema");
+
+        conn.execute(
+            "INSERT INTO libraries (id, path, name, is_global) VALUES (1, 'C:/SFX', 'SFX', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO samples (id, library_id, file_path, file_name, extension, duration_ms)
+             VALUES
+               (1, 1, 'C:/SFX/kick_heavy.wav', 'kick_heavy.wav', 'wav', 300),
+               (2, 1, 'C:/SFX/snare_tight.wav', 'snare_tight.wav', 'wav', 300)",
+            [],
+        )
+        .unwrap();
+
+        // Seed initial rule matching sample 1 ("TempKickAuto") + a manual tag on sample 1 that must never be touched
+        let initial_rules = serde_json::json!({
+            "autoTagCategories": [],
+            "autoTagRules": [
+                {
+                    "id": "r-kick",
+                    "tag_name": "TempKickAuto",
+                    "tag_color": "#EF4444",
+                    "keywords": ["kick"],
+                    "enabled": true,
+                    "facet_slug": "category"
+                }
+            ]
+        })
+        .to_string();
+        conn.execute(
+            "UPDATE profiles SET settings_json = ?1 WHERE id = 1",
+            params![initial_rules],
+        )
+        .unwrap();
+
+        let manual_tag = ensure_taxonomy_tag(&conn, "KeepManual", Some("category"), None, None, true).unwrap();
+        conn.execute(
+            "INSERT INTO sample_tags (sample_id, tag_id, is_manual, source) VALUES (1, ?1, 1, 'manual')",
+            params![manual_tag],
+        )
+        .unwrap();
+
+        apply_auto_tag_rules_with_conn(&mut conn).expect("initial apply");
+
+        // Now change rules: disable/remove TempKickAuto, enable TempSnareAuto
+        let next_rules = serde_json::json!({
+            "autoTagCategories": [],
+            "autoTagRules": [
+                {
+                    "id": "r-snare",
+                    "tag_name": "TempSnareAuto",
+                    "tag_color": "#3B82F6",
+                    "keywords": ["snare"],
+                    "enabled": true,
+                    "facet_slug": "category"
+                }
+            ]
+        })
+        .to_string();
+        conn.execute(
+            "UPDATE profiles SET settings_json = ?1 WHERE id = 1",
+            params![next_rules],
+        )
+        .unwrap();
+
+        let impact = preview_auto_tag_rules_impact_with_conn(&conn, false).expect("preview impact");
+        assert_eq!(impact.added_links, 1, "should preview +1 link on snare_tight.wav");
+        assert_eq!(impact.removed_links, 1, "should preview -1 link on kick_heavy.wav");
+        assert_eq!(impact.affected_samples, 2, "2 distinct samples affected");
+
+        // Capture undo snapshot right before applying new rules (which prunes orphan TempKickAuto!)
+        let snapshot = capture_auto_tag_undo_snapshot(&conn, 1).expect("capture snapshot");
+        apply_auto_tag_rules_with_conn(&mut conn).expect("apply updated rules");
+
+        let kick_after_apply: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tags WHERE name = 'TempKickAuto'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kick_after_apply, 0, "orphan auto tag TempKickAuto was pruned on apply");
+
+        // Undo restores pruned TempKickAuto + link on sample 1, removes TempSnareAuto, preserves KeepManual
+        restore_auto_tag_undo_snapshot_with_conn(&mut conn, &snapshot).expect("undo apply");
+
+        let restored_kick_link: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sample_tags st
+                 INNER JOIN tags t ON t.id = st.tag_id
+                 WHERE st.sample_id = 1 AND t.name = 'TempKickAuto' AND st.source = 'auto_rule'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(restored_kick_link, 1, "TempKickAuto tag & sample link restored");
+
+        let snare_link_after_undo: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sample_tags st
+                 INNER JOIN tags t ON t.id = st.tag_id
+                 WHERE t.name = 'TempSnareAuto'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(snare_link_after_undo, 0, "TempSnareAuto link removed on undo");
+
+        let manual_preserved: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sample_tags WHERE sample_id = 1 AND tag_id = ?1 AND is_manual = 1",
+                params![manual_tag],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(manual_preserved, 1, "manual tag untouched across apply & undo");
+    }
+
+    #[test]
+    fn auto_tag_plan_and_commit_emit_monotonic_progress_stages() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        init_schema_on_conn(&conn).expect("init schema");
+        conn.execute(
+            "INSERT INTO libraries (id, path, name, is_global) VALUES (1, 'C:/SFX', 'SFX', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO samples (id, library_id, file_path, file_name, extension, duration_ms)
+             VALUES (1, 1, 'C:/SFX/whoosh_01.wav', 'whoosh_01.wav', 'wav', 500),
+                    (2, 1, 'C:/SFX/impact_02.wav', 'impact_02.wav', 'wav', 500)",
+            [],
+        )
+        .unwrap();
+        let rules_json = serde_json::json!({
+            "autoTagCategories": [],
+            "autoTagRules": [
+                {
+                    "id": "r1",
+                    "tag_name": "Whoosh",
+                    "tag_color": "#F59E0B",
+                    "keywords": ["whoosh"],
+                    "enabled": true,
+                    "include_paths": [],
+                    "exclude_paths": []
+                }
+            ]
+        })
+        .to_string();
+        conn.execute(
+            "UPDATE profiles SET settings_json = ?1 WHERE id = 1",
+            params![rules_json],
+        )
+        .unwrap();
+
+        let (active_id, settings_json, samples) = read_auto_tag_inputs(&conn).unwrap();
+        let mut match_events: Vec<(usize, usize)> = Vec::new();
+        let plan = compute_auto_tag_plan_with_progress(
+            active_id,
+            &settings_json,
+            samples,
+            |done, total, _matched, _name| match_events.push((done, total)),
+        );
+        assert!(!match_events.is_empty());
+        assert_eq!(match_events.last().copied(), Some((2, 2)));
+
+        let mut commit_stages: Vec<(String, f64)> = Vec::new();
+        let assigned = commit_auto_tag_plan_with_progress(&mut conn, &plan, |stage, _, _, pct| {
+            commit_stages.push((stage.to_string(), pct));
+        })
+        .unwrap();
+        assert_eq!(assigned, 1);
+        assert!(commit_stages.iter().any(|(s, _)| s == "Saving tag links"));
+        assert!(commit_stages.iter().any(|(s, p)| s == "Updating search index" && *p >= 95.0));
     }
 }

@@ -10,8 +10,14 @@ import {
   parsePeaks,
   samplePeakRange,
 } from "../../utils/format";
+import {
+  DEFAULT_WAVEFORM_VIEWPORT,
+  trackRatioToScreenRatio,
+  WaveformViewport,
+} from "./waveformViewport";
 
 export const HIRES_CROSSFADE_MS = 110;
+export type { WaveformViewport };
 
 export interface WaveLayerCache {
   key: string;
@@ -34,6 +40,7 @@ export interface RenderWaveformDeckOptions {
   hiResPeaks: number[] | null;
   effectiveDuration: number;
   sliceRange: SliceRange | null;
+  viewport?: WaveformViewport;
   hoverRatio: number | null;
   hoverZone: "none" | "slice-body" | "slice-edge";
   themeMode: ThemeMode;
@@ -43,23 +50,32 @@ export interface RenderWaveformDeckOptions {
   waveformStyle: WaveformStyle;
   logicalWidth: number;
   logicalHeight: number;
+  dpr?: number;
   crossfade?: WaveCrossfadeState | null;
 }
 
 export function buildWaveLayerStyleKey(opts: {
   logicalWidth: number;
   logicalHeight: number;
+  dpr?: number;
   waveformSensitivity: WaveformSensitivity;
   waveformStyle: WaveformStyle;
   themeMode: ThemeMode;
   accentColor: string;
   enableMica: boolean;
+  viewport?: WaveformViewport;
 }): string {
   const width = Math.max(100, Math.floor(opts.logicalWidth));
   const height = Math.max(40, Math.floor(opts.logicalHeight));
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = opts.dpr ?? (window.devicePixelRatio || 1);
+  const vp = opts.viewport ?? DEFAULT_WAVEFORM_VIEWPORT;
+  const vpKey =
+    vp.zoom <= 1
+      ? "1:0"
+      : `${vp.zoom.toFixed(3)}:${vp.startRatio.toFixed(5)}`;
   return [
     `${width}x${height}@${dpr}`,
+    vpKey,
     opts.waveformSensitivity,
     opts.waveformStyle,
     opts.themeMode,
@@ -159,6 +175,16 @@ function drawCompositeWaveLayers(
  * Draws the interactive hi-res waveform deck onto `canvas`, reusing cached
  * offscreen envelope layers when only the playhead or hover cursor moves.
  */
+export function disposeWaveLayerCache(cache: WaveLayerCache | null): void {
+  if (!cache) return;
+  cache.base.width = 0;
+  cache.base.height = 0;
+  cache.slice.width = 0;
+  cache.slice.height = 0;
+  cache.played.width = 0;
+  cache.played.height = 0;
+}
+
 export function renderWaveformDeck(
   canvas: HTMLCanvasElement,
   prevCache: WaveLayerCache | null,
@@ -166,7 +192,7 @@ export function renderWaveformDeck(
 ): WaveLayerCache | null {
   const width = Math.max(100, Math.floor(opts.logicalWidth));
   const height = Math.max(40, Math.floor(opts.logicalHeight));
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = opts.dpr ?? (window.devicePixelRatio || 1);
 
   const targetW = Math.floor(width * dpr);
   const targetH = Math.floor(height * dpr);
@@ -186,6 +212,12 @@ export function renderWaveformDeck(
     `${opts.themeMode}:${opts.enableMica}:${opts.accentColor}`
   );
 
+  const viewport = opts.viewport ?? DEFAULT_WAVEFORM_VIEWPORT;
+  const viewStart = viewport.startRatio;
+  const viewSpan = 1 / Math.max(1, viewport.zoom);
+  const visibleDuration = opts.effectiveDuration * viewSpan;
+  const rulerDecimals = visibleDuration < 1.5 ? 3 : 2;
+
   // 1. Background Time Ruler Grid
   ctx.strokeStyle = palette.lineSubtle;
   ctx.lineWidth = 1;
@@ -201,8 +233,8 @@ export function renderWaveformDeck(
     ctx.stroke();
 
     if (opts.sampleId !== null) {
-      const secLabel =
-        ((opts.effectiveDuration / divisions) * i).toFixed(2) + "s";
+      const secVal = (viewStart + (viewSpan / divisions) * i) * opts.effectiveDuration;
+      const secLabel = secVal.toFixed(rulerDecimals) + "s";
       ctx.fillText(secLabel, x + 4, 11);
     }
   }
@@ -226,7 +258,7 @@ export function renderWaveformDeck(
     ctx.font = '11px "JetBrains Mono", Consolas, monospace';
     ctx.fillText("No sample selected", 16, midY);
     ctx.restore();
-    return prevCache;
+    return null;
   }
 
   const peaks = opts.hiResPeaks ?? parsePeaks(opts.peaksJson);
@@ -242,38 +274,67 @@ export function renderWaveformDeck(
   const sliceEndRatio = opts.sliceRange
     ? Math.max(0, Math.min(1, opts.sliceRange.endSec / opts.effectiveDuration))
     : null;
+  const playheadScreenRatio = trackRatioToScreenRatio(playheadRatio, viewport);
+  const rawSliceStartScreen =
+    sliceStartRatio !== null
+      ? trackRatioToScreenRatio(sliceStartRatio, viewport)
+      : null;
+  const rawSliceEndScreen =
+    sliceEndRatio !== null
+      ? trackRatioToScreenRatio(sliceEndRatio, viewport)
+      : null;
+  const visSliceStartRatio =
+    rawSliceStartScreen !== null && rawSliceEndScreen !== null
+      ? Math.max(0, Math.min(1, rawSliceStartScreen))
+      : null;
+  const visSliceEndRatio =
+    rawSliceStartScreen !== null && rawSliceEndScreen !== null
+      ? Math.max(0, Math.min(1, rawSliceEndScreen))
+      : null;
 
   // 2. In/Out Slice Region
   if (
-    sliceStartRatio !== null &&
-    sliceEndRatio !== null &&
-    sliceEndRatio > sliceStartRatio
+    rawSliceStartScreen !== null &&
+    rawSliceEndScreen !== null &&
+    rawSliceEndScreen > rawSliceStartScreen &&
+    rawSliceEndScreen > 0 &&
+    rawSliceStartScreen < 1
   ) {
-    const sx = Math.floor(sliceStartRatio * width);
-    const ex = Math.floor(sliceEndRatio * width);
-    const sliceW = Math.max(2, ex - sx);
+    const sx = Math.floor(rawSliceStartScreen * width);
+    const ex = Math.floor(rawSliceEndScreen * width);
+    const visSx = Math.max(0, sx);
+    const visEx = Math.min(width, ex);
+    const visSliceW = Math.max(2, visEx - visSx);
     ctx.fillStyle =
       opts.hoverZone === "slice-body"
         ? palette.accentFillHover
         : palette.accentFillSoft;
-    ctx.fillRect(sx, 0, sliceW, height);
+    ctx.fillRect(visSx, 0, visSliceW, height);
 
     ctx.strokeStyle = palette.accentColor;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.moveTo(sx + 0.5, 0);
-    ctx.lineTo(sx + 0.5, height);
-    ctx.moveTo(ex + 0.5, 0);
-    ctx.lineTo(ex + 0.5, height);
+    if (sx >= -1 && sx <= width + 1) {
+      ctx.moveTo(sx + 0.5, 0);
+      ctx.lineTo(sx + 0.5, height);
+    }
+    if (ex >= -1 && ex <= width + 1) {
+      ctx.moveTo(ex + 0.5, 0);
+      ctx.lineTo(ex + 0.5, height);
+    }
     ctx.stroke();
 
     ctx.fillStyle = palette.accentColor;
-    ctx.fillRect(sx, 0, 4, 12);
-    ctx.fillRect(Math.max(sx, ex - 4), 0, 4, 12);
+    if (sx >= -4 && sx <= width) {
+      ctx.fillRect(sx, 0, 4, 12);
+    }
+    if (ex >= 0 && ex <= width + 4) {
+      ctx.fillRect(Math.max(sx, ex - 4), 0, 4, 12);
+    }
 
-    if (sliceW >= 78) {
+    if (visSliceW >= 78) {
       const badgeW = 72;
-      const badgeX = Math.floor(sx + (sliceW - badgeW) / 2);
+      const badgeX = Math.floor(visSx + (visSliceW - badgeW) / 2);
       ctx.fillStyle = palette.accentColor;
       ctx.fillRect(badgeX, 2, badgeW, 13);
       ctx.fillStyle = palette.accentOn;
@@ -304,8 +365,8 @@ export function renderWaveformDeck(
     for (let x = 0; x < width; x++) {
       raw[x] = samplePeakRange(
         peaks,
-        x / width,
-        (x + 1) / width,
+        viewStart + (x / width) * viewSpan,
+        viewStart + ((x + 1) / width) * viewSpan,
         opts.waveformSensitivity
       );
     }
@@ -357,11 +418,11 @@ export function renderWaveformDeck(
       styleSizeKey,
       base: buildLayer(unplayedBarColor),
       slice: buildLayer(sliceBarColor),
-      played: buildLayer(opts.accentColor),
+      played: buildLayer(palette.accentColor),
     };
   }
 
-  const playedX = Math.floor(playheadRatio * width);
+  const playedX = Math.floor(playheadScreenRatio * width);
   const crossfade = opts.crossfade;
   if (
     crossfade &&
@@ -377,8 +438,8 @@ export function renderWaveformDeck(
       crossfade.from,
       width,
       height,
-      sliceStartRatio,
-      sliceEndRatio,
+      visSliceStartRatio,
+      visSliceEndRatio,
       playedX,
       alphaFrom
     );
@@ -387,8 +448,8 @@ export function renderWaveformDeck(
       layers,
       width,
       height,
-      sliceStartRatio,
-      sliceEndRatio,
+      visSliceStartRatio,
+      visSliceEndRatio,
       playedX,
       alphaTo
     );
@@ -398,8 +459,8 @@ export function renderWaveformDeck(
       crossfade.from,
       width,
       height,
-      sliceStartRatio,
-      sliceEndRatio,
+      visSliceStartRatio,
+      visSliceEndRatio,
       playedX,
       1
     );
@@ -409,52 +470,72 @@ export function renderWaveformDeck(
       layers,
       width,
       height,
-      sliceStartRatio,
-      sliceEndRatio,
+      visSliceStartRatio,
+      visSliceEndRatio,
       playedX,
       1
     );
   }
 
   // 4. Playhead Line & Cap
-  const px = Math.floor(playheadRatio * width) + 0.5;
-  ctx.strokeStyle = opts.accentColor;
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(px, 0);
-  ctx.lineTo(px, height);
-  ctx.stroke();
+  const px = Math.floor(playheadScreenRatio * width) + 0.5;
+  if (px >= -6 && px <= width + 6) {
+    ctx.strokeStyle = palette.accentColor;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(px, 0);
+    ctx.lineTo(px, height);
+    ctx.stroke();
 
-  ctx.fillStyle = opts.accentColor;
-  ctx.beginPath();
-  ctx.moveTo(px - 5, 0);
-  ctx.lineTo(px + 5, 0);
-  ctx.lineTo(px, 7);
-  ctx.closePath();
-  ctx.fill();
+    ctx.fillStyle = palette.accentColor;
+    ctx.beginPath();
+    ctx.moveTo(px - 5, 0);
+    ctx.lineTo(px + 5, 0);
+    ctx.lineTo(px, 7);
+    ctx.closePath();
+    ctx.fill();
+  }
 
   // 5. Ghost Playhead on Hover
   if (opts.hoverRatio !== null) {
-    const gx = Math.floor(opts.hoverRatio * width) + 0.5;
-    ctx.strokeStyle = palette.fg2;
-    ctx.lineWidth = 1;
-    ctx.setLineDash([2, 2]);
-    ctx.beginPath();
-    ctx.moveTo(gx, 0);
-    ctx.lineTo(gx, height);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    const hoverScreenRatio = trackRatioToScreenRatio(opts.hoverRatio, viewport);
+    if (hoverScreenRatio >= -0.01 && hoverScreenRatio <= 1.01) {
+      const gx = Math.floor(hoverScreenRatio * width) + 0.5;
+      ctx.strokeStyle = palette.fg2;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 2]);
+      ctx.beginPath();
+      ctx.moveTo(gx, 0);
+      ctx.lineTo(gx, height);
+      ctx.stroke();
+      ctx.setLineDash([]);
 
-    const hoverSec = (opts.hoverRatio * opts.effectiveDuration).toFixed(2) + "s";
-    const labelW = 50;
-    const labelX = Math.min(width - labelW - 4, Math.max(4, gx + 5));
-    ctx.fillStyle = palette.surface3;
-    ctx.fillRect(labelX, height - 19, labelW, 15);
-    ctx.strokeStyle = palette.lineStrong;
-    ctx.strokeRect(labelX, height - 19, labelW, 15);
-    ctx.fillStyle = palette.fg;
-    ctx.font = '10px "JetBrains Mono", Consolas, monospace';
-    ctx.fillText(hoverSec, labelX + 4, height - 8);
+      const hoverSec =
+        (opts.hoverRatio * opts.effectiveDuration).toFixed(rulerDecimals) + "s";
+      ctx.font = '10px "JetBrains Mono", Consolas, monospace';
+      const labelW = Math.max(
+        rulerDecimals === 3 ? 56 : 50,
+        Math.ceil(ctx.measureText(hoverSec).width) + 8
+      );
+      const labelX = Math.min(width - labelW - 4, Math.max(4, gx + 5));
+      ctx.fillStyle = palette.surface3;
+      ctx.fillRect(labelX, height - 19, labelW, 15);
+      ctx.strokeStyle = palette.lineStrong;
+      ctx.strokeRect(labelX, height - 19, labelW, 15);
+      ctx.fillStyle = palette.fg;
+      ctx.fillText(hoverSec, labelX + 4, height - 8);
+    }
+  }
+
+  // 6. Subtle Viewport Position Indicator when Zoomed In
+  if (viewport.zoom > 1.01) {
+    const trackY = height - 3;
+    ctx.fillStyle = palette.lineSubtle;
+    ctx.fillRect(0, trackY, width, 3);
+    const thumbX = Math.floor(viewStart * width);
+    const thumbW = Math.max(14, Math.ceil(viewSpan * width));
+    ctx.fillStyle = palette.accentColor;
+    ctx.fillRect(Math.min(width - thumbW, thumbX), trackY, thumbW, 3);
   }
 
   ctx.restore();

@@ -8,16 +8,22 @@ import {
   Collection,
   CollectionRuleTemplate,
   DuplicateScanMode,
+  ExportAudioPreset,
+  ExportLoudnessMode,
   FolderDropResult,
   Genre,
   KeyboardShortcuts,
   LicenseGroup,
+  MiniDockEdgeSide,
   SampleItem,
   SliceHistoryEntry,
   SliceSortKey,
   SliceTrashSummary,
   SubfolderRenameSummary,
   Tag,
+  TagFacet,
+  TaxonomyDomain,
+  TaxonomyFacetSlug,
   ThemeMode,
   TrashActionSummary,
   TrashViewTab,
@@ -173,7 +179,10 @@ export interface SampleProfileAndLicenseActions {
   ) => Promise<void>;
   deleteAutoTagRule: (ruleId: string) => Promise<void>;
   resetAutoTagRules: () => Promise<void>;
+  upgradeLegacyAutoTagRules: () => Promise<void>;
   reapplyAutoTagRules: () => Promise<void>;
+  refreshAutoTagImpactPreview: () => Promise<void>;
+  undoLastAutoTagApply: () => Promise<void>;
   setAutoTagCategoryPaths: (
     categoryName: string,
     includePaths: string[],
@@ -222,8 +231,12 @@ export interface SampleProfileAndLicenseActions {
 export interface SampleSettingsAndMutationActions {
   addSamplesToBin: (sampleIds: number[]) => void;
   removeSampleFromBin: (sampleId: number) => void;
+  removeSamplesFromBin: (sampleIds: number[]) => void;
   clearBin: () => void;
   setAutoBinOnNleDrag: (enabled: boolean) => void;
+  setSidebarCollapsed: (collapsed: boolean) => void;
+  toggleSidebarCollapsed: () => void;
+  setSidebarCompactHover: (enabled: boolean) => void;
   setBinFilterActive: (active: boolean) => void;
   setCustomSliceExportPath: (path: string) => void;
   pickCustomSliceExportPath: () => Promise<void>;
@@ -293,11 +306,16 @@ export interface SampleSettingsAndMutationActions {
   setPlayheadLatencyMs: (ms: number | null) => void;
   setAudioOutputDeviceId: (deviceId: string) => void;
   setSliceMicroFade: (enabled: boolean) => void;
+  setExportAudioPreset: (preset: ExportAudioPreset) => void;
+  setExportLoudnessMode: (mode: ExportLoudnessMode) => void;
+  setSkipLeadingSilence: (enabled: boolean) => void;
   setNormalizePreview: (enabled: boolean) => void;
   setAutoAnalyzeBpmKey: (enabled: boolean) => void;
   setEnableLiveFolderWatch: (enabled: boolean) => void;
   toggleMiniDock: () => Promise<void>;
   setMiniDockPinned: (pinned: boolean) => Promise<void>;
+  setMiniDockEdgePeek: (enabled: boolean) => void;
+  setMiniDockEdgeSide: (side: MiniDockEdgeSide) => void;
   setEnableMica: (enabled: boolean) => void;
   setThemeTintIntensity: (intensity: number) => void;
   setCustomBgImage: (pathOrUrl: string) => void;
@@ -323,15 +341,65 @@ export interface SampleSettingsAndMutationActions {
     favorite: boolean
   ) => Promise<void>;
   ensureFavorite: (sample: SampleItem) => Promise<void>;
-  createTag: (name: string, color: string) => Promise<Tag | null>;
+  createTagFacet: (
+    name: string,
+    domain: TaxonomyDomain,
+    color: string,
+    allowNesting: boolean
+  ) => Promise<TagFacet | null>;
+  updateTagFacet: (
+    facetId: number,
+    patch: { name?: string; color?: string; allowNesting?: boolean }
+  ) => Promise<TagFacet | null>;
+  deleteTagFacet: (facetId: number) => Promise<number | null>;
+  reorderTagFacets: (orderedFacetIds: number[]) => Promise<void>;
+  reorderTaxonomyItems: (orderedTagIds: number[]) => Promise<void>;
+  harmonizeTaxonomyColors: (opts: {
+    facetSlug?: TaxonomyFacetSlug;
+    parentTagId?: number;
+  }) => Promise<number>;
+  createTag: (
+    name: string,
+    color: string,
+    opts?: {
+      facetSlug?: TaxonomyFacetSlug;
+      parentId?: number | null;
+      colorInherited?: boolean;
+      aliases?: string[];
+    }
+  ) => Promise<Tag | null>;
   assignTag: (sampleId: number, tagId: number) => Promise<void>;
   unassignTag: (sampleId: number, tagId: number) => Promise<void>;
   assignTagBatch: (sampleIds: number[], tagId: number) => Promise<void>;
-  clearSampleTags: (sampleIds: number[]) => Promise<void>;
+  unassignTagBatch: (sampleIds: number[], tagId: number) => Promise<void>;
+  clearSampleTags: (
+    sampleIds: number[],
+    facetSlugs?: TaxonomyFacetSlug[]
+  ) => Promise<void>;
   renameTag: (tagId: number, newName: string) => Promise<void>;
   updateTagColor: (tagId: number, newColor: string) => Promise<void>;
+  updateTagTaxonomy: (
+    tagId: number,
+    patch: {
+      facetSlug?: TaxonomyFacetSlug;
+      parentId?: number | null;
+      clearParent?: boolean;
+      colorInherited?: boolean;
+      aliases?: string[];
+      sortOrder?: number;
+    }
+  ) => Promise<Tag | null>;
+  mergeTags: (
+    sourceTagId: number,
+    targetTagId: number,
+    addSourceAsAlias?: boolean
+  ) => Promise<Tag | null>;
   deleteTag: (tagId: number) => Promise<void>;
-  createGenre: (name: string, color: string) => Promise<Genre | null>;
+  createGenre: (
+    name: string,
+    color: string,
+    facetSlug?: TaxonomyFacetSlug
+  ) => Promise<Genre | null>;
   renameGenre: (genreId: number, newName: string) => Promise<void>;
   updateGenreColor: (genreId: number, newColor: string) => Promise<void>;
   deleteGenre: (genreId: number) => Promise<void>;
@@ -376,6 +444,10 @@ export interface SampleSettingsAndMutationActions {
     newRulePath?: string | null,
     newSmartQuery?: string | null
   ) => Promise<Collection | null>;
+  reparentCollection: (
+    collectionId: number,
+    newParentId: number | null
+  ) => Promise<Collection | null>;
   deleteCollection: (collectionId: number) => Promise<void>;
   addCollectionTemplate: (
     template: Omit<CollectionRuleTemplate, "id">
@@ -395,7 +467,10 @@ export interface SampleSettingsAndMutationActions {
   setStatusMessage: (msg: string | null) => void;
   showStatusNotice: (
     message: string,
-    kind?: "info" | "success" | "error"
+    kind?: "info" | "success" | "error",
+    action?: import("./storePayloads").StatusNoticeAction
   ) => void;
   clearStatusNotice: () => void;
+  pauseStatusNotice: () => void;
+  resumeStatusNotice: () => void;
 }

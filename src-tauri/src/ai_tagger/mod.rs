@@ -19,6 +19,7 @@ use self::similarity::AiVectorCache;
 use self::types::ResolvedAiModelConfig;
 use crate::db::deterministic_color_for_name;
 use rusqlite::{params, Connection};
+use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -76,10 +77,23 @@ pub(crate) fn unload_idle_caches_at(
     freed
 }
 
+#[derive(Debug, Clone)]
+pub struct ExternalSimilarityProbe {
+    pub probe_id: String,
+    pub file_name: String,
+    pub duration_ms: i64,
+    pub model_id: String,
+    pub embedding: [f32; self::types::AI_EMBEDDING_DIM],
+}
+
 #[derive(Default)]
 pub struct AiTaggerState {
     pub loaded_model: Arc<Mutex<Option<Arc<LoadedOnnxModel>>>>,
+    /// Serializes cold ONNX session initialization so concurrent similarity/tagging calls
+    /// never load duplicate ~15-30 MB model sessions simultaneously.
+    model_load_lock: Mutex<()>,
     pub vector_cache: Arc<Mutex<AiVectorCache>>,
+    pub external_probes: Arc<Mutex<VecDeque<ExternalSimilarityProbe>>>,
     pub download_cancel: Arc<AtomicBool>,
     pub analysis_cancel: Arc<AtomicBool>,
     pub download_running: AtomicBool,
@@ -136,6 +150,9 @@ impl AiTaggerState {
         user_dir: &Path,
     ) -> Result<(Arc<LoadedOnnxModel>, ResolvedAiModelConfig), String> {
         self.touch_activity(None);
+        if self.download_running.load(Ordering::SeqCst) {
+            return Err("AI model update is currently in progress; try again shortly".to_string());
+        }
         // Fast path: check already-loaded ONNX session BEFORE running disk SHA-256 verification
         // on the ~15 MB runtime DLLs. Any model download/import/removal calls `clear_cached_runtime_state()`.
         let (expected_id, _name, raw_model_path, _is_custom) =
@@ -162,6 +179,17 @@ impl AiTaggerState {
                     return Ok((Arc::clone(existing), cfg));
                 }
             }
+        }
+
+        // Serialize cold model loads so concurrent calls share one ONNX session and coordinate
+        // cleanly with `clear_cached_runtime_state()` during model import/removal.
+        let _load_guard = self
+            .model_load_lock
+            .lock()
+            .map_err(|_| "AI model load lock poisoned".to_string())?;
+
+        if self.download_running.load(Ordering::SeqCst) {
+            return Err("AI model update is currently in progress; try again shortly".to_string());
         }
 
         let cfg = resolve_ready_ai_config(user_dir)?;
@@ -191,11 +219,15 @@ impl AiTaggerState {
     }
 
     pub fn clear_cached_runtime_state(&self) {
+        let _load_guard = self.model_load_lock.lock();
         if let Ok(mut guard) = self.loaded_model.lock() {
             *guard = None;
         }
         if let Ok(mut cache) = self.vector_cache.lock() {
             cache.clear();
+        }
+        if let Ok(mut probes) = self.external_probes.lock() {
+            probes.clear();
         }
     }
 
@@ -265,15 +297,16 @@ pub fn ensure_manual_tag_on_sample(
         |r| r.get(0),
     ) {
         Ok(id) => id,
-        Err(_) => {
-            let color = deterministic_color_for_name(trimmed);
-            conn.execute(
-                "INSERT INTO tags (name, color, is_manual) VALUES (?1, ?2, 1)",
-                params![trimmed, color],
-            )
-            .map_err(|e| e.to_string())?;
-            conn.last_insert_rowid()
-        }
+        Err(_) => crate::db::ensure_taxonomy_tag(conn, trimmed, None, None, None, true)
+            .or_else(|_| {
+                let color = deterministic_color_for_name(trimmed);
+                conn.execute(
+                    "INSERT INTO tags (name, color, is_manual) VALUES (?1, ?2, 1)",
+                    params![trimmed, color],
+                )
+                .map_err(|e| e.to_string())?;
+                Ok::<i64, String>(conn.last_insert_rowid())
+            })?,
     };
 
     conn.execute(
@@ -285,6 +318,16 @@ pub fn ensure_manual_tag_on_sample(
         params![sample_id, tag_id],
     )
     .map_err(|e| e.to_string())?;
+
+    if let Ok(fid) = conn.query_row::<i64, _, _>(
+        "SELECT COALESCE(facet_id, 1) FROM tags WHERE id = ?1",
+        params![tag_id],
+        |r| r.get(0),
+    ) {
+        if crate::db::taxonomy::facet_domain_in_db(conn, fid) == "genres" {
+            let _ = crate::db::sync_primary_genre_for_samples(conn, &[sample_id]);
+        }
+    }
 
     Ok(())
 }
@@ -304,7 +347,7 @@ mod tests {
     use super::unload_idle_caches_at;
     use rusqlite::Connection;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn yamnet_class_map_csv_has_521_labels() {
@@ -616,7 +659,7 @@ mod tests {
             sample_id: 1,
             library_id: 1,
             duration_ms: 500,
-            parent_folder_norm: "f:/sfx".to_string(),
+            parent_folder_norm: Arc::from("f:/sfx"),
             vector: [0.0; 128],
         });
         initial_cache.id_to_index.insert(1, 0);
@@ -662,5 +705,68 @@ mod tests {
         let guard = vector_cache.lock().unwrap();
         assert!(!guard.hydrated);
         assert_eq!(guard.entries.capacity(), 0);
+    }
+
+    #[test]
+    fn yamnet_521_maps_fine_subtags_genres_moods_and_knn_weights_manual_above_ai_approved() {
+        use super::knn::{KnnLabeledIndex, LabeledEmbeddingEntry};
+        use super::taxonomy::{extract_mapped_tags_from_scores, map_audioset_class_to_audify_tag};
+        use super::types::AI_EMBEDDING_DIM;
+
+        assert_eq!(map_audioset_class_to_audify_tag(69), Some("Dog"));
+        assert_eq!(map_audioset_class_to_audify_tag(76), Some("Cat"));
+        assert_eq!(map_audioset_class_to_audify_tag(106), Some("Bird"));
+        assert_eq!(map_audioset_class_to_audify_tag(82), Some("Horse"));
+        assert_eq!(map_audioset_class_to_audify_tag(421), Some("Gunshot"));
+        assert_eq!(map_audioset_class_to_audify_tag(214), Some("Rock"));
+        assert_eq!(map_audioset_class_to_audify_tag(276), Some("Horror"));
+        assert_eq!(
+            map_audioset_class_to_audify_tag(67),
+            None,
+            "generic Animal root class should not flood Animals"
+        );
+
+        // Floor calibration check: 0.58 * 0.40 = 0.232; score 0.20 is rejected, 0.30 is accepted
+        let mut scores = vec![0.0_f32; 521];
+        scores[69] = 0.30; // Dog
+        scores[106] = 0.20; // Bird below calibrated 0.58 floor
+        let mapped = extract_mapped_tags_from_scores(&scores, 0.40, 5);
+        assert_eq!(mapped.len(), 1);
+        assert_eq!(mapped[0].tag_name, "Dog");
+
+        // kNN weighting: manual (1.0) scores higher than ai_approved (0.75) at identical similarity
+        let mut v = [0.0_f32; AI_EMBEDDING_DIM];
+        v[0] = 1.0;
+        let idx = KnnLabeledIndex::from_entries(vec![
+            LabeledEmbeddingEntry {
+                sample_id: 1,
+                vector: v,
+                tag_names: vec!["ManualTag".to_string()],
+                tag_weights: vec![1.0],
+            },
+            LabeledEmbeddingEntry {
+                sample_id: 2,
+                vector: v,
+                tag_names: vec!["ManualTag".to_string()],
+                tag_weights: vec![1.0],
+            },
+            LabeledEmbeddingEntry {
+                sample_id: 3,
+                vector: v,
+                tag_names: vec!["ApprovedTag".to_string()],
+                tag_weights: vec![0.75],
+            },
+            LabeledEmbeddingEntry {
+                sample_id: 4,
+                vector: v,
+                tag_names: vec!["ApprovedTag".to_string()],
+                tag_weights: vec![0.75],
+            },
+        ]);
+        let preds = idx.suggest_for_vector(99, &v, 0.25, 5);
+        assert_eq!(preds.len(), 2);
+        assert_eq!(preds[0].tag_name, "ManualTag");
+        assert_eq!(preds[1].tag_name, "ApprovedTag");
+        assert!(preds[0].confidence > preds[1].confidence);
     }
 }

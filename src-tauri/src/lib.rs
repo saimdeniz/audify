@@ -3,6 +3,7 @@ pub mod app_cache_helpers;
 pub mod app_helpers;
 pub mod ascii_magic;
 pub mod audio;
+pub mod audio_engine;
 pub mod commands;
 pub mod db;
 pub mod dsp_analysis;
@@ -10,8 +11,11 @@ pub mod duplicates;
 pub mod library_watcher;
 pub mod scanner;
 pub mod security;
+pub mod taxonomy_catalog;
 #[cfg(target_os = "windows")]
 pub mod win_drag;
+pub mod win_edge_peek;
+pub mod win_memory;
 
 pub use app_helpers::{prune_audio_cache_dirs, reconcile_library_asset_scopes};
 use app_helpers::{
@@ -24,6 +28,16 @@ use std::time::Duration;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Cap Rayon's global compute pool (leaving >= 1 core free for WASAPI audio & WebView2 UI)
+    // so heavy background scans, hashing, and AI k-NN never starve real-time playback or frames.
+    let rayon_threads = std::thread::available_parallelism()
+        .map(|n| n.get().saturating_sub(1).clamp(2, 6))
+        .unwrap_or(4);
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(rayon_threads)
+        .thread_name(|idx| format!("audify-compute-{}", idx))
+        .build_global();
+
     // Portable `user/` folder first; if it is not writable (e.g. Program Files) fall back to
     // %APPDATA%\Audify instead of crashing silently before any window appears.
     let primary_dir = resolve_user_dir();
@@ -69,13 +83,17 @@ pub fn run() {
     tauri::Builder::default()
         .manage(state)
         .manage(ai_tagger::AiTaggerState::default())
+        .manage(audio_engine::AudioEngineState::default())
         .manage(library_watcher::LibraryWatcherState::default())
+        .manage(win_edge_peek::EdgePeekState::default())
         .register_uri_scheme_protocol("ascii-sandbox", move |_ctx, request| {
             ascii_magic::sandbox_protocol::handle_sandbox_request(&sandbox_user_dir, request)
         })
         .setup(|app| {
             use tauri::Manager;
             let state = app.state::<AppState>();
+            app.state::<audio_engine::AudioEngineState>()
+                .start(app.handle().clone());
             app.state::<library_watcher::LibraryWatcherState>()
                 .start(app.handle().clone());
             {
@@ -111,7 +129,9 @@ pub fn run() {
                 state.user_dir.join("cache").join("slices"),
                 state.user_dir.join("cache").join("playback_fallback"),
             ];
+            let sim_probe_user_dir = state.user_dir.clone();
             std::thread::spawn(move || {
+                let _ = commands::clear_stale_sim_probe_dir(&sim_probe_user_dir);
                 let _ = prune_audio_cache_dirs(
                     &cache_dirs,
                     CACHE_PRUNE_MAX_FILES,
@@ -130,13 +150,30 @@ pub fn run() {
                     window.label(),
                     *focused,
                 );
+                if window.label() == "main" && *focused {
+                    win_memory::sync_main_window_minimized(window, true);
+                    if let Some(edge_state) =
+                        window.app_handle().try_state::<win_edge_peek::EdgePeekState>()
+                    {
+                        edge_state.notify_main_focused();
+                    }
+                }
                 return;
             }
             if window.label() == "main" {
-                if matches!(
+                if matches!(event, tauri::WindowEvent::Resized(_)) {
+                    win_memory::sync_main_window_minimized(window, false);
+                } else if matches!(
                     event,
                     tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
                 ) {
+                    if let Some(edge_state) =
+                        window.app_handle().try_state::<win_edge_peek::EdgePeekState>()
+                    {
+                        if let Some(main_win) = window.app_handle().get_webview_window("main") {
+                            edge_state.disable_for_window_nonblocking(window.app_handle(), &main_win);
+                        }
+                    }
                     if let Some(settings_win) = window.app_handle().get_webview_window("settings") {
                         let _ = settings_win.destroy();
                     }
@@ -146,6 +183,7 @@ pub fn run() {
                     api.prevent_close();
                     app_helpers::on_settings_close_requested(window);
                 } else if matches!(event, tauri::WindowEvent::Destroyed) {
+                    app_helpers::on_settings_window_destroyed();
                     app_helpers::on_window_focus_changed(
                         window.app_handle(),
                         "settings",
@@ -168,6 +206,8 @@ pub fn run() {
             commands::delete_profile,
             commands::apply_auto_tag_rules_to_library,
             commands::preview_auto_tag_rule,
+            commands::preview_auto_tag_rules_impact,
+            commands::undo_last_auto_tag_apply,
             commands::export_settings_to_file,
             commands::import_settings_from_file,
             commands::export_profile_to_file,
@@ -212,14 +252,24 @@ pub fn run() {
             commands::toggle_sample_loop,
             commands::set_sample_bpm_key,
             commands::analyze_library_bpm_and_key,
+            commands::get_tag_facets,
+            commands::create_tag_facet,
+            commands::update_tag_facet,
+            commands::delete_tag_facet,
+            commands::reorder_tag_facets,
             commands::get_tags,
             commands::create_tag,
             commands::assign_tag,
             commands::unassign_tag,
             commands::assign_tag_batch,
+            commands::unassign_tag_batch,
             commands::clear_sample_tags_batch,
             commands::rename_tag,
             commands::update_tag_color,
+            commands::update_tag_taxonomy,
+            commands::reorder_taxonomy_items,
+            commands::harmonize_taxonomy_colors,
+            commands::merge_tags,
             commands::delete_tag,
             commands::get_genres,
             commands::create_genre,
@@ -235,6 +285,7 @@ pub fn run() {
             commands::add_samples_to_collection_batch,
             commands::remove_samples_from_collection,
             commands::rename_collection,
+            commands::reparent_collection,
             commands::delete_collection,
             commands::scan_duplicate_samples,
             commands::export_audio_slice,
@@ -253,6 +304,16 @@ pub fn run() {
             commands::list_trashed_slices,
             commands::empty_trashed_slices,
             commands::get_audio_preview_gain,
+            commands::audio_engine_load,
+            commands::audio_engine_play,
+            commands::audio_engine_pause,
+            commands::audio_engine_stop,
+            commands::audio_engine_unload,
+            commands::audio_engine_seek,
+            commands::audio_engine_set_params,
+            commands::audio_engine_list_devices,
+            commands::audio_engine_set_device,
+            commands::audio_engine_release_handle,
             commands::open_slices_folder,
             commands::transcode_to_pcm_cache,
             commands::show_in_folder,
@@ -280,11 +341,29 @@ pub fn run() {
             commands::suggest_knn_ai_tags,
             commands::cancel_ai_analysis,
             commands::find_similar_samples,
+            commands::find_similar_samples_by_external_audio,
+            commands::find_similar_samples_by_external_audio_raw,
             commands::get_ai_tag_suggestions,
             commands::resolve_ai_tag_suggestion,
             commands::approve_all_ai_tag_suggestions,
             commands::dismiss_all_ai_tag_suggestions,
+            win_edge_peek::mini_dock_set_edge_peek,
+            win_edge_peek::mini_dock_edge_peek_set_hold,
+            win_edge_peek::mini_dock_edge_peek_set_theme,
         ])
-        .run(tauri::generate_context!())
-        .expect("Failed to setup app");
+        .build(tauri::generate_context!())
+        .expect("Failed to setup app")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                if let Some(state) = app_handle.try_state::<AppState>() {
+                    // Close idle WAL read-pool connections before checkpointing so TRUNCATE succeeds cleanly.
+                    state.drain_read_pool();
+                    let conn = state.lock_db();
+                    let _ = conn.execute_batch(
+                        "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA optimize;",
+                    );
+                }
+            }
+        });
 }

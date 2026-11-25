@@ -20,6 +20,7 @@ pub const ALLOWED_PROFILE_SETTINGS_KEYS: &[&str] = &[
     "isShuffle",
     "volume",
     "enableMica",
+    "sidebarCompactHover",
     "themeTintIntensity",
     "customBgImage",
     "customBgBlur",
@@ -45,6 +46,11 @@ pub const ALLOWED_PROFILE_SETTINGS_KEYS: &[&str] = &[
     "binSampleIds",
     "audioOutputDeviceId",
     "sliceMicroFade",
+    "exportAudioPreset",
+    "exportLoudnessMode",
+    "skipLeadingSilence",
+    "miniDockEdgePeek",
+    "miniDockEdgeSide",
     "normalizePreview",
     "autoAnalyzeBpmKey",
     "enableAdvancedFileOps",
@@ -58,6 +64,12 @@ pub const ALLOWED_PROFILE_SETTINGS_KEYS: &[&str] = &[
     "aiSimilarityTopK",
     "aiSimilarityScope",
     "aiSimilarityDurationMatch",
+];
+
+pub const ALLOWED_BG_IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp"];
+pub const ALLOWED_BG_VIDEO_EXTS: &[&str] = &["mp4", "webm"];
+pub const ALLOWED_BG_MEDIA_EXTS: &[&str] = &[
+    "jpg", "jpeg", "png", "webp", "gif", "bmp", "mp4", "webm",
 ];
 
 /// True when a path looks like it belongs to a personal user profile / app-data directory.
@@ -78,9 +90,12 @@ pub fn is_safe_existing_bg_image(bg: &str) -> bool {
     let ext_ok = p
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| ["jpg", "jpeg", "png", "webp", "gif", "bmp"].contains(&e.to_ascii_lowercase().as_str()))
+        .map(|e| ALLOWED_BG_MEDIA_EXTS.contains(&e.to_ascii_lowercase().as_str()))
         .unwrap_or(false);
     if !ext_ok {
+        return false;
+    }
+    if super::reject_symlink_ancestors(p).is_err() {
         return false;
     }
     let Ok(sym) = fs::symlink_metadata(p) else {
@@ -396,6 +411,30 @@ pub fn detect_image_magic(bytes: &[u8]) -> Option<&'static str> {
     }
     if bytes.len() >= 14 && &bytes[0..2] == b"BM" {
         return Some("bmp");
+    }
+    None
+}
+
+/// Verifies magic bytes for all supported background wallpaper media:
+/// images (PNG, JPEG, WEBP, GIF, BMP) and hardware-decoded loop videos (MP4, WebM).
+pub fn detect_wallpaper_media_magic(bytes: &[u8]) -> Option<&'static str> {
+    if let Some(img) = detect_image_magic(bytes) {
+        return Some(img);
+    }
+    // ISO Base Media File Format (MP4 / ftyp box: small header box 8..=4096 bytes + ASCII brand)
+    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
+        let box_size = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        let valid_brand = bytes[8..12].iter().all(|&b| (0x20..=0x7E).contains(&b));
+        if (8..=4096).contains(&box_size) && valid_brand {
+            return Some("mp4");
+        }
+    }
+    // EBML container with explicit "webm" DocType within header window
+    if bytes.len() >= 4 && bytes[0..4] == [0x1A, 0x45, 0xDF, 0xA3] {
+        let probe_len = bytes.len().min(64);
+        if bytes[..probe_len].windows(4).any(|w| w == b"webm") {
+            return Some("webm");
+        }
     }
     None
 }

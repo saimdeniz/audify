@@ -5,13 +5,23 @@ import {
   AutoTagPreviewResult,
   AutoTagRule,
 } from "../../types";
+import {
+  buildDefaultAutoTagCategories,
+  upgradeLegacyAutoTagRuleset,
+} from "../../utils/autoTagRuleUpgrade";
 import { computeRelativeScopePaths } from "../../utils/pathHelpers";
+import { invokeCommand } from "../../utils/tauriCommands";
+import type { StatusNoticeAction } from "../storePayloads";
 import type { StoreGet, StoreSet } from "../types";
 
 export interface AutoTagActionsDeps {
   set: StoreSet;
   get: StoreGet;
-  emitNotice: (message: string, kind?: "info" | "success" | "error") => void;
+  emitNotice: (
+    message: string,
+    kind?: "info" | "success" | "error",
+    action?: StatusNoticeAction
+  ) => void;
 }
 
 export function createAutoTagActions(deps: AutoTagActionsDeps) {
@@ -82,9 +92,16 @@ export function createAutoTagActions(deps: AutoTagActionsDeps) {
 
     previewAutoTagRule: async (rule: AutoTagRule) => {
       try {
-        return await invoke<AutoTagPreviewResult>("preview_auto_tag_rule", {
+        const res = await invoke<AutoTagPreviewResult>("preview_auto_tag_rule", {
           rule,
         });
+        if (!res || typeof res.match_count !== "number") {
+          return { match_count: 0, sample_names: [] };
+        }
+        return {
+          match_count: res.match_count,
+          sample_names: Array.isArray(res.sample_names) ? res.sample_names : [],
+        };
       } catch (err) {
         console.error("Failed to preview auto-tag rule:", err);
         return { match_count: 0, sample_names: [] };
@@ -138,33 +155,107 @@ export function createAutoTagActions(deps: AutoTagActionsDeps) {
     resetAutoTagRules: async () => {
       set({
         autoTagRules: [...DEFAULT_AUTO_TAG_RULES],
-        autoTagCategories: [
-          { name: "SFX", include_paths: [], exclude_paths: [] },
-          { name: "Ambience", include_paths: [], exclude_paths: [] },
-          { name: "Music", include_paths: [], exclude_paths: [] },
-        ],
-        autoTagRulesDirty: false,
-        statusMessage: "Reset auto-tag rules to defaults",
+        autoTagCategories: buildDefaultAutoTagCategories(DEFAULT_AUTO_TAG_RULES),
+        autoTagRulesDirty: true,
+        statusMessage: "Reset auto-tag rules to nested taxonomy defaults",
       });
       await get().persistActiveProfileSettings(true);
       await get().refreshSidebarData();
     },
 
+    upgradeLegacyAutoTagRules: async () => {
+      const { autoTagRules, autoTagCategories } = get();
+      const { rules, categories, upgradedCount } = upgradeLegacyAutoTagRuleset(
+        autoTagRules,
+        autoTagCategories
+      );
+      set({
+        autoTagRules: rules,
+        autoTagCategories: categories,
+        autoTagRulesDirty: true,
+        statusMessage: `Upgraded ${upgradedCount} rule(s) to Nested Taxonomy — click Apply rules to re-tag`,
+      });
+      await get().persistActiveProfileSettings(true);
+      await get().refreshSidebarData();
+      emitNotice(
+        `Upgraded rules to Nested Taxonomy (${rules.length} rules). Click "Apply rules" to update your library.`,
+        "success"
+      );
+    },
+
     reapplyAutoTagRules: async () => {
+      if (get().isApplyingAutoTags) return;
+      set({
+        isApplyingAutoTags: true,
+        autoTagProgress: {
+          stage_label: "Matching rules",
+          processed: 0,
+          total: 0,
+          percentage: 0,
+          current_item: "",
+          matched_count: 0,
+          done: false,
+        },
+      });
       try {
         await get().persistActiveProfileSettings(true);
         const assignedCount = await invoke<number>(
           "apply_auto_tag_rules_to_library"
         );
-        set({ autoTagRulesDirty: false });
+        set({
+          autoTagRulesDirty: false,
+          autoTagImpactPreview: null,
+          canUndoAutoTagApply: true,
+        });
         await get().refreshAfterCatalogMutation();
         emitNotice(
-          `Applied profile auto-tag rules (${assignedCount} new tag links added)`,
-          "success"
+          `Applied profile auto-tag rules (${assignedCount.toLocaleString()} samples matched)`,
+          "success",
+          {
+            label: "Undo",
+            onClick: () => {
+              void get().undoLastAutoTagApply();
+            },
+          }
         );
       } catch (err) {
         console.error("Failed to reapply auto-tag rules:", err);
         emitNotice(`Auto-tag rule error: ${String(err)}`, "error");
+      } finally {
+        set({ isApplyingAutoTags: false, autoTagProgress: null });
+      }
+    },
+
+    refreshAutoTagImpactPreview: async () => {
+      try {
+        await get().persistActiveProfileSettings(true);
+        const impact = await invokeCommand("preview_auto_tag_rules_impact", {});
+        if (!impact || typeof impact.affected_samples !== "number") return;
+        set({
+          autoTagImpactPreview: impact,
+          canUndoAutoTagApply: Boolean(impact.can_undo),
+        });
+      } catch (err) {
+        console.error("Failed to preview auto-tag rules impact:", err);
+      }
+    },
+
+    undoLastAutoTagApply: async () => {
+      try {
+        const restored = await invokeCommand("undo_last_auto_tag_apply", {});
+        set({
+          canUndoAutoTagApply: false,
+          autoTagRulesDirty: true,
+        });
+        await get().refreshAfterCatalogMutation();
+        void get().refreshAutoTagImpactPreview();
+        emitNotice(
+          `Reverted last Apply Rules (${restored} auto-tag links restored)`,
+          "info"
+        );
+      } catch (err) {
+        console.error("Failed to undo auto-tag apply:", err);
+        emitNotice(`Undo auto-tag error: ${String(err)}`, "error");
       }
     },
 

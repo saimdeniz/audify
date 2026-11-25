@@ -5,8 +5,10 @@ import {
   SampleRateFilter,
   SortDir,
   SortKey,
+  TagMatchMode,
   TypeFilter,
 } from "../types";
+import type { TaxonomyWorkerIndex } from "../utils/taxonomyTree";
 
 /** Threshold at which filtering, sorting & smart collection counts run off the UI thread. */
 export const CATALOG_WORKER_THRESHOLD = 4000;
@@ -23,6 +25,8 @@ export interface CatalogFilterQueryParams {
   recentOnly: boolean;
   recentSampleIds: number[];
   selectedTagIds: number[];
+  excludedTagIds?: number[];
+  tagMatchMode?: TagMatchMode;
   selectedGenre: string | null;
   selectedLicenseGroupId: string | null;
   licenseGroups: LicenseGroup[];
@@ -54,6 +58,21 @@ export type CatalogWorkerRequest =
       type: "patch_pool";
       poolEpoch: number;
       updates: CatalogPoolPatchEntry[];
+    }
+  | {
+      type: "patch_mtimes";
+      poolEpoch: number;
+      ids: Int32Array;
+      mtimes: Float64Array;
+    }
+  | {
+      type: "remove_ids";
+      poolEpoch: number;
+      ids: number[];
+    }
+  | {
+      type: "set_taxonomy";
+      taxonomy: TaxonomyWorkerIndex | null;
     }
   | {
       type: "clear_search_cache";

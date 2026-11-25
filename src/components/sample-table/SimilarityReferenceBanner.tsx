@@ -43,17 +43,24 @@ export const SimilarityReferenceBanner: React.FC<
   const [draftMinPct, setDraftMinPct] = useState<number | null>(null);
   const isPointerDraggingRef = useRef(false);
 
+  const isExternalAnchor =
+    Boolean(similaritySession.externalSource) ||
+    similaritySession.anchorSample.id <= 0;
+
   useEffect(() => {
     if (!isPointerDraggingRef.current) {
       setDraftMinPct(null);
     }
-  }, [committedMinPct, similaritySession.anchorSample.id]);
+  }, [
+    committedMinPct,
+    similaritySession.anchorSample.id,
+    similaritySession.externalSource?.probeId,
+  ]);
 
   const displayMinPct = draftMinPct ?? committedMinPct;
-  const similarityMatchCount = Math.max(
-    0,
-    similaritySession.scoresById.size - 1
-  );
+  const similarityMatchCount = isExternalAnchor
+    ? similaritySession.scoresById.size
+    : Math.max(0, similaritySession.scoresById.size - 1);
 
   const handleSliderPointerDown = () => {
     isPointerDraggingRef.current = true;
@@ -83,10 +90,21 @@ export const SimilarityReferenceBanner: React.FC<
           <span className="hidden sm:inline">Similar</span>
         </span>
         <span
-          className="h-[22px] inline-flex items-center px-2 rounded-xs border border-accent/50 bg-surface-2 text-accent-fg font-mono text-[11px] font-semibold truncate max-w-[230px]"
-          title={similaritySession.anchorSample.file_path}
+          className="h-[22px] inline-flex items-center gap-1.5 px-2 rounded-xs border border-accent/50 bg-surface-2 text-accent-fg font-mono text-[11px] font-semibold truncate max-w-[250px]"
+          title={
+            isExternalAnchor
+              ? `External reference file (read-only probe): ${similaritySession.anchorSample.file_path}`
+              : similaritySession.anchorSample.file_path
+          }
         >
-          {similaritySession.anchorSample.file_name}
+          {isExternalAnchor && (
+            <span className="px-1 py-[1px] rounded-[2px] bg-accent-soft border border-accent/50 text-[9px] uppercase tracking-wider shrink-0">
+              EXT
+            </span>
+          )}
+          <span className="truncate">
+            {similaritySession.anchorSample.file_name}
+          </span>
         </span>
         <span className="hidden md:inline font-mono tabular-nums text-[10.5px] text-fg-2 shrink-0 min-w-[118px]">
           {similarityMatchCount}{" "}
@@ -119,33 +137,35 @@ export const SimilarityReferenceBanner: React.FC<
           </>
         )}
 
-        <button
-          type="button"
-          onClick={() =>
-            onToggleScope(
-              similaritySession.scope === "folder" ? "profile" : "folder"
-            )
-          }
-          className={`h-[22px] px-2 rounded-xs border font-mono text-[10.5px] inline-flex items-center gap-1 transition-colors shrink-0 cursor-pointer ${
-            similaritySession.scope === "folder"
-              ? "bg-surface-2 border-accent text-accent-fg font-semibold"
-              : "bg-surface-2 border-line hover:border-accent text-fg-2 hover:text-fg"
-          }`}
-          title={
-            similaritySession.scope === "folder"
-              ? "Scope: Same Folder Only (click to switch to Active Profile)"
-              : "Scope: Active Profile (click to limit to Same Folder Only)"
-          }
-        >
-          {similaritySession.scope === "folder" ? (
-            <Folder className="w-3 h-3 shrink-0" />
-          ) : (
-            <Layers className="w-3 h-3 shrink-0" />
-          )}
-          <span className="hidden lg:inline">
-            {similaritySession.scope === "folder" ? "Folder" : "Profile"}
-          </span>
-        </button>
+        {!isExternalAnchor && (
+          <button
+            type="button"
+            onClick={() =>
+              onToggleScope(
+                similaritySession.scope === "folder" ? "profile" : "folder"
+              )
+            }
+            className={`h-[22px] px-2 rounded-xs border font-mono text-[10.5px] inline-flex items-center gap-1 transition-colors shrink-0 cursor-pointer ${
+              similaritySession.scope === "folder"
+                ? "bg-surface-2 border-accent text-accent-fg font-semibold"
+                : "bg-surface-2 border-line hover:border-accent text-fg-2 hover:text-fg"
+            }`}
+            title={
+              similaritySession.scope === "folder"
+                ? "Scope: Same Folder Only (click to switch to Active Profile)"
+                : "Scope: Active Profile (click to limit to Same Folder Only)"
+            }
+          >
+            {similaritySession.scope === "folder" ? (
+              <Folder className="w-3 h-3 shrink-0" />
+            ) : (
+              <Layers className="w-3 h-3 shrink-0" />
+            )}
+            <span className="hidden lg:inline">
+              {similaritySession.scope === "folder" ? "Folder" : "Profile"}
+            </span>
+          </button>
+        )}
 
         <button
           type="button"

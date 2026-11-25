@@ -11,6 +11,9 @@ export function getSidebarTreeIndentPx(depth: number): number {
 export interface SidebarTreeRowProps
   extends React.HTMLAttributes<HTMLDivElement> {
   "data-sidebar-drop"?: string;
+  "data-studio-drop-scope"?: string;
+  "data-studio-drop-key"?: string;
+  "data-studio-drop-hint"?: string;
   depth: number;
   label: string;
   count: number;
@@ -95,6 +98,7 @@ export const SidebarTreeRow: React.FC<SidebarTreeRowProps> = ({
         {hasChildren && onToggleExpand ? (
           <button
             type="button"
+            data-no-press-shift="true"
             onClick={(e) => {
               e.stopPropagation();
               onToggleExpand(e);

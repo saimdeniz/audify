@@ -2,6 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { SidebarTab } from "../store/types";
 import { useSampleStore } from "../store/useSampleStore";
 
+const SWITCHABLE_SIDEBAR_TABS: ReadonlySet<SidebarTab> = new Set([
+  "folders",
+  "collections",
+  "tags",
+  "genres",
+  "licenses",
+]);
+
 interface CachedRect {
   left: number;
   right: number;
@@ -31,6 +39,7 @@ function isPointInsideRect(
 
 interface UseLeftSidebarDragDropParams {
   isMiniOverlay: boolean;
+  isOverlayOpen: boolean;
   isDraggingInApp: boolean;
   sidebarRef: React.RefObject<HTMLElement>;
   railRef: React.RefObject<HTMLDivElement>;
@@ -41,6 +50,7 @@ interface UseLeftSidebarDragDropParams {
 
 export function useLeftSidebarDragDrop({
   isMiniOverlay,
+  isOverlayOpen,
   isDraggingInApp,
   sidebarRef,
   railRef,
@@ -48,15 +58,22 @@ export function useLeftSidebarDragDrop({
   setActiveTab,
   setIsOverlayOpen,
 }: UseLeftSidebarDragDropParams) {
+  const isOverlayOpenRef = useRef(isOverlayOpen);
+  isOverlayOpenRef.current = isOverlayOpen;
+  const isMiniOverlayRef = useRef(isMiniOverlay);
+  isMiniOverlayRef.current = isMiniOverlay;
   const [dragHoverTarget, setDragHoverTarget] = useState<string | null>(null);
   const dragHoverTargetRef = useRef<string | null>(null);
   const [isPointerInSidebar, setIsPointerInSidebar] = useState(false);
+  const isPointerInSidebarRef = useRef(false);
   const [hoveredRailTab, setHoveredRailTab] = useState<SidebarTab | null>(null);
+  const hoveredRailTabRef = useRef<SidebarTab | null>(null);
   const [dropFlashTarget, setDropFlashTarget] = useState<string | null>(null);
   const dropFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tabSwitchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastHoveredTabRef = useRef<SidebarTab | null>(null);
   const isExternalFileDragRef = useRef(false);
+  const refreshCachedRectsRef = useRef<(() => void) | null>(null);
 
   const updateDragHoverTarget = useCallback(
     (
@@ -64,6 +81,12 @@ export function useLeftSidebarDragDrop({
       opts?: { railTab?: SidebarTab | null; inSidebar?: boolean }
     ) => {
       dragHoverTargetRef.current = next;
+      if (opts?.railTab !== undefined) {
+        hoveredRailTabRef.current = opts.railTab;
+      }
+      if (opts?.inSidebar !== undefined) {
+        isPointerInSidebarRef.current = opts.inSidebar;
+      }
       setDragHoverTarget(next);
       window.dispatchEvent(
         new CustomEvent("audify:folder-drop-overlay", {
@@ -72,12 +95,35 @@ export function useLeftSidebarDragDrop({
             dragHoverTarget: next,
             hoveredRailTab: opts?.railTab ?? null,
             isPointerInSidebar: opts?.inSidebar ?? false,
+            isSidebarOverlayOpen:
+              isMiniOverlayRef.current && isOverlayOpenRef.current,
           },
         })
       );
     },
     []
   );
+
+  // Re-sync overlay geometry and cached bounding rects immediately when the hover-overlay drawer opens/closes mid-drag
+  useEffect(() => {
+    if (!isDraggingInApp && !isExternalFileDragRef.current) return;
+    refreshCachedRectsRef.current?.();
+    const rafId = requestAnimationFrame(() => {
+      refreshCachedRectsRef.current?.();
+    });
+    window.dispatchEvent(
+      new CustomEvent("audify:folder-drop-overlay", {
+        detail: {
+          isExternalFileDragActive: isExternalFileDragRef.current,
+          dragHoverTarget: dragHoverTargetRef.current,
+          hoveredRailTab: hoveredRailTabRef.current,
+          isPointerInSidebar: isPointerInSidebarRef.current,
+          isSidebarOverlayOpen: isMiniOverlay && isOverlayOpen,
+        },
+      })
+    );
+    return () => cancelAnimationFrame(rafId);
+  }, [isDraggingInApp, isMiniOverlay, isOverlayOpen]);
 
   const triggerDropFlash = useCallback(
     (targetKey: string) => {
@@ -114,6 +160,7 @@ export function useLeftSidebarDragDrop({
 
   const scheduleDragTabSwitch = useCallback(
     (tab: SidebarTab) => {
+      if (!SWITCHABLE_SIDEBAR_TABS.has(tab)) return;
       if (
         !useSampleStore.getState().inAppDragSample &&
         !isExternalFileDragRef.current
@@ -272,6 +319,10 @@ export function useLeftSidebarDragDrop({
       cachedRailRect = toCachedRect(railRef.current);
       cachedPanelRect = toCachedRect(panelRef.current);
     };
+    refreshCachedRectsRef.current = refreshCachedRects;
+
+    const panelEl = panelRef.current;
+    panelEl?.addEventListener("transitionend", refreshCachedRects);
 
     const resizeObserver =
       typeof ResizeObserver !== "undefined"
@@ -290,14 +341,17 @@ export function useLeftSidebarDragDrop({
           cachedRailRect = toCachedRect(railRef.current);
           resizeObserver?.observe(railRef.current);
         }
+        if (isPointInsideRect(cachedRailRect, clientX, clientY)) {
+          return true;
+        }
+        if (!isOverlayOpenRef.current) {
+          return false;
+        }
         if (!cachedPanelRect && panelRef.current) {
           cachedPanelRect = toCachedRect(panelRef.current);
           resizeObserver?.observe(panelRef.current);
         }
-        return (
-          isPointInsideRect(cachedRailRect, clientX, clientY) ||
-          isPointInsideRect(cachedPanelRect, clientX, clientY)
-        );
+        return isPointInsideRect(cachedPanelRect, clientX, clientY);
       }
       if (!cachedSidebarRect && sidebarRef.current) {
         cachedSidebarRect = toCachedRect(sidebarRef.current);
@@ -334,13 +388,18 @@ export function useLeftSidebarDragDrop({
       const tabBtn = hitEl.closest<HTMLElement>("[data-sidebar-tab]");
       if (tabBtn?.dataset.sidebarTab) {
         const t = tabBtn.dataset.sidebarTab as SidebarTab;
-        nextRailTab = t;
-        setHoveredRailTab(t);
-        if (isMiniOverlay) {
-          setActiveTab(t);
-          setIsOverlayOpen(true);
+        if (SWITCHABLE_SIDEBAR_TABS.has(t)) {
+          nextRailTab = t;
+          setHoveredRailTab(t);
+          if (isMiniOverlay) {
+            setActiveTab(t);
+            setIsOverlayOpen(true);
+          } else {
+            scheduleDragTabSwitch(t);
+          }
         } else {
-          scheduleDragTabSwitch(t);
+          setHoveredRailTab(null);
+          cancelDragTabSwitch();
         }
       } else {
         setHoveredRailTab(null);
@@ -398,6 +457,8 @@ export function useLeftSidebarDragDrop({
     window.addEventListener("dragover", onDragOver);
     window.addEventListener("drop", onDrop);
     return () => {
+      refreshCachedRectsRef.current = null;
+      panelEl?.removeEventListener("transitionend", refreshCachedRects);
       resizeObserver?.disconnect();
       window.removeEventListener("resize", refreshCachedRects);
       window.removeEventListener("mousemove", onMouseMove);

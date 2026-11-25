@@ -8,11 +8,16 @@ import {
   SampleItem,
   SliceTrashSummary,
   Tag,
+  TagFacet,
   TrashStatusInfo,
 } from "../../types";
 import { onError } from "../../utils/errors";
 import { isSampleInLicenseGroup } from "../../utils/format";
 import { seedPeaksCache } from "../../utils/peaksStore";
+import {
+  internSamplePool,
+  internSamplePoolWithStatus,
+} from "../../utils/sampleInterning";
 import { invokeCommand } from "../../utils/tauriCommands";
 import { applyClientFacetFilters } from "../filterEngine";
 import {
@@ -83,6 +88,8 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
         binFilterActive: initBinFilterActive,
         binSampleIds: initBinIds,
         selectedCollectionId: initCol,
+        sortKey: bootSortKey,
+        sortDir: bootSortDir,
       } = get();
 
       const savedLast = loadSavedLastSample();
@@ -90,17 +97,20 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
       const initSettingsTab = get().settingsTab;
       const quickStatIds = Array.from(new Set([...initRecentIds, ...initBinIds]));
 
-      const needTagsImmediately = standaloneSettings && initSettingsTab === "tags";
+      const needTagsImmediately =
+        !standaloneSettings ||
+        initSettingsTab === "tags" ||
+        initSettingsTab === "genres";
       const needGenresImmediately =
-        standaloneSettings && initSettingsTab === "genres";
-      const needCollectionsImmediately = !standaloneSettings
-        ? initCol !== null
-        : initSettingsTab === "collections";
+        !standaloneSettings || initSettingsTab === "genres";
+      const needCollectionsImmediately =
+        !standaloneSettings || initSettingsTab === "collections";
 
       try {
         const [
           profiles,
           libraries,
+          tagFacets,
           tags,
           genres,
           collections,
@@ -110,6 +120,9 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
         ] = await Promise.all([
           invoke<Profile[]>("get_profiles").catch(() => [] as Profile[]),
           invoke<Library[]>("get_libraries").catch(() => [] as Library[]),
+          needTagsImmediately
+            ? invoke<TagFacet[]>("get_tag_facets").catch(() => [] as TagFacet[])
+            : Promise.resolve([] as TagFacet[]),
           needTagsImmediately
             ? invoke<Tag[]>("get_tags").catch(() => [] as Tag[])
             : Promise.resolve([] as Tag[]),
@@ -132,6 +145,9 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
                 limit: 150,
                 offset: 0,
                 includePeaks: true,
+                ...(bootSortKey && bootSortKey !== "match"
+                  ? { sortKey: bootSortKey, sortDir: bootSortDir }
+                  : {}),
               }).catch(() => [] as SampleItem[]),
           !standaloneSettings && (savedLast.id !== null || savedLast.path !== null)
             ? invoke<SampleItem | null>("get_sample_by_id_or_path", {
@@ -148,8 +164,10 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
         ]);
 
         if (directSavedSample) {
+          internSamplePool([directSavedSample]);
           seedPeaksCache([directSavedSample]);
         }
+        internSamplePool(initialSamplesRaw);
         seedPeaksCache(initialSamplesRaw);
 
         const activeProfile =
@@ -188,7 +206,10 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
           : null;
         const licFilteredInitial = activeLicGroup
           ? initialSamplesRaw.filter((s) =>
-              isSampleInLicenseGroup(s.file_path, activeLicGroup)
+              isSampleInLicenseGroup(
+                s.folder_path || s.file_path,
+                activeLicGroup
+              )
             )
           : initialSamplesRaw;
 
@@ -229,6 +250,7 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
           libraries,
           favoritesCount: quickStats.favorites_count,
           knownSampleIds: nextKnownIds,
+          ...(tagFacets.length > 0 ? { tagFacets } : {}),
           tags,
           genres,
           collections,
@@ -279,6 +301,7 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
         const [
           profiles,
           libraries,
+          tagFacets,
           tags,
           genres,
           collections,
@@ -288,6 +311,7 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
         ] = await Promise.all([
           invoke<Profile[]>("get_profiles"),
           invoke<Library[]>("get_libraries"),
+          invoke<TagFacet[]>("get_tag_facets").catch(() => [] as TagFacet[]),
           invoke<Tag[]>("get_tags"),
           invoke<Genre[]>("get_genres").catch(() => [] as Genre[]),
           invoke<Collection[]>("get_collections"),
@@ -302,6 +326,7 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
         }
         const safeProfiles = Array.isArray(profiles) ? profiles : [];
         const safeLibraries = Array.isArray(libraries) ? libraries : [];
+        const safeTagFacets = Array.isArray(tagFacets) ? tagFacets : [];
         const safeTags = Array.isArray(tags) ? tags : [];
         const safeGenres = Array.isArray(genres) ? genres : [];
         const safeCollections = Array.isArray(collections) ? collections : [];
@@ -319,6 +344,7 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
             profiles: safeProfiles,
             activeProfile,
             libraries: safeLibraries,
+            ...(safeTagFacets.length > 0 ? { tagFacets: safeTagFacets } : {}),
             tags: safeTags,
             genres: safeGenres,
             collections: safeCollections,
@@ -338,13 +364,7 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
           }
         }
 
-        const isRemote =
-          typeof window !== "undefined" &&
-          Boolean(
-            (window as unknown as { __audifyIsRemoteSync?: () => boolean })
-              .__audifyIsRemoteSync?.()
-          );
-        if (!isRemote && opts?.broadcastCatalog !== false) {
+        if (opts?.broadcastCatalog !== false) {
           postCrossWindowSync("catalog");
         }
       } catch (err) {
@@ -435,6 +455,7 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
       const epoch = getProfileEpoch();
       const reqSeq = ++reloadProfileSeq;
       try {
+        const useCompactTags = get().tags.length > 0;
         const allSamples = await invoke<SampleItem[]>("query_samples", {
           searchQuery: null,
           folderFilter: null,
@@ -444,14 +465,40 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
           limit: SAMPLE_QUERY_LIMIT,
           offset: 0,
           includePeaks: false,
+          ...(useCompactTags ? { compactTags: true } : {}),
         });
 
         // Abort if profile switched or a newer reload request superseded this one
         if (epoch !== getProfileEpoch() || reqSeq !== reloadProfileSeq) return;
 
+        const internRes = internSamplePoolWithStatus(allSamples, get().tags);
+        if (internRes.hadMissingTagIds) {
+          const [freshTags, freshFacets] = await Promise.all([
+            invoke<Tag[]>("get_tags").catch(() => null),
+            invoke<TagFacet[]>("get_tag_facets").catch(() => null),
+          ]);
+          if (epoch !== getProfileEpoch() || reqSeq !== reloadProfileSeq) return;
+          if ((freshTags && freshTags.length > 0) || (freshFacets && freshFacets.length > 0)) {
+            set({
+              ...(freshTags && freshTags.length > 0 ? { tags: freshTags } : {}),
+              ...(freshFacets && freshFacets.length > 0 ? { tagFacets: freshFacets } : {}),
+            });
+            if (freshTags && freshTags.length > 0) {
+              internSamplePoolWithStatus(allSamples, freshTags, {
+                onlyUnresolvedTagIds: true,
+              });
+            }
+          }
+        }
+
         // Drop Bin entries that no longer exist (including when last library is removed!)
-        const { knownIds, favCount } = summarizeSamplePool(allSamples);
+        // Track only recent + bin IDs in `knownSampleIds` instead of allocating a 50k+ V8 Set.
         const currentBin = get().binSampleIds;
+        const trackedIds = new Set<number>([
+          ...get().recentSampleIds,
+          ...currentBin,
+        ]);
+        const { knownIds, favCount } = summarizeSamplePool(allSamples, trackedIds);
         const prunedBin = currentBin.filter((id) => knownIds.has(id));
         const binChanged = prunedBin.length !== currentBin.length;
         if (binChanged) {

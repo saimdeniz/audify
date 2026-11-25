@@ -96,6 +96,21 @@ describe("Settings open & standalone window flow", () => {
       clientY: 12,
     });
     expect(startDraggingMock).toHaveBeenCalledTimes(1);
+
+    // Emitting a statusNotice in standalone Settings (e.g. Apply rules) must not suspend/crash with React #426
+    useSampleStore.setState({
+      statusNotice: {
+        seq: 1,
+        message: "Applied profile auto-tag rules (42 new tag links added)",
+        kind: "success",
+      },
+    });
+    expect(
+      await screen.findByText(
+        "Applied profile auto-tag rules (42 new tag links added)"
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText("Audify Recovery Mode")).toBeNull();
   });
 
   it("opens settings window via SidebarNavRail click and supports in-app fallback", async () => {
@@ -213,13 +228,24 @@ describe("Settings open & standalone window flow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /^Tags & Rules$/i }));
     expect(await screen.findByRole("heading", { name: "Tags & Rules" })).toBeTruthy();
+    const libraryTabBtn = screen.getByRole("button", { name: /^Library/i });
     const rulesTabBtn = screen.getByRole("button", { name: /^Rules/i });
+    expect(
+      libraryTabBtn.compareDocumentPosition(rulesTabBtn) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      await screen.findByPlaceholderText("Search tags & aliases...")
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Apply rules/i })).toBeNull();
     expect(rulesTabBtn.parentElement?.className || "").toContain(
       "justify-self-center"
     );
     expect(rulesTabBtn.parentElement?.parentElement?.className || "").toContain(
       "grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)]"
     );
+    fireEvent.click(rulesTabBtn);
+    expect(await screen.findByRole("button", { name: /Apply rules/i })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /^Shortcuts$/i }));
     expect(await screen.findByText("Open Settings window")).toBeTruthy();
@@ -273,7 +299,7 @@ describe("Settings open & standalone window flow", () => {
     expect(reanalyzeBtn.className).toContain("whitespace-nowrap");
     expect(approveBtn.parentElement?.closest(".bg-surface-2")).toBeNull();
     expect(reanalyzeBtn.closest(".bg-surface-2")).not.toBeNull();
-  });
+  }, 15000);
 
   it("unmounts standalone settings DOM when hidden and remounts cleanly when shown", async () => {
     window.history.replaceState({}, "", "/index.html?window=settings&tab=profiles");

@@ -13,6 +13,7 @@ interface HeaderColumnPickerProps {
   setShowColumnPicker: React.Dispatch<React.SetStateAction<boolean>>;
   visibleCols: VisibleColumnsState;
   toggleVisibleCol: (key: keyof VisibleColumnsState) => void;
+  applyVisibleColsPreset?: (cols: VisibleColumnsState) => void;
   resetTableLayout: () => void;
 }
 
@@ -21,6 +22,7 @@ export const HeaderColumnPicker: React.FC<HeaderColumnPickerProps> = ({
   setShowColumnPicker,
   visibleCols,
   toggleVisibleCol,
+  applyVisibleColsPreset,
   resetTableLayout,
 }) => {
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -72,6 +74,7 @@ export const HeaderColumnPicker: React.FC<HeaderColumnPickerProps> = ({
             menuPos={menuPos}
             visibleCols={visibleCols}
             toggleVisibleCol={toggleVisibleCol}
+            applyVisibleColsPreset={applyVisibleColsPreset}
             resetTableLayout={resetTableLayout}
           />
         </Suspense>

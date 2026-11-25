@@ -12,6 +12,9 @@ import {
   AsciiMagicFit,
   AsciiMagicLook,
   AsciiPresetId,
+  ExportAudioPreset,
+  ExportLoudnessMode,
+  MiniDockEdgeSide,
   ProfileSettings,
   ThemeMode,
   WallpaperKind,
@@ -80,6 +83,7 @@ export interface BootSettingsSnapshot extends AiBootSettingsSnapshot {
   playheadLatencyMs: number | null;
   audioOutputDeviceId: string;
   enableMica: boolean;
+  sidebarCompactHover: boolean;
   themeTintIntensity: number;
   customBgImage: string;
   customBgBlur: number;
@@ -99,6 +103,11 @@ export interface BootSettingsSnapshot extends AiBootSettingsSnapshot {
   isShuffle: boolean;
   volume: number;
   sliceMicroFade: boolean;
+  exportAudioPreset: ExportAudioPreset;
+  exportLoudnessMode: ExportLoudnessMode;
+  skipLeadingSilence: boolean;
+  miniDockEdgePeek: boolean;
+  miniDockEdgeSide: MiniDockEdgeSide;
   normalizePreview: boolean;
   autoAnalyzeBpmKey: boolean;
   enableAdvancedFileOps: boolean;
@@ -201,6 +210,8 @@ export function loadBootSettings(): BootSettingsSnapshot {
       : 1;
 
   const enableLicenses = safeGetItem(AUDIFY_STORAGE_KEYS.enableLicenses) === "true";
+  const sidebarCompactHover =
+    safeGetItem(AUDIFY_STORAGE_KEYS.sidebarCompactHover) === "true";
   const autoBinOnNleDrag =
     safeGetItem(AUDIFY_STORAGE_KEYS.autoBinOnNleDrag) === "true";
   const customSliceExportPath =
@@ -222,6 +233,25 @@ export function loadBootSettings(): BootSettingsSnapshot {
 
   // Strictly default OFF (false) per user preference
   const sliceMicroFade = safeGetItem(AUDIFY_STORAGE_KEYS.sliceMicroFade) === "true";
+  const rawExportPreset = safeGetItem(AUDIFY_STORAGE_KEYS.exportAudioPreset);
+  const exportAudioPreset: ExportAudioPreset =
+    rawExportPreset === "wav_24" || rawExportPreset === "nle_48k_24"
+      ? rawExportPreset
+      : "original";
+  const rawLoudness = safeGetItem(AUDIFY_STORAGE_KEYS.exportLoudnessMode);
+  const exportLoudnessMode: ExportLoudnessMode =
+    rawLoudness === "peak_m1" ||
+    rawLoudness === "lufs_m14" ||
+    rawLoudness === "lufs_m24"
+      ? rawLoudness
+      : "off";
+  const skipLeadingSilence =
+    safeGetItem(AUDIFY_STORAGE_KEYS.skipLeadingSilence) === "true";
+  const miniDockEdgePeek =
+    safeGetItem(AUDIFY_STORAGE_KEYS.miniDockEdgePeek) === "true";
+  const rawEdgeSide = safeGetItem(AUDIFY_STORAGE_KEYS.miniDockEdgeSide);
+  const miniDockEdgeSide: MiniDockEdgeSide =
+    rawEdgeSide === "left" ? "left" : "right";
   const normalizePreview =
     safeGetItem(AUDIFY_STORAGE_KEYS.normalizePreview) === "true";
   const autoAnalyzeBpmKey =
@@ -242,6 +272,7 @@ export function loadBootSettings(): BootSettingsSnapshot {
     playheadLatencyMs,
     audioOutputDeviceId,
     enableMica,
+    sidebarCompactHover,
     themeTintIntensity,
     customBgImage,
     customBgBlur,
@@ -261,6 +292,11 @@ export function loadBootSettings(): BootSettingsSnapshot {
     isShuffle,
     volume,
     sliceMicroFade,
+    exportAudioPreset,
+    exportLoudnessMode,
+    skipLeadingSilence,
+    miniDockEdgePeek,
+    miniDockEdgeSide,
     normalizePreview,
     autoAnalyzeBpmKey,
     enableAdvancedFileOps,
@@ -307,6 +343,30 @@ function sanitizeParsedProfileSettings(
   ) {
     delete out.waveformStyle;
   }
+  if (
+    out.exportAudioPreset !== undefined &&
+    out.exportAudioPreset !== "original" &&
+    out.exportAudioPreset !== "wav_24" &&
+    out.exportAudioPreset !== "nle_48k_24"
+  ) {
+    delete out.exportAudioPreset;
+  }
+  if (
+    out.exportLoudnessMode !== undefined &&
+    out.exportLoudnessMode !== "off" &&
+    out.exportLoudnessMode !== "peak_m1" &&
+    out.exportLoudnessMode !== "lufs_m14" &&
+    out.exportLoudnessMode !== "lufs_m24"
+  ) {
+    delete out.exportLoudnessMode;
+  }
+  if (
+    out.miniDockEdgeSide !== undefined &&
+    out.miniDockEdgeSide !== "right" &&
+    out.miniDockEdgeSide !== "left"
+  ) {
+    delete out.miniDockEdgeSide;
+  }
 
   for (const numKey of [
     "volume",
@@ -331,10 +391,13 @@ function sanitizeParsedProfileSettings(
     "isLooping",
     "isShuffle",
     "enableMica",
+    "sidebarCompactHover",
     "enableLicensesSystem",
     "autoBinOnNleDrag",
     "smartSearchSynonyms",
     "sliceMicroFade",
+    "skipLeadingSilence",
+    "miniDockEdgePeek",
     "normalizePreview",
     "autoAnalyzeBpmKey",
     "enableAdvancedFileOps",

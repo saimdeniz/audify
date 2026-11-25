@@ -649,4 +649,114 @@ describe("useSampleStore AI slice state transitions", () => {
     expect(afterReset.sortKey).toBe("name");
     expect(afterReset.samples.map((s) => s.id)).toEqual([1, 2, 3]);
   });
+
+  it("supports external audio similarity probes and re-runs duration toggle via cached probeId", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "find_similar_samples_by_external_audio") {
+        return Promise.resolve({
+          anchor_sample_id: -1,
+          probe_id: "ext_99_1",
+          file_name: "ExternalKick.wav",
+          anchor_duration_ms: 420,
+          matches: [
+            { sample_id: 2, score: 0.94 },
+            { sample_id: 3, score: 0.82 },
+          ],
+          elapsed_ms: 1.4,
+          scanned_vectors: 10,
+        });
+      }
+      if (cmd === "get_ai_model_status") {
+        return Promise.resolve(makeModelStatusStub());
+      }
+      return Promise.resolve([]);
+    });
+
+    const s1 = makeSample(1, { file_name: "Unrelated.wav" });
+    const s2 = makeSample(2, { file_name: "KickA.wav" });
+    const s3 = makeSample(3, { file_name: "KickB.wav" });
+    useSampleStore.setState({
+      allProfileSamples: [s1, s2, s3],
+      rawSamples: [s1, s2, s3],
+      samples: [s1, s2, s3],
+      sortKey: "name",
+      sortDir: "asc",
+    });
+
+    await useSampleStore.getState().findSimilarSamplesByExternalAudio({
+      filePath: "C:/Desktop/ExternalKick.wav",
+      fileName: "ExternalKick.wav",
+    });
+
+    const state = useSampleStore.getState();
+    expect(state.similaritySession?.anchorSample.id).toBe(-1);
+    expect(state.similaritySession?.externalSource?.probeId).toBe("ext_99_1");
+    expect(state.similaritySession?.scoresById.size).toBe(2);
+    expect(state.samples.map((s) => s.id)).toEqual([2, 3]);
+
+    // Toggling duration match re-runs using cached probeId (never re-uploading raw bytes)
+    useSampleStore.getState().setAiSimilarityDurationMatch(true, true);
+    await Promise.resolve();
+    expect(invokeMock).toHaveBeenCalledWith(
+      "find_similar_samples_by_external_audio",
+      expect.objectContaining({
+        probeId: "ext_99_1",
+        fileName: "ExternalKick.wav",
+        matchSimilarDuration: true,
+      })
+    );
+  });
+
+  it("reports silent-only AI analysis skips as an info notice instead of a failure error", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "analyze_samples_ai") {
+        return Promise.resolve({
+          processed: 1,
+          indexed: 0,
+          skipped_silent: 1,
+          suggestions_added: 0,
+          tags_auto_applied: 0,
+          canceled: false,
+          avg_ms_per_clip: 0.2,
+        });
+      }
+      if (cmd === "get_ai_model_status") {
+        return Promise.resolve(makeModelStatusStub());
+      }
+      return Promise.resolve([]);
+    });
+
+    await useSampleStore.getState().analyzeSamplesAi({ reanalyzeExisting: false });
+    const afterSilentOnly = useSampleStore.getState();
+    expect(afterSilentOnly.isAnalyzingAi).toBe(false);
+    expect(afterSilentOnly.statusNotice?.kind).toBe("info");
+    expect(afterSilentOnly.statusNotice?.message).toBe(
+      "All analyzable samples are already AI indexed (1 silent track skipped)."
+    );
+
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "analyze_samples_ai") {
+        return Promise.resolve({
+          processed: 5,
+          indexed: 3,
+          skipped_silent: 2,
+          suggestions_added: 4,
+          tags_auto_applied: 0,
+          canceled: false,
+          avg_ms_per_clip: 12.5,
+        });
+      }
+      if (cmd === "get_ai_model_status") {
+        return Promise.resolve(makeModelStatusStub());
+      }
+      return Promise.resolve([]);
+    });
+
+    useSampleStore.getState().setAiTaggingMode("suggest");
+    await useSampleStore.getState().analyzeSamplesAi({ reanalyzeExisting: true });
+    const afterMixed = useSampleStore.getState();
+    expect(afterMixed.statusNotice?.kind).toBe("success");
+    expect(afterMixed.statusNotice?.message).toContain("AI indexed 3 samples");
+    expect(afterMixed.statusNotice?.message).toContain("2 silent skipped");
+  });
 });

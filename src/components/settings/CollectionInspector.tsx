@@ -1,27 +1,33 @@
-import React, { useEffect, useState } from "react";
-import { Folder, FolderTree, Sparkles, Zap } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { ArrowUpRight, Folder, FolderTree, Sparkles, Zap } from "lucide-react";
 import { useSampleStore } from "../../store/useSampleStore";
 import { Collection } from "../../types";
 import { QuickCreatePopover } from "../QuickCreatePopover";
 import { InlineConfirmDeleteButton } from "../common/InlineConfirmDeleteButton";
+import { ThemedSelect, type ThemedSelectOption } from "../common/ThemedSelect";
 import { InspectorShell } from "./InspectorShell";
 import { useMainFilterAction } from "./useMainFilterAction";
 
 interface CollectionInspectorProps {
   activeInspectedCollection: Collection | null;
   subCollections: Collection[];
+  allCollections?: Collection[];
   confirmDeleteCollectionId: number | null;
   setConfirmDeleteCollectionId: (id: number | null) => void;
+  onSelectCollectionId?: (id: number) => void;
 }
 
 export const CollectionInspector: React.FC<CollectionInspectorProps> = ({
   activeInspectedCollection,
   subCollections,
+  allCollections = [],
   confirmDeleteCollectionId,
   setConfirmDeleteCollectionId,
+  onSelectCollectionId,
 }) => {
   const createCollection = useSampleStore((s) => s.createCollection);
   const renameCollection = useSampleStore((s) => s.renameCollection);
+  const reparentCollection = useSampleStore((s) => s.reparentCollection);
   const deleteCollection = useSampleStore((s) => s.deleteCollection);
   const applyTemplatesToExistingCollection = useSampleStore(
     (s) => s.applyTemplatesToExistingCollection
@@ -47,6 +53,30 @@ export const CollectionInspector: React.FC<CollectionInspectorProps> = ({
   const isSmartCollection = Boolean(
     activeInspectedCollection?.smart_query?.trim()
   );
+  const isSubCollection = Boolean(activeInspectedCollection?.parent_id);
+  const parentCollection = useMemo(
+    () =>
+      activeInspectedCollection?.parent_id
+        ? allCollections.find(
+            (c) => c.id === activeInspectedCollection.parent_id
+          ) ?? null
+        : null,
+    [allCollections, activeInspectedCollection]
+  );
+  const parentOptions = useMemo<ThemedSelectOption[]>(() => {
+    if (!activeInspectedCollection || isSmartCollection) return [];
+    const candidates = allCollections.filter(
+      (c) =>
+        !c.parent_id &&
+        !c.smart_query?.trim() &&
+        c.id !== activeInspectedCollection.id
+    );
+    return [
+      { value: "", label: "(Top-level Collection)" },
+      ...candidates.map((c) => ({ value: String(c.id), label: c.name })),
+    ];
+  }, [allCollections, activeInspectedCollection, isSmartCollection]);
+
   const smartMatchCount = activeInspectedCollection
     ? smartCollectionCounts[activeInspectedCollection.id] ?? 0
     : 0;
@@ -69,10 +99,18 @@ export const CollectionInspector: React.FC<CollectionInspectorProps> = ({
       title={
         isSmartCollection
           ? "SMART COLLECTION INSPECTOR"
+          : isSubCollection
+          ? "SUB-COLLECTION INSPECTOR"
           : "COLLECTION INSPECTOR"
       }
       hasItem={Boolean(activeInspectedCollection)}
-      itemName={activeInspectedCollection?.name}
+      itemName={
+        activeInspectedCollection
+          ? parentCollection
+            ? `${parentCollection.name} ▸ ${activeInspectedCollection.name}`
+            : activeInspectedCollection.name
+          : undefined
+      }
       onFilter={
         activeInspectedCollection
           ? () =>
@@ -90,7 +128,8 @@ export const CollectionInspector: React.FC<CollectionInspectorProps> = ({
       }
       extraActions={
         activeInspectedCollection &&
-        !isSmartCollection && (
+        !isSmartCollection &&
+        !isSubCollection && (
           <button
             type="button"
             onClick={() =>
@@ -201,6 +240,46 @@ export const CollectionInspector: React.FC<CollectionInspectorProps> = ({
             />
           </div>
 
+          {!isSmartCollection &&
+            subCollections.length === 0 &&
+            parentOptions.length > 1 && (
+              <div className="space-y-1 shrink-0">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-[10px] font-mono text-fg-3 font-semibold uppercase tracking-wider">
+                    PARENT COLLECTION
+                  </label>
+                  {isSubCollection && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void reparentCollection(activeInspectedCollection.id, null)
+                      }
+                      className="h-[18px] px-1.5 rounded-[2px] bg-surface-2 hover:bg-accent-soft border border-line hover:border-accent text-[9px] font-mono text-fg-2 hover:text-accent-fg inline-flex items-center gap-0.5 transition-colors cursor-pointer"
+                      title="Promote back to top-level collection"
+                    >
+                      <ArrowUpRight className="w-2.5 h-2.5" />
+                      <span>Promote to Root</span>
+                    </button>
+                  )}
+                </div>
+                <ThemedSelect
+                  value={
+                    activeInspectedCollection.parent_id
+                      ? String(activeInspectedCollection.parent_id)
+                      : ""
+                  }
+                  options={parentOptions}
+                  ariaLabel="Parent Collection"
+                  onChange={(val) => {
+                    void reparentCollection(
+                      activeInspectedCollection.id,
+                      val ? Number(val) : null
+                    );
+                  }}
+                />
+              </div>
+            )}
+
           {isSmartCollection ? (
             <div className="space-y-1.5 pt-2 border-t border-line">
               <div className="h-[24px] flex items-center justify-between">
@@ -256,6 +335,23 @@ export const CollectionInspector: React.FC<CollectionInspectorProps> = ({
                   "exact", -exclude, OR, bpm:120-130, key:~8A, &lt;3s, tag:kick, ext:wav
                 </span>
               </div>
+            </div>
+          ) : isSubCollection ? (
+            <div className="pt-2 border-t border-line text-[10px] font-mono text-fg-3">
+              Sub-folder under{" "}
+              {parentCollection ? (
+                <button
+                  type="button"
+                  onClick={() => onSelectCollectionId?.(parentCollection.id)}
+                  className="text-accent-fg hover:underline cursor-pointer"
+                >
+                  {parentCollection.name}
+                </button>
+              ) : (
+                "parent collection"
+              )}
+              . Drag to the COLLECTIONS header or use Parent Collection above to
+              promote to top level.
             </div>
           ) : (
             <div className="space-y-1.5 pt-2 border-t border-line">

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import {
   Pause,
   Play,
@@ -10,17 +10,29 @@ import {
   Square,
   Zap,
 } from "lucide-react";
-import { usePlayheadSec } from "../../store/playheadClock";
+import { getPlayheadSec, subscribePlayhead } from "../../store/playheadClock";
 import { useSampleStore } from "../../store/useSampleStore";
 import { formatSecondsCode } from "../../utils/format";
 import { MasterVolumeControl } from "../common/MasterVolumeControl";
 import { VarispeedPitchStepper } from "../common/VarispeedPitchStepper";
 
 const PlayheadTimecodeReadout: React.FC = React.memo(() => {
-  const playheadSec = usePlayheadSec();
+  const spanRef = useRef<HTMLSpanElement | null>(null);
+  useEffect(() => {
+    const sync = () => {
+      if (spanRef.current) {
+        spanRef.current.textContent = formatSecondsCode(getPlayheadSec());
+      }
+    };
+    sync();
+    return subscribePlayhead(sync);
+  }, []);
   return (
-    <span className="font-mono tabular-nums text-[12.5px] font-semibold text-accent-fg">
-      {formatSecondsCode(playheadSec)}
+    <span
+      ref={spanRef}
+      className="font-mono tabular-nums text-[12.5px] font-semibold text-accent-fg"
+    >
+      {formatSecondsCode(getPlayheadSec())}
     </span>
   );
 });
@@ -52,7 +64,7 @@ export const TransportControls: React.FC = React.memo(() => {
   );
 
   return (
-    <div className="w-[296px] border-r border-line px-2.5 py-2 flex flex-col justify-between shrink-0 bg-surface-1">
+    <div className="w-[320px] border-r border-line px-2.5 py-2 flex flex-col justify-between shrink-0 bg-surface-1">
       {/* Top Row: Grouped Transport Controls (Left) + Mode Toggles (Right) */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1">

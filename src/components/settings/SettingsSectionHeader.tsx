@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   FileCheck2,
   Folder,
@@ -15,10 +15,14 @@ import {
   Sliders,
   Sparkles,
   Tag as TagIcon,
+  Undo2,
   Zap,
 } from "lucide-react";
 import { useSampleStore } from "../../store/useSampleStore";
-import { formatVolumeDb } from "../../utils/format";
+import {
+  resolveFacetDomain,
+  resolveTagFacetSlug,
+} from "../../utils/taxonomyTree";
 import { ModernToggleSwitch } from "./ModernToggleSwitch";
 import { SettingsProfileMenus } from "./SettingsProfileMenus";
 
@@ -81,20 +85,43 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
   const settingsTab = useSampleStore((s) => s.settingsTab);
   const profilesCount = useSampleStore((s) => s.profiles.length);
   const activeProfile = useSampleStore((s) => s.activeProfile);
-  const volume = useSampleStore((s) => s.volume);
   const libraries = useSampleStore((s) => s.libraries);
   const librariesCount = libraries.length;
   const totalSamplesCount = useSampleStore((s) => s.samples.length);
   const isScanning = useSampleStore((s) => s.isScanning);
+  const scanPct = useSampleStore((s) =>
+    s.isScanning && s.scanProgress
+      ? Math.min(100, Math.max(0, Math.round(s.scanProgress.percentage)))
+      : null
+  );
   const collections = useSampleStore((s) => s.collections);
   const collectionTemplatesCount = useSampleStore(
     (s) => s.collectionTemplates.length
   );
   const autoTagRulesCount = useSampleStore((s) => s.autoTagRules.length);
+  const autoTagRules = useSampleStore((s) => s.autoTagRules);
+  const autoTagCategories = useSampleStore((s) => s.autoTagCategories);
   const autoTagRulesDirty = useSampleStore((s) => s.autoTagRulesDirty);
-  const tagsCount = useSampleStore((s) => s.tags.length);
-  const genresCount = useSampleStore((s) => s.genres.length);
+  const isApplyingAutoTags = useSampleStore((s) => s.isApplyingAutoTags);
+  const autoTagPct = useSampleStore((s) =>
+    s.isApplyingAutoTags && s.autoTagProgress
+      ? Math.min(100, Math.max(0, Math.round(s.autoTagProgress.percentage)))
+      : null
+  );
+  const autoTagImpactPreview = useSampleStore((s) => s.autoTagImpactPreview);
+  const canUndoAutoTagApply = useSampleStore((s) => s.canUndoAutoTagApply);
+  const tagFacets = useSampleStore((s) => s.tagFacets);
+  const tags = useSampleStore((s) => s.tags);
+  const genres = useSampleStore((s) => s.genres);
   const isDetectingGenres = useSampleStore((s) => s.isDetectingGenres);
+  const genreDetectPct = useSampleStore((s) =>
+    s.isDetectingGenres && s.genreDetectProgress
+      ? Math.min(
+          100,
+          Math.max(0, Math.round(s.genreDetectProgress.percentage))
+        )
+      : null
+  );
   const licenseGroupsCount = useSampleStore((s) => s.licenseGroups.length);
   const enableLicensesSystem = useSampleStore((s) => s.enableLicensesSystem);
   const trashedCount = useSampleStore((s) => s.trashedCount);
@@ -106,6 +133,10 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
     (s) => s.resetCollectionTemplates
   );
   const reapplyAutoTagRules = useSampleStore((s) => s.reapplyAutoTagRules);
+  const refreshAutoTagImpactPreview = useSampleStore(
+    (s) => s.refreshAutoTagImpactPreview
+  );
+  const undoLastAutoTagApply = useSampleStore((s) => s.undoLastAutoTagApply);
   const resetAutoTagRules = useSampleStore((s) => s.resetAutoTagRules);
   const autoDetectGenres = useSampleStore((s) => s.autoDetectGenres);
   const setEnableLicensesSystem = useSampleStore(
@@ -113,7 +144,40 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
   );
   const resetShortcuts = useSampleStore((s) => s.resetShortcuts);
 
-  const [isApplyingRules, setIsApplyingRules] = useState(false);
+  const [isUndoingRules, setIsUndoingRules] = useState(false);
+
+  useEffect(() => {
+    if (settingsTab !== "tags" || tagsSubTab !== "rules") return;
+    if (!autoTagRulesDirty) return;
+    const timer = window.setTimeout(() => {
+      void refreshAutoTagImpactPreview();
+    }, 220);
+    return () => window.clearTimeout(timer);
+  }, [
+    settingsTab,
+    tagsSubTab,
+    autoTagRulesDirty,
+    autoTagRules,
+    autoTagCategories,
+    refreshAutoTagImpactPreview,
+  ]);
+
+  const { tagsCount, genresCount } = useMemo(() => {
+    let tCount = 0;
+    let gCount = 0;
+    for (const t of tags) {
+      const domain = resolveFacetDomain(
+        resolveTagFacetSlug(t, tagFacets),
+        tagFacets
+      );
+      if (domain === "genres") gCount += 1;
+      else tCount += 1;
+    }
+    return {
+      tagsCount: tCount,
+      genresCount: gCount > 0 ? gCount : genres.length,
+    };
+  }, [tags, tagFacets, genres.length]);
 
   const rootCollectionsCount = useMemo(
     () => collections.reduce((acc, c) => (c.parent_id ? acc : acc + 1), 0),
@@ -133,7 +197,7 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
       title: "Appearance",
       badge: activeProfile?.name || "Default",
     },
-    audio: { Icon: Sliders, title: "Audio", badge: formatVolumeDb(volume) },
+    audio: { Icon: Sliders, title: "Audio", badge: null },
     ai: {
       Icon: Sparkles,
       title: "AI",
@@ -219,13 +283,13 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
           value={tagsSubTab}
           onChange={setTagsSubTab}
           options={[
+            { id: "library", label: "Library", count: tagsCount, Icon: TagIcon },
             {
               id: "rules",
               label: "Rules",
               count: autoTagRulesCount,
               Icon: Sparkles,
             },
-            { id: "library", label: "Library", count: tagsCount, Icon: TagIcon },
           ]}
         />
       )}
@@ -246,13 +310,19 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
               type="button"
               onClick={() => void rebuildAllLibraries()}
               disabled={isScanning || librariesCount === 0}
-              className="h-[24px] px-2.5 bg-surface-2 hover:bg-surface-3 hover:border-accent border border-line text-fg-2 hover:text-fg rounded-xs inline-flex items-center space-x-1.5 text-[11px] font-medium disabled:opacity-40 transition-colors cursor-pointer"
+              className="h-[24px] px-2.5 bg-surface-2 hover:bg-surface-3 hover:border-accent border border-line text-fg-2 hover:text-fg rounded-xs inline-flex items-center space-x-1.5 text-[11px] font-medium tabular-nums disabled:opacity-60 transition-colors cursor-pointer"
               title="Rebuild all 600-bin waveforms & re-apply auto-tags"
             >
               <RotateCcw
-                className={`w-3 h-3 shrink-0 ${isScanning ? "animate-spin" : ""}`}
+                className={`w-3 h-3 shrink-0 ${isScanning ? "animate-spin text-accent-fg" : ""}`}
               />
-              <span>Sync all</span>
+              <span>
+                {isScanning
+                  ? scanPct !== null && scanPct > 0
+                    ? `Syncing ${scanPct}%`
+                    : "Syncing..."
+                  : "Sync all"}
+              </span>
             </button>
             <button
               type="button"
@@ -281,34 +351,77 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
 
         {settingsTab === "tags" && tagsSubTab === "rules" && (
           <div className="flex items-center space-x-1.5 shrink-0">
+            {autoTagRulesDirty && autoTagImpactPreview && (
+              <span
+                data-testid="auto-tag-impact-badge"
+                className="h-[24px] px-2 rounded-xs bg-surface-2 border border-line font-mono tabular-nums text-[10px] text-fg-2 inline-flex items-center gap-1.5 shrink-0"
+                title={`Pending rule impact: ${autoTagImpactPreview.affected_samples.toLocaleString()} sample(s) affected (+${autoTagImpactPreview.added_links.toLocaleString()} added, -${autoTagImpactPreview.removed_links.toLocaleString()} removed)`}
+              >
+                <span>
+                  ~{autoTagImpactPreview.affected_samples.toLocaleString()}
+                </span>
+                <span className="text-accent-fg font-semibold">
+                  +{autoTagImpactPreview.added_links.toLocaleString()}
+                </span>
+                {autoTagImpactPreview.removed_links > 0 && (
+                  <span className="text-fg-3">
+                    -{autoTagImpactPreview.removed_links.toLocaleString()}
+                  </span>
+                )}
+              </span>
+            )}
+            {canUndoAutoTagApply && (
+              <button
+                type="button"
+                disabled={isUndoingRules || isApplyingAutoTags}
+                onClick={async () => {
+                  try {
+                    setIsUndoingRules(true);
+                    await undoLastAutoTagApply();
+                  } finally {
+                    setIsUndoingRules(false);
+                  }
+                }}
+                className="h-[24px] px-2 inline-flex items-center space-x-1 bg-surface-2 hover:bg-accent-soft hover:border-accent border border-line text-fg-2 hover:text-accent-fg rounded-xs text-[11px] font-medium transition-colors disabled:opacity-50 shrink-0 cursor-pointer"
+                title="Revert the most recent Apply Rules auto-tag changes"
+              >
+                <Undo2 className="w-3 h-3 shrink-0" />
+                <span>Undo</span>
+              </button>
+            )}
             <button
               type="button"
-              onClick={async () => {
-                try {
-                  setIsApplyingRules(true);
-                  await reapplyAutoTagRules();
-                } finally {
-                  setIsApplyingRules(false);
-                }
-              }}
-              disabled={isApplyingRules}
-              className={`h-[24px] px-2.5 inline-flex items-center space-x-1.5 bg-accent hover:bg-accent-hover text-accent-on rounded-xs text-[11px] font-semibold transition-colors disabled:opacity-50 shrink-0 shadow-xs cursor-pointer ${
-                autoTagRulesDirty ? "ring-1 ring-warn" : ""
+              onClick={() => void reapplyAutoTagRules()}
+              disabled={isApplyingAutoTags || isUndoingRules}
+              className={`h-[24px] px-2.5 inline-flex items-center space-x-1.5 rounded-xs text-[11px] font-semibold tabular-nums transition-colors shrink-0 cursor-pointer ${
+                isApplyingAutoTags
+                  ? "bg-accent-soft border border-accent text-accent-fg"
+                  : `bg-accent hover:bg-accent-hover text-accent-on shadow-xs disabled:opacity-50 ${
+                      autoTagRulesDirty ? "ring-1 ring-warn" : ""
+                    }`
               }`}
               title={
                 autoTagRulesDirty
-                  ? "Rule or category scope changes pending — click to re-evaluate library samples"
+                  ? autoTagImpactPreview
+                    ? `Pending changes affect ${autoTagImpactPreview.affected_samples.toLocaleString()} sample(s) (+${autoTagImpactPreview.added_links.toLocaleString()} / -${autoTagImpactPreview.removed_links.toLocaleString()}) — click to apply`
+                    : "Rule or category scope changes pending — click to re-evaluate library samples"
                   : "Re-evaluate all library files against auto-tag rules"
               }
             >
               <RefreshCw
                 className={`w-3 h-3 shrink-0 ${
-                  isApplyingRules ? "animate-spin" : ""
+                  isApplyingAutoTags ? "animate-spin" : ""
                 }`}
               />
-              <span>Apply rules</span>
-              {autoTagRulesDirty && !isApplyingRules && (
-                <span className="w-1.5 h-1.5 rounded-full bg-warn shrink-0" />
+              <span>
+                {isApplyingAutoTags
+                  ? autoTagPct !== null && autoTagPct > 0
+                    ? `Applying ${autoTagPct}%`
+                    : "Applying..."
+                  : "Apply rules"}
+              </span>
+              {autoTagRulesDirty && !isApplyingAutoTags && (
+                <span className="w-1.5 h-1.5 rounded-[2px] bg-warn shrink-0" />
               )}
             </button>
             <button
@@ -328,15 +441,25 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
             type="button"
             onClick={() => void autoDetectGenres()}
             disabled={isDetectingGenres}
-            className={`h-[24px] px-2.5 rounded-xs border inline-flex items-center space-x-1.5 text-[11px] font-semibold transition-colors cursor-pointer ${
+            className={`h-[24px] px-2.5 rounded-xs border inline-flex items-center space-x-1.5 text-[11px] font-semibold tabular-nums transition-colors cursor-pointer ${
               isDetectingGenres
-                ? "bg-accent-soft border-accent text-accent-fg animate-pulse"
+                ? "bg-accent-soft border-accent text-accent-fg"
                 : "bg-accent hover:bg-accent-hover border-accent text-accent-on shadow-xs"
             }`}
             title="Auto-Detect Genres from Metadata & Folder Names"
           >
-            <Sparkles className="w-3 h-3 shrink-0" />
-            <span>Auto-assign</span>
+            {isDetectingGenres ? (
+              <RefreshCw className="w-3 h-3 shrink-0 animate-spin" />
+            ) : (
+              <Sparkles className="w-3 h-3 shrink-0" />
+            )}
+            <span>
+              {isDetectingGenres
+                ? genreDetectPct !== null && genreDetectPct > 0
+                  ? `Assigning ${genreDetectPct}%`
+                  : "Assigning..."
+                : "Auto-assign"}
+            </span>
           </button>
         )}
 

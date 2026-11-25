@@ -270,6 +270,14 @@ export function createCatalogCollectionActions(ctx: StoreSliceContext) {
       sampleIds: number[]
     ) => {
       if (sampleIds.length === 0) return;
+      const targetCol = get().collections.find((c) => c.id === collectionId);
+      if (targetCol?.smart_query?.trim()) {
+        emitNotice(
+          "Smart Collections are dynamic — edit the query to change matched items",
+          "info"
+        );
+        return;
+      }
       try {
         const col = await invokeCommand("remove_samples_from_collection", {
           collectionId,
@@ -347,6 +355,32 @@ export function createCatalogCollectionActions(ctx: StoreSliceContext) {
       } catch (err) {
         console.error("Failed to rename collection:", err);
         emitNotice(`Update collection error: ${String(err)}`, "error");
+        return null;
+      }
+    },
+
+    reparentCollection: async (
+      collectionId: number,
+      newParentId: number | null
+    ): Promise<Collection | null> => {
+      try {
+        const updated = await invokeCommand("reparent_collection", {
+          collectionId,
+          newParentId,
+        });
+        await get().refreshSidebarData();
+        const parentName = newParentId
+          ? get().collections.find((c) => c.id === newParentId)?.name
+          : null;
+        set({
+          statusMessage: parentName
+            ? `Moved "${updated.name}" inside "${parentName}"`
+            : `Moved "${updated.name}" to top-level Collections`,
+        });
+        return updated;
+      } catch (err) {
+        console.error("Failed to reparent collection:", err);
+        emitNotice(`Move collection error: ${String(err)}`, "error");
         return null;
       }
     },

@@ -1,7 +1,6 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Pause, Play, Star } from "lucide-react";
-import { useShallow } from "zustand/react/shallow";
 import { useSampleStore } from "../../store/useSampleStore";
 import {
   formatDuplicateModeLabel,
@@ -17,6 +16,7 @@ import {
 } from "../../utils/format";
 import { EMPTY_SAMPLES, resolveSamplesByIds } from "../../utils/sampleLookup";
 import { DragDropFeedbackOverlay } from "../sample-table/DragDropFeedbackOverlay";
+import { SimilarityMatchBadge } from "../sample-table/SimilarityMatchBadge";
 import { MiniContextMenuState } from "./MiniDockContextMenu";
 
 const LazySampleBatchActionBar = lazy(() =>
@@ -44,18 +44,17 @@ export const MiniDockList: React.FC<MiniDockListProps> = ({
   const collections = useSampleStore((s) => s.collections);
   const selectedSample = useSampleStore((s) => s.selectedSample);
   const selectedSampleIds = useSampleStore((s) => s.selectedSampleIds);
-  const selectedSampleObjects = useSampleStore(
-    useShallow((s) =>
-      s.selectedSampleIds.length <= 1
-        ? EMPTY_SAMPLES
-        : resolveSamplesByIds(
-            s.selectedSampleIds,
-            s.allProfileSamples.length > 0 ? s.allProfileSamples : s.samples,
-            s.samples
-          )
-    )
-  );
+  const selectedSampleObjects = useMemo(() => {
+    if (selectedSampleIds.length <= 1) return EMPTY_SAMPLES;
+    const pool = useSampleStore.getState().allProfileSamples;
+    return resolveSamplesByIds(
+      selectedSampleIds,
+      pool.length > 0 ? pool : samples,
+      samples
+    );
+  }, [selectedSampleIds, samples]);
   const isPlaying = useSampleStore((s) => s.isPlaying);
+  const similaritySession = useSampleStore((s) => s.similaritySession);
   const libraries = useSampleStore((s) => s.libraries);
   const duplicatesFilterActive = useSampleStore(
     (s) => s.duplicatesFilterActive
@@ -233,6 +232,16 @@ export const MiniDockList: React.FC<MiniDockListProps> = ({
     [onOpenContextMenu]
   );
 
+  const handleBatchNativeDrag = useCallback(
+    (paths: string[], src?: SampleItem) => {
+      const primary = src || selectedSampleObjects[0];
+      if (primary) {
+        void onStartSampleDrag(paths, primary);
+      }
+    },
+    [onStartSampleDrag, selectedSampleObjects]
+  );
+
   return (
     <div className="relative flex-1 min-h-0 flex flex-col overflow-hidden">
       {samples.length === 0 ? (
@@ -296,8 +305,9 @@ export const MiniDockList: React.FC<MiniDockListProps> = ({
           ref={listParentRef}
           className="flex-1 overflow-y-auto overflow-x-hidden relative outline-none"
           tabIndex={0}
-          role="listbox"
+          role="grid"
           aria-multiselectable="true"
+          aria-rowcount={samples.length}
           aria-label="Mini Dock Samples"
         >
           <div
@@ -312,6 +322,13 @@ export const MiniDockList: React.FC<MiniDockListProps> = ({
               if (!sample) return null;
               const isPrimary = selectedSample?.id === sample.id;
               const isSelected = isPrimary || selectedIdSet.has(sample.id);
+              const isSimilarityMode = similaritySession !== null;
+              const isSimilarityAnchor = similaritySession
+                ? similaritySession.anchorSample.id === sample.id
+                : false;
+              const matchScore = similaritySession
+                ? similaritySession.scoresById.get(sample.id) ?? null
+                : null;
               return (
                 <MiniDockRow
                   key={sample.id}
@@ -321,6 +338,9 @@ export const MiniDockList: React.FC<MiniDockListProps> = ({
                   isPrimary={isPrimary}
                   isRowPlaying={isPrimary && isPlaying}
                   isSelected={isSelected}
+                  isSimilarityMode={isSimilarityMode}
+                  isSimilarityAnchor={isSimilarityAnchor}
+                  matchScore={matchScore}
                   onRowClick={handleRowClick}
                   onRowMouseDown={handleRowMouseDown}
                   onRowContextMenu={handleRowContextMenu}
@@ -343,12 +363,7 @@ export const MiniDockList: React.FC<MiniDockListProps> = ({
             childrenByParentId={childrenByParentId}
             batchPopover={batchPopover}
             setBatchPopover={setBatchPopover}
-            onStartNativeDrag={(paths, src) => {
-              const primary = src || selectedSampleObjects[0];
-              if (primary) {
-                void onStartSampleDrag(paths, primary);
-              }
-            }}
+            onStartNativeDrag={handleBatchNativeDrag}
           />
         </Suspense>
       )}
@@ -363,6 +378,9 @@ interface MiniDockRowProps {
   isPrimary: boolean;
   isRowPlaying: boolean;
   isSelected: boolean;
+  isSimilarityMode: boolean;
+  isSimilarityAnchor: boolean;
+  matchScore: number | null;
   onRowClick: (e: React.MouseEvent, sample: SampleItem, rowIndex: number) => void;
   onRowMouseDown: (e: React.MouseEvent, sample: SampleItem) => void;
   onRowContextMenu: (
@@ -380,6 +398,9 @@ const MiniDockRow: React.FC<MiniDockRowProps> = React.memo(
     isPrimary,
     isRowPlaying,
     isSelected,
+    isSimilarityMode,
+    isSimilarityAnchor,
+    matchScore,
     onRowClick,
     onRowMouseDown,
     onRowContextMenu,
@@ -392,8 +413,10 @@ const MiniDockRow: React.FC<MiniDockRowProps> = React.memo(
 
     return (
       <div
-        role="option"
+        role="row"
         aria-selected={isSelected}
+        aria-rowindex={rowIndex + 1}
+        aria-label={sample.file_name}
         style={{
           position: "absolute",
           top: 0,
@@ -453,6 +476,25 @@ const MiniDockRow: React.FC<MiniDockRowProps> = React.memo(
             <Play className="w-3 h-3 fill-current" />
           )}
         </button>
+
+        {isSimilarityMode && (
+          <div
+            className="w-[46px] h-full px-0.5 flex items-center justify-center shrink-0"
+            title={
+              isSimilarityAnchor
+                ? "Similarity Search Reference Anchor (100%)"
+                : matchScore !== null
+                  ? `Acoustic Cosine Similarity: ${(matchScore * 100).toFixed(1)}%`
+                  : "No match score"
+            }
+          >
+            <SimilarityMatchBadge
+              isAnchor={isSimilarityAnchor}
+              matchScore={matchScore}
+              compact={true}
+            />
+          </div>
+        )}
 
         <div
           className={`flex-1 min-w-0 px-1.5 text-[12.5px] truncate ${

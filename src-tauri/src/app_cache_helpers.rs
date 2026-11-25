@@ -18,13 +18,12 @@ struct AssetScopeMemo {
 }
 
 static LAST_ASSET_SCOPE: Mutex<Option<AssetScopeMemo>> = Mutex::new(None);
-static RUNTIME_SLICE_DIRS: Mutex<Option<(PathBuf, BTreeSet<PathBuf>)>> = Mutex::new(None);
 
-/// Registers a slice directory temporarily for asset protocol playback/waveforms while
-/// tracking it so future profile switches or `reconcile_library_asset_scopes` can revoke it.
+/// Registers a slice directory temporarily for asset protocol playback/waveforms after
+/// verifying UNC/ADS/symlink-ancestor safety.
 pub(crate) fn register_runtime_asset_dir(
     app: &tauri::AppHandle,
-    user_dir: &Path,
+    _user_dir: &Path,
     dir: &Path,
 ) {
     use tauri::Manager;
@@ -33,10 +32,8 @@ pub(crate) fn register_runtime_asset_dir(
     if security::is_unc_or_network_path(&raw) || security::has_ntfs_ads_colon(&raw) {
         return;
     }
-    if let Ok(meta) = fs::symlink_metadata(dir) {
-        if meta.file_type().is_symlink() {
-            return;
-        }
+    if security::reject_symlink_ancestors(dir).is_err() {
+        return;
     }
     let clean = fs::canonicalize(dir)
         .map(|p| security::strip_verbatim_prefix(&p))
@@ -44,24 +41,6 @@ pub(crate) fn register_runtime_asset_dir(
 
     let scope = app.asset_protocol_scope();
     let _ = scope.allow_directory(&clean, true);
-
-    let mut guard = RUNTIME_SLICE_DIRS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let entry = guard.get_or_insert_with(|| (user_dir.to_path_buf(), BTreeSet::new()));
-    if entry.0 != user_dir {
-        for old in std::mem::take(&mut entry.1) {
-            let _ = scope.forbid_directory(&old, true);
-        }
-        entry.0 = user_dir.to_path_buf();
-    }
-    if entry.1.len() >= 64 && !entry.1.contains(&clean) {
-        if let Some(evicted) = entry.1.iter().next().cloned() {
-            entry.1.remove(&evicted);
-            let _ = scope.forbid_directory(&evicted, true);
-        }
-    }
-    entry.1.insert(clean);
 }
 
 /// Collects validated library root directories belonging to the currently active profile.
@@ -93,10 +72,15 @@ pub fn resolve_active_watcher_roots(
 /// by the WebView (`user/images`, `user/cache/slices`, `user/cache/playback_fallback`,
 /// registered `libraries.path`, and valid active-profile `customSliceExportPath` directories),
 /// NEVER exposing `user/samples.db`, `user/backups/`, or `user/cache/webview/`.
+///
+/// NOTE: Tauri v2's `FsScope::forbid_directory` appends to `forbidden_patterns` permanently
+/// (a subsequent `allow_directory` cannot undo it). Therefore switchable library/profile slice
+/// paths must NEVER be permanently forbidden — active-profile isolation is enforced on every
+/// Rust IPC command via `validate_path_in_libraries_or_cache`.
 pub fn reconcile_library_asset_scopes(
     app: &tauri::AppHandle,
     conn: &rusqlite::Connection,
-    removed_path: Option<&str>,
+    _removed_path: Option<&str>,
 ) {
     use tauri::Manager;
 
@@ -118,102 +102,14 @@ pub fn reconcile_library_asset_scopes(
         slices: current_slices,
     };
 
-    let (stale_libs, stale_slices): (Vec<PathBuf>, Vec<PathBuf>) = {
+    {
         let mut guard = LAST_ASSET_SCOPE
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let stale_l: Vec<PathBuf> = guard
-            .as_ref()
-            .filter(|prev| prev.user_dir == next_memo.user_dir)
-            .map(|prev| prev.libs.difference(&next_memo.libs).cloned().collect())
-            .unwrap_or_default();
-        let stale_s: Vec<PathBuf> = guard
-            .as_ref()
-            .filter(|prev| prev.user_dir == next_memo.user_dir)
-            .map(|prev| {
-                prev.slices
-                    .difference(&next_memo.slices)
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
-        if removed_path.is_none()
-            && stale_l.is_empty()
-            && stale_s.is_empty()
-            && guard.as_ref() == Some(&next_memo)
-        {
+        if guard.as_ref() == Some(&next_memo) {
             return;
         }
         *guard = Some(next_memo.clone());
-        (stale_l, stale_s)
-    };
-
-    if let Some(rem) = removed_path {
-        let trimmed = rem.trim();
-        if !trimmed.is_empty() && !security::is_unc_or_network_path(trimmed) {
-            let _ = scope.forbid_directory(Path::new(trimmed), true);
-            #[cfg(target_os = "windows")]
-            {
-                let win_variant = trimmed.replace('/', "\\");
-                let _ = scope.forbid_directory(Path::new(&win_variant), true);
-            }
-            if let Ok(canon) = fs::canonicalize(trimmed) {
-                if !security::is_unc_or_network_path(&canon.to_string_lossy()) {
-                    let clean = security::strip_verbatim_prefix(&canon);
-                    let _ = scope.forbid_directory(&clean, true);
-                }
-            }
-        }
-    }
-
-    let stale_runtime: Vec<PathBuf> = {
-        let mut rt_guard = RUNTIME_SLICE_DIRS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if let Some((rt_user_dir, rt_set)) = rt_guard.as_mut() {
-            if rt_user_dir != &state.user_dir {
-                *rt_user_dir = state.user_dir.clone();
-                std::mem::take(rt_set).into_iter().collect()
-            } else {
-                let mut to_remove = Vec::new();
-                for existing in rt_set.iter() {
-                    let keep_in_libs = next_memo.libs.iter().any(|l| existing.starts_with(l));
-                    let keep_in_slices = next_memo.slices.contains(existing);
-                    let keep_in_user = existing.starts_with(state.user_dir.join("slices"))
-                        || existing.starts_with(state.user_dir.join("cache"));
-                    if (!keep_in_libs && !keep_in_slices && !keep_in_user)
-                        || removed_path
-                            .map(|rem| {
-                                let norm_rem = security::normalize_clean_path(rem);
-                                let norm_ex = security::normalize_clean_path(&existing.to_string_lossy());
-                                norm_ex == norm_rem || norm_ex.starts_with(&format!("{}/", norm_rem))
-                            })
-                            .unwrap_or(false)
-                    {
-                        to_remove.push(existing.clone());
-                    }
-                }
-                for item in &to_remove {
-                    rt_set.remove(item);
-                }
-                to_remove
-            }
-        } else {
-            Vec::new()
-        }
-    };
-
-    for stale_path in stale_libs
-        .into_iter()
-        .chain(stale_slices)
-        .chain(stale_runtime)
-    {
-        let _ = scope.forbid_directory(&stale_path, true);
-        #[cfg(target_os = "windows")]
-        {
-            let win_variant = stale_path.to_string_lossy().replace('/', "\\");
-            let _ = scope.forbid_directory(Path::new(&win_variant), true);
-        }
     }
 
     for safe_sub in [

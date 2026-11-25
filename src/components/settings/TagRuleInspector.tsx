@@ -5,6 +5,7 @@ import {
   AutoTagPreviewResult,
   AutoTagRule,
   Tag,
+  TagFacet,
 } from "../../types";
 import { InspectorShell } from "./InspectorShell";
 import {
@@ -14,6 +15,7 @@ import {
 import { MainFilterRequest } from "../../store/types";
 
 interface TagRuleInspectorProps {
+  tagFacets: readonly TagFacet[];
   tags: Tag[];
   allAvailableCategories: string[];
   rulesByCategory: Map<string, AutoTagRule[]>;
@@ -60,6 +62,7 @@ interface TagRuleInspectorProps {
 }
 
 export const TagRuleInspector: React.FC<TagRuleInspectorProps> = ({
+  tagFacets,
   tags,
   allAvailableCategories,
   rulesByCategory,
@@ -217,6 +220,8 @@ export const TagRuleInspector: React.FC<TagRuleInspectorProps> = ({
       ) : (
         activeInspectedRule && (
           <TagRuleEditorPanel
+            tagFacets={tagFacets}
+            tags={tags}
             activeInspectedRule={activeInspectedRule}
             activeRuleCategoryConfig={activeRuleCategoryConfig}
             allAvailableCategories={allAvailableCategories}

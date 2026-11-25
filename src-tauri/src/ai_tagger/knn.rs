@@ -1,12 +1,15 @@
 pub use super::knn_helpers::merge_yamnet_and_knn_tags;
 
-use super::knn_helpers::collect_knn_target_vectors;
+use super::knn_helpers::{
+    collect_knn_target_page, collect_knn_target_vectors_for_ids, count_knn_profile_targets,
+    TargetVectorItem,
+};
 use super::model_manager::active_model_id_and_path;
 use super::similarity::{blob_to_vec, dot_similarity};
 use super::taxonomy::{persist_ai_tags_for_sample, MappedAiTag};
 use super::types::{AiAnalysisSummary, AiIndexProgress, AiTaggingMode, AI_EMBEDDING_DIM};
 use super::AiTaggerState;
-use crate::db::{get_active_profile_id, open_read_conn, AppState};
+use crate::db::{get_active_profile_id, AppState};
 use crate::security::sanitize_err;
 use rayon::prelude::*;
 use rusqlite::{params, Connection};
@@ -26,6 +29,8 @@ pub struct LabeledEmbeddingEntry {
     pub sample_id: i64,
     pub vector: [f32; AI_EMBEDDING_DIM],
     pub tag_names: Vec<String>,
+    /// Per-tag provenance weight (`1.0` for `'manual'`, `0.75` for `'ai_approved'`).
+    pub tag_weights: Vec<f32>,
 }
 
 #[derive(Debug, Default)]
@@ -36,6 +41,7 @@ pub struct KnnLabeledIndex {
 impl KnnLabeledIndex {
     /// Loads all non-trashed samples inside the active profile that have BOTH an embedding
     /// for `model_id` and at least one manual/approved tag (`sample_tags.is_manual = 1`).
+    /// Hand-authored `'manual'` labels receive higher voting weight (`1.0`) than bulk `'ai_approved'` (`0.75`).
     pub fn load_from_db(
         conn: &Connection,
         profile_id: i64,
@@ -43,7 +49,7 @@ impl KnnLabeledIndex {
     ) -> Result<Self, String> {
         let mut stmt = conn
             .prepare(
-                "SELECT s.id, e.vector, t.name
+                "SELECT s.id, e.vector, t.name, COALESCE(st.source, 'manual')
                  FROM samples s
                  JOIN sample_embeddings e
                    ON e.sample_id = s.id AND e.model_id = ?2
@@ -52,6 +58,7 @@ impl KnnLabeledIndex {
                  JOIN tags t
                    ON t.id = st.tag_id
                  WHERE COALESCE(s.is_trashed, 0) = 0
+                   AND COALESCE(t.facet_id, 1) != ?3
                    AND s.library_id IN (
                        SELECT l.id FROM libraries l
                        WHERE l.is_global = 1
@@ -62,11 +69,14 @@ impl KnnLabeledIndex {
             .map_err(|e| format!("Failed preparing k-NN labeled query: {}", e))?;
 
         let rows = stmt
-            .query_map(params![profile_id, model_id], |r| {
+            .query_map(
+                params![profile_id, model_id, crate::taxonomy_catalog::FACET_SOURCE_ID],
+                |r| {
                 Ok((
                     r.get::<_, i64>(0)?,
                     r.get::<_, Vec<u8>>(1)?,
                     r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
                 ))
             })
             .map_err(|e| format!("Failed querying k-NN labeled samples: {}", e))?;
@@ -75,11 +85,12 @@ impl KnnLabeledIndex {
         let mut index_by_sample: HashMap<i64, usize> = HashMap::new();
 
         for row in rows.flatten() {
-            let (sample_id, blob, tag_name) = row;
+            let (sample_id, blob, tag_name, source) = row;
             let trimmed = tag_name.trim();
             if trimmed.is_empty() {
                 continue;
             }
+            let weight = if source == "ai_approved" { 0.75 } else { 1.0 };
             if let Some(&idx) = index_by_sample.get(&sample_id) {
                 if !entries[idx]
                     .tag_names
@@ -87,6 +98,7 @@ impl KnnLabeledIndex {
                     .any(|existing| existing.eq_ignore_ascii_case(trimmed))
                 {
                     entries[idx].tag_names.push(trimmed.to_string());
+                    entries[idx].tag_weights.push(weight);
                 }
                 continue;
             }
@@ -97,6 +109,7 @@ impl KnnLabeledIndex {
                     sample_id,
                     vector,
                     tag_names: vec![trimmed.to_string()],
+                    tag_weights: vec![weight],
                 });
             }
         }
@@ -179,7 +192,10 @@ impl KnnLabeledIndex {
 
         let mut votes: HashMap<String, VoteAcc> = HashMap::new();
         for &(sim, entry_idx) in &neighbors {
-            for tag in &self.entries[entry_idx].tag_names {
+            let entry = &self.entries[entry_idx];
+            for (tag_idx, tag) in entry.tag_names.iter().enumerate() {
+                let provenance_weight = entry.tag_weights.get(tag_idx).copied().unwrap_or(1.0);
+                let weighted_sim = sim * provenance_weight;
                 let key = tag.to_lowercase();
                 let acc = votes.entry(key).or_insert_with(|| VoteAcc {
                     canonical_name: tag.clone(),
@@ -187,9 +203,9 @@ impl KnnLabeledIndex {
                     max_sim: 0.0,
                     support_count: 0,
                 });
-                acc.sim_sum += sim;
-                if sim > acc.max_sim {
-                    acc.max_sim = sim;
+                acc.sim_sum += weighted_sim;
+                if weighted_sim > acc.max_sim {
+                    acc.max_sim = weighted_sim;
                 }
                 acc.support_count += 1;
             }
@@ -256,7 +272,7 @@ pub fn run_knn_tag_suggestions(
     let _running_guard = RunningGuard(&ai_state.analysis_running);
 
     let (model_id, _, _, _) = active_model_id_and_path(&state.user_dir);
-    let read_conn = open_read_conn(&state.user_dir)?;
+    let read_conn = state.acquire_read_conn()?;
     let profile_id = get_active_profile_id(&read_conn);
 
     let knn_index = KnnLabeledIndex::load_from_db(&read_conn, profile_id, &model_id)?;
@@ -267,10 +283,13 @@ pub fn run_knn_tag_suggestions(
         );
     }
 
-    let targets = collect_knn_target_vectors(&read_conn, profile_id, &model_id, sample_ids)?;
+    let total = if let Some(ids) = sample_ids {
+        ids.len()
+    } else {
+        count_knn_profile_targets(&read_conn, profile_id, &model_id)?
+    };
     drop(read_conn);
 
-    let total = targets.len();
     if total == 0 {
         return Err(
             "Target sample(s) are not AI indexed yet. Run 'AI Index / Analyze' first."
@@ -284,83 +303,142 @@ pub fn run_knn_tag_suggestions(
     let mut suggestions_added = 0usize;
     let mut tags_auto_applied = 0usize;
     let mut canceled = false;
+    let mut last_sample_id: i64 = 0;
+    let mut id_cursor: usize = 0;
+    const KNN_PAGE_SIZE: usize = KNN_CHUNK_SIZE * 4;
 
-    for chunk in targets.chunks(KNN_CHUNK_SIZE) {
+    loop {
         if ai_state.analysis_cancel.load(Ordering::SeqCst) {
             canceled = true;
             break;
         }
+        let page: Vec<TargetVectorItem> = if let Some(ids) = sample_ids {
+            if id_cursor >= ids.len() {
+                break;
+            }
+            let end = (id_cursor + KNN_PAGE_SIZE).min(ids.len());
+            let slice = &ids[id_cursor..end];
+            id_cursor = end;
+            let page_conn = state.acquire_read_conn()?;
+            collect_knn_target_vectors_for_ids(&page_conn, profile_id, &model_id, slice)?
+        } else {
+            let page_conn = state.acquire_read_conn()?;
+            let batch = collect_knn_target_page(
+                &page_conn,
+                profile_id,
+                &model_id,
+                last_sample_id,
+                KNN_PAGE_SIZE,
+            )?;
+            if let Some(last) = batch.last() {
+                last_sample_id = last.sample_id;
+            }
+            batch
+        };
+        if page.is_empty() {
+            if sample_ids.is_some() {
+                continue;
+            }
+            break;
+        }
 
-        let chunk_predictions: Vec<(i64, Vec<MappedAiTag>)> =
-            if chunk.len() > 16 && knn_index.labeled_count() > 500 {
-                chunk
-                    .par_iter()
-                    .filter_map(|item| {
+        for chunk in page.chunks(KNN_CHUNK_SIZE) {
+            if ai_state.analysis_cancel.load(Ordering::SeqCst) {
+                canceled = true;
+                break;
+            }
+
+            let chunk_predictions: Vec<(i64, Vec<MappedAiTag>)> =
+                if chunk.len() > 16 && knn_index.labeled_count() > 500 {
+                    chunk
+                        .par_iter()
+                        .filter_map(|item| {
+                            let predicted = knn_index.suggest_for_vector(
+                                item.sample_id,
+                                &item.vector,
+                                confidence_threshold,
+                                max_tags_per_sample,
+                            );
+                            if predicted.is_empty() {
+                                None
+                            } else {
+                                Some((item.sample_id, predicted))
+                            }
+                        })
+                        .collect()
+                } else {
+                    let mut preds = Vec::new();
+                    for item in chunk {
                         let predicted = knn_index.suggest_for_vector(
                             item.sample_id,
                             &item.vector,
                             confidence_threshold,
                             max_tags_per_sample,
                         );
-                        if predicted.is_empty() {
-                            None
-                        } else {
-                            Some((item.sample_id, predicted))
+                        if !predicted.is_empty() {
+                            preds.push((item.sample_id, predicted));
                         }
-                    })
-                    .collect()
-            } else {
-                let mut preds = Vec::new();
-                for item in chunk {
-                    let predicted = knn_index.suggest_for_vector(
-                        item.sample_id,
-                        &item.vector,
-                        confidence_threshold,
-                        max_tags_per_sample,
-                    );
-                    if !predicted.is_empty() {
-                        preds.push((item.sample_id, predicted));
                     }
+                    preds
+                };
+            processed += chunk.len();
+            let last_name = chunk.last().map(|i| i.filename.clone()).unwrap_or_default();
+            // Keep idle reaper aware that k-NN batch is active
+            ai_state.touch_activity(Some(&state.db));
+
+            if !chunk_predictions.is_empty() {
+                let conn = state.lock_db();
+                let tx = conn
+                    .unchecked_transaction()
+                    .map_err(|e| sanitize_err(&state.user_dir, &e.to_string()))?;
+                for (sample_id, predicted) in &chunk_predictions {
+                    let still_exists: bool = tx
+                        .prepare_cached(
+                            "SELECT EXISTS(SELECT 1 FROM samples WHERE id = ?1 AND COALESCE(is_trashed, 0) = 0)",
+                        )
+                        .and_then(|mut s| s.query_row([*sample_id], |r| r.get::<_, i64>(0)))
+                        .map(|v| v != 0)
+                        .unwrap_or(false);
+                    if !still_exists {
+                        continue;
+                    }
+                    let (added, applied) =
+                        persist_ai_tags_for_sample(&tx, *sample_id, &model_id, predicted, auto_apply)?;
+                    suggestions_added += added;
+                    tags_auto_applied += applied;
                 }
-                preds
-            };
-        processed += chunk.len();
-        let last_name = chunk.last().map(|i| i.filename.clone()).unwrap_or_default();
-        // Keep idle reaper aware that k-NN batch is active
-        ai_state.touch_activity(Some(&state.db));
-
-        if !chunk_predictions.is_empty() {
-            let conn = state.lock_db();
-            let tx = conn
-                .unchecked_transaction()
-                .map_err(|e| sanitize_err(&state.user_dir, &e.to_string()))?;
-            for (sample_id, predicted) in &chunk_predictions {
-                let (added, applied) =
-                    persist_ai_tags_for_sample(&tx, *sample_id, &model_id, predicted, auto_apply)?;
-                suggestions_added += added;
-                tags_auto_applied += applied;
+                tx.commit()
+                    .map_err(|e| sanitize_err(&state.user_dir, &e.to_string()))?;
             }
-            tx.commit()
-                .map_err(|e| sanitize_err(&state.user_dir, &e.to_string()))?;
-        }
 
-        let avg_ms = if processed > 0 {
-            (started.elapsed().as_secs_f64() * 1000.0) / (processed as f64)
-        } else {
-            0.0
-        };
-        let percentage = ((processed as f64 / total as f64) * 100.0).min(100.0);
-        let _ = app.emit(
-            "ai-index-progress",
-            AiIndexProgress {
-                processed,
-                total,
-                percentage,
-                current_file: last_name,
-                indexed_count: total,
-                tags_suggested: suggestions_added + tags_auto_applied,
-                avg_ms_per_clip: avg_ms,
-            },
+            let avg_ms = if processed > 0 {
+                (started.elapsed().as_secs_f64() * 1000.0) / (processed as f64)
+            } else {
+                0.0
+            };
+            let percentage = ((processed as f64 / total.max(processed).max(1) as f64) * 100.0).min(100.0);
+            let _ = app.emit(
+                "ai-index-progress",
+                AiIndexProgress {
+                    processed,
+                    total: total.max(processed),
+                    percentage,
+                    current_file: last_name,
+                    indexed_count: total.max(processed),
+                    tags_suggested: suggestions_added + tags_auto_applied,
+                    avg_ms_per_clip: avg_ms,
+                },
+            );
+        }
+        if canceled {
+            break;
+        }
+    }
+
+    if processed == 0 && !canceled {
+        return Err(
+            "Target sample(s) are not AI indexed yet. Run 'AI Index / Analyze' first."
+                .to_string(),
         );
     }
 
@@ -373,6 +451,7 @@ pub fn run_knn_tag_suggestions(
     Ok(AiAnalysisSummary {
         processed,
         indexed: processed,
+        skipped_silent: 0,
         suggestions_added,
         tags_auto_applied,
         canceled,
@@ -407,6 +486,7 @@ mod tests {
                 sample_id: i,
                 vector: make_unit_vec(0, 1, 0.1 * (i as f32)),
                 tag_names: vec!["Custom_Rumble".to_string()],
+                tag_weights: vec![1.0],
             });
         }
         // Query sample ID 1 closely matches sample 2 & 3, and shouldn't vote using itself
@@ -426,11 +506,13 @@ mod tests {
             sample_id: 10,
             vector: make_unit_vec(0, 2, 0.8),
             tag_names: vec!["NoiseFluke".to_string()],
+            tag_weights: vec![1.0],
         };
         let near_dupe = LabeledEmbeddingEntry {
             sample_id: 11,
             vector: make_unit_vec(5, 6, 0.05),
             tag_names: vec!["BossLayer".to_string()],
+            tag_weights: vec![1.0],
         };
         let index = KnnLabeledIndex::from_entries(vec![weak_neighbor, near_dupe]);
 
@@ -497,6 +579,57 @@ mod tests {
         let index = KnnLabeledIndex::load_from_db(&conn, profile_id, "yamnet-v1").unwrap();
         assert_eq!(index.labeled_count(), 1);
         assert_eq!(index.entries[0].tag_names, vec!["UserCustom".to_string()]);
+    }
+
+    #[test]
+    fn knn_db_loader_excludes_source_pack_facet_tags() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema_on_conn(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO libraries (path, name, is_global) VALUES ('F:/Lib', 'Lib', 1)",
+            [],
+        )
+        .unwrap();
+        let lib_id = conn.last_insert_rowid();
+
+        let vec_blob = vec_to_blob(&make_unit_vec(7, 1, 0.0));
+        conn.execute(
+            "INSERT INTO samples (library_id, file_path, file_name, extension, duration_ms)
+             VALUES (?1, 'F:/Lib/pika.wav', 'pika.wav', 'wav', 300)",
+            [lib_id],
+        )
+        .unwrap();
+        let s1 = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO sample_embeddings (sample_id, model_id, dim, vector) VALUES (?1, 'yamnet-v1', 128, ?2)",
+            params![s1, vec_blob],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO tags (name, color, is_manual, facet_id) VALUES ('Pokemon', '#64748B', 1, 4)",
+            [],
+        )
+        .unwrap();
+        let source_tag = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO tags (name, color, is_manual, facet_id) VALUES ('Synthwave', '#8B5CF6', 1, 2)",
+            [],
+        )
+        .unwrap();
+        let genre_tag = conn.last_insert_rowid();
+
+        conn.execute(
+            "INSERT INTO sample_tags (sample_id, tag_id, is_manual, source) VALUES (?1, ?2, 1, 'manual'), (?1, ?3, 1, 'manual')",
+            params![s1, source_tag, genre_tag],
+        )
+        .unwrap();
+
+        let profile_id = crate::db::get_active_profile_id(&conn);
+        let index = KnnLabeledIndex::load_from_db(&conn, profile_id, "yamnet-v1").unwrap();
+        assert_eq!(index.labeled_count(), 1);
+        assert_eq!(index.entries[0].tag_names, vec!["Synthwave".to_string()]);
     }
 
     #[test]

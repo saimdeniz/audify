@@ -52,13 +52,24 @@ export const SampleContextMenu: React.FC<SampleContextMenuProps> = ({
   childrenByParentId,
 }) => {
   const selectedCollectionId = useSampleStore((s) => s.selectedCollectionId);
+  const isSmartCollectionActive = useSampleStore(
+    (s) =>
+      s.selectedCollectionId !== null &&
+      Boolean(
+        s.collections
+          .find((c) => c.id === s.selectedCollectionId)
+          ?.smart_query?.trim()
+      )
+  );
   const enableLicensesSystem = useSampleStore((s) => s.enableLicensesSystem);
   const enableAdvancedFileOps = useSampleStore((s) => s.enableAdvancedFileOps);
+  const binFilterActive = useSampleStore((s) => s.binFilterActive);
   const trashFilterActive = useSampleStore((s) => s.trashFilterActive);
   const libraries = useSampleStore((s) => s.libraries);
   const shortcuts = useSampleStore((s) => s.shortcuts);
 
   const addSamplesToBin = useSampleStore((s) => s.addSamplesToBin);
+  const removeSamplesFromBin = useSampleStore((s) => s.removeSamplesFromBin);
   const copyAttributionForSamples = useSampleStore(
     (s) => s.copyAttributionForSamples
   );
@@ -148,6 +159,14 @@ export const SampleContextMenu: React.FC<SampleContextMenuProps> = ({
     shortcuts.showInFolder ?? DEFAULT_SHORTCUTS.showInFolder,
     { compact: true }
   );
+  const openTagShortcutLabel = formatShortcutDisplay(
+    shortcuts.openTagPicker ?? DEFAULT_SHORTCUTS.openTagPicker ?? "",
+    { compact: true }
+  );
+  const openGenreShortcutLabel = formatShortcutDisplay(
+    shortcuts.openGenrePicker ?? DEFAULT_SHORTCUTS.openGenrePicker ?? "",
+    { compact: true }
+  );
 
   const menuContent = (
     <div
@@ -171,7 +190,7 @@ export const SampleContextMenu: React.FC<SampleContextMenuProps> = ({
           : activeContextSample.file_name}
       </div>
 
-      {/* Add to Session Bin */}
+      {/* Add to / Remove from Session Bin */}
       <MenuItem
         compactHeight
         tone="accent"
@@ -179,17 +198,27 @@ export const SampleContextMenu: React.FC<SampleContextMenuProps> = ({
         onClick={() => {
           const ids = contextMenu.targetIds;
           setContextMenu(null);
-          addSamplesToBin(ids);
+          if (binFilterActive) {
+            removeSamplesFromBin(ids);
+          } else {
+            addSamplesToBin(ids);
+          }
         }}
         icon={<Inbox className="w-3.5 h-3.5 text-accent-fg" />}
         label={
-          isMultiContext
+          binFilterActive
+            ? isMultiContext
+              ? `Remove ${contextMenu.targetIds.length} from Bin`
+              : "Remove from Bin"
+            : isMultiContext
             ? `Add ${contextMenu.targetIds.length} to Bin`
             : "Add to Bin"
         }
         rightSlot={
           <span className="font-mono text-[9.5px] text-fg-3 ml-1">
-            {formatShortcutDisplay(shortcuts.addToBin, { compact: true })}
+            {binFilterActive
+              ? "Del"
+              : formatShortcutDisplay(shortcuts.addToBin, { compact: true })}
           </span>
         }
       />
@@ -259,12 +288,20 @@ export const SampleContextMenu: React.FC<SampleContextMenuProps> = ({
             ? `Assign Tag (${contextMenu.targetIds.length})`
             : "Assign Tag"
         }
+        rightSlot={
+          openTagShortcutLabel ? (
+            <span className="font-mono text-[9.5px] text-fg-3">
+              {openTagShortcutLabel}
+            </span>
+          ) : undefined
+        }
       >
         <ContextMenuTagSubmenu
           submenuPositionClass={submenuPositionClass}
           targetIds={contextMenu.targetIds}
           isMultiContext={isMultiContext}
           activeContextSample={activeContextSample}
+          targetSamplesList={targetSamplesList}
           setContextMenu={setContextMenu}
         />
       </SubmenuTriggerItem>
@@ -279,12 +316,20 @@ export const SampleContextMenu: React.FC<SampleContextMenuProps> = ({
             ? `Assign Genre (${contextMenu.targetIds.length})`
             : "Assign Genre"
         }
+        rightSlot={
+          openGenreShortcutLabel ? (
+            <span className="font-mono text-[9.5px] text-fg-3">
+              {openGenreShortcutLabel}
+            </span>
+          ) : undefined
+        }
       >
         <ContextMenuGenreSubmenu
           submenuPositionClass={submenuPositionClass}
           targetIds={contextMenu.targetIds}
           isMultiContext={isMultiContext}
           activeContextSample={activeContextSample}
+          targetSamplesList={targetSamplesList}
           setContextMenu={setContextMenu}
         />
       </SubmenuTriggerItem>
@@ -310,7 +355,7 @@ export const SampleContextMenu: React.FC<SampleContextMenuProps> = ({
       </SubmenuTriggerItem>
 
       {/* 3. Remove from Collection */}
-      {selectedCollectionId !== null && (
+      {selectedCollectionId !== null && !isSmartCollectionActive && (
         <MenuItem
           compactHeight
           tone="accent"

@@ -59,47 +59,52 @@ pub async fn get_libraries(state: State<'_, AppState>) -> Result<Vec<Library>, S
 }
 
 #[tauri::command]
-pub fn set_library_read_only(
+pub async fn set_library_read_only(
     state: State<'_, AppState>,
     library_id: i64,
     is_read_only: bool,
 ) -> Result<Library, String> {
-    let conn = state.lock_db();
-    let active_id = get_active_profile_id(&conn);
+    let state_owned = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = state_owned.lock_db();
+        let active_id = get_active_profile_id(&conn);
 
-    conn.execute(
-        "UPDATE libraries SET is_read_only = ?1 WHERE id = ?2",
-        params![is_read_only, library_id],
-    )
-    .map_err(|e| format!("Failed to update library read-only lock: {}", e))?;
+        conn.execute(
+            "UPDATE libraries SET is_read_only = ?1 WHERE id = ?2",
+            params![is_read_only, library_id],
+        )
+        .map_err(|e| format!("Failed to update library read-only lock: {}", e))?;
 
-    conn.query_row(
-        "SELECT l.id, l.path, l.name, l.last_scanned_at,
-                (SELECT COUNT(*) FROM samples s WHERE s.library_id = l.id AND COALESCE(s.is_trashed, 0) = 0) AS sample_count,
-                l.is_global,
-                EXISTS(SELECT 1 FROM profile_libraries pl WHERE pl.profile_id = ?2 AND pl.library_id = l.id) AS assigned_to_profile,
-                COALESCE(l.is_read_only, 0)
-         FROM libraries l
-         WHERE l.id = ?1",
-        params![library_id, active_id],
-        |row| {
-            Ok(Library {
-                id: row.get(0)?,
-                path: row.get(1)?,
-                name: row.get(2)?,
-                last_scanned_at: row.get(3)?,
-                sample_count: row.get(4)?,
-                is_global: row.get(5)?,
-                assigned_to_profile: row.get(6)?,
-                is_read_only: row.get(7)?,
-            })
-        },
-    )
-    .map_err(|e| format!("Failed to load library record: {}", e))
+        conn.query_row(
+            "SELECT l.id, l.path, l.name, l.last_scanned_at,
+                    (SELECT COUNT(*) FROM samples s WHERE s.library_id = l.id AND COALESCE(s.is_trashed, 0) = 0) AS sample_count,
+                    l.is_global,
+                    EXISTS(SELECT 1 FROM profile_libraries pl WHERE pl.profile_id = ?2 AND pl.library_id = l.id) AS assigned_to_profile,
+                    COALESCE(l.is_read_only, 0)
+             FROM libraries l
+             WHERE l.id = ?1",
+            params![library_id, active_id],
+            |row| {
+                Ok(Library {
+                    id: row.get(0)?,
+                    path: row.get(1)?,
+                    name: row.get(2)?,
+                    last_scanned_at: row.get(3)?,
+                    sample_count: row.get(4)?,
+                    is_global: row.get(5)?,
+                    assigned_to_profile: row.get(6)?,
+                    is_read_only: row.get(7)?,
+                })
+            },
+        )
+        .map_err(|e| format!("Failed to load library record: {}", e))
+    })
+    .await
+    .map_err(|e| format!("Update library read-only task failed: {}", e))?
 }
 
 #[tauri::command]
-pub fn set_library_profile_scope(
+pub async fn set_library_profile_scope(
     app: AppHandle,
     state: State<'_, AppState>,
     ai_state: State<'_, crate::ai_tagger::AiTaggerState>,
@@ -107,27 +112,34 @@ pub fn set_library_profile_scope(
     is_global: bool,
     assigned_to_profile: bool,
 ) -> Result<(), String> {
-    let conn = state.lock_db();
-    let active_id = get_active_profile_id(&conn);
+    let state_owned = state.inner().clone();
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = state_owned.lock_db();
+        let active_id = get_active_profile_id(&conn);
 
-    conn.execute(
-        "UPDATE libraries SET is_global = ?1 WHERE id = ?2",
-        params![is_global, library_id],
-    )
-    .map_err(|e| format!("Failed to update library global scope: {}", e))?;
+        conn.execute(
+            "UPDATE libraries SET is_global = ?1 WHERE id = ?2",
+            params![is_global, library_id],
+        )
+        .map_err(|e| format!("Failed to update library global scope: {}", e))?;
 
-    if assigned_to_profile {
-        let _ = conn.execute(
-            "INSERT OR IGNORE INTO profile_libraries (profile_id, library_id) VALUES (?1, ?2)",
-            params![active_id, library_id],
-        );
-    } else {
-        let _ = conn.execute(
-            "DELETE FROM profile_libraries WHERE profile_id = ?1 AND library_id = ?2",
-            params![active_id, library_id],
-        );
-    }
-    crate::reconcile_library_asset_scopes(&app, &conn, None);
+        if assigned_to_profile {
+            let _ = conn.execute(
+                "INSERT OR IGNORE INTO profile_libraries (profile_id, library_id) VALUES (?1, ?2)",
+                params![active_id, library_id],
+            );
+        } else {
+            let _ = conn.execute(
+                "DELETE FROM profile_libraries WHERE profile_id = ?1 AND library_id = ?2",
+                params![active_id, library_id],
+            );
+        }
+        crate::reconcile_library_asset_scopes(&app_clone, &conn, None);
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|e| format!("Update library profile scope task failed: {}", e))??;
     ai_state.invalidate_vector_cache();
     Ok(())
 }
@@ -197,15 +209,8 @@ pub(crate) fn remove_library_with_conn(
     tx.execute_batch(crate::db::SAMPLE_TAGS_FTS_TRIGGERS_SQL)
         .map_err(|e| format!("Failed restoring tag FTS triggers after library removal: {}", e))?;
 
-    // Clean up orphaned auto-tags and auto-genres while preserving user-created ones!
-    let _ = tx.execute(
-        "DELETE FROM tags WHERE is_manual = 0 AND id NOT IN (SELECT DISTINCT tag_id FROM sample_tags)",
-        [],
-    );
-    let _ = tx.execute(
-        "DELETE FROM genres WHERE is_manual = 0 AND LOWER(name) NOT IN (SELECT DISTINCT LOWER(genre) FROM samples WHERE genre != '')",
-        [],
-    );
+    // Clean up orphaned auto-tags and auto-genres while preserving user-created ones, system roots, and parent tags!
+    let _ = crate::db::prune_orphan_auto_tags(&tx);
     tx.commit()
         .map_err(|e| format!("Failed committing library removal: {}", e))?;
 

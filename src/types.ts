@@ -1,4 +1,5 @@
 import type { AiSimilarityScope, SortDir, SortKey } from "./types/aiAndSearch";
+import type { TaxonomyDomain, TaxonomyFacetSlug } from "./types/profileAndSettings";
 
 export * from "./types/aiAndSearch";
 export * from "./types/profileAndSettings";
@@ -15,11 +16,32 @@ export interface Library {
   is_read_only?: boolean;
 }
 
+export interface TagFacet {
+  id: number;
+  slug: TaxonomyFacetSlug;
+  name: string;
+  color: string;
+  sort_order: number;
+  is_system: boolean;
+  domain?: TaxonomyDomain;
+  allow_nesting?: boolean;
+}
+
 export interface Tag {
   id: number;
   name: string;
   color: string;
   sample_count: number;
+  facet_id?: number;
+  facet_slug?: TaxonomyFacetSlug;
+  parent_id?: number | null;
+  path?: string;
+  aliases?: string[];
+  effective_color?: string;
+  color_inherited?: boolean;
+  is_system?: boolean;
+  sort_order?: number;
+  rollup_count?: number;
 }
 
 export interface Genre {
@@ -27,6 +49,7 @@ export interface Genre {
   name: string;
   color: string;
   sample_count: number;
+  facet_slug?: TaxonomyFacetSlug;
 }
 
 export interface Collection {
@@ -80,6 +103,8 @@ export interface SampleItem {
   created_at: string;
   file_modified_at?: number | null;
   tags: SampleTagBadge[];
+  /** Transient compact IPC wire field hydrated into `tags` by `internSamplePool` and stripped. */
+  tag_ids?: number[];
   is_trashed?: boolean;
   trashed_at?: string | null;
   original_file_path?: string | null;
@@ -92,6 +117,16 @@ export interface BpmKeyProgressPayload {
   percentage: number;
   current_file: string;
   updated_count: number;
+}
+
+export interface BatchJobProgressPayload {
+  stage_label: string;
+  processed: number;
+  total: number;
+  percentage: number;
+  current_item: string;
+  matched_count: number;
+  done: boolean;
 }
 
 export interface SampleBpmKeyPatch {
@@ -114,8 +149,16 @@ export interface SliceRange {
   endSec: number;
 }
 
+export interface ExternalSimilaritySource {
+  probeId: string;
+  fileName: string;
+  filePath?: string;
+  durationMs: number;
+}
+
 export interface SimilaritySession {
   anchorSample: SampleItem;
+  externalSource?: ExternalSimilaritySource;
   scoresById: ReadonlyMap<number, number>;
   minScore: number;
   topK: number;

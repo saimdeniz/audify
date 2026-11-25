@@ -145,6 +145,9 @@ pub(super) fn sanitize_top_level_enums(map: &mut Map<String, Value>) {
         ("themeMode", &["dark", "light", "contrast"]),
         ("waveformSensitivity", &["logarithmic", "high_boost", "linear"]),
         ("waveformStyle", &["solid_baseline", "symmetric"]),
+        ("exportAudioPreset", &["original", "wav_24", "nle_48k_24"]),
+        ("exportLoudnessMode", &["off", "peak_m1", "lufs_m14", "lufs_m24"]),
+        ("miniDockEdgeSide", &["right", "left"]),
         ("wallpaperKind", &["none", "image", "ascii_preset", "ascii_magic", "ascii_custom"]),
         ("asciiMagicFit", &["contain", "cover"]),
     ];
@@ -242,6 +245,16 @@ pub(super) fn sanitize_nested_metadata(map: &mut Map<String, Value>) {
             sanitize_text_field(r_obj, "id", 128, false);
             sanitize_text_field(r_obj, "tag_name", 128, false);
             sanitize_text_field(r_obj, "category", 128, false);
+            sanitize_text_field(r_obj, "parent_tag_name", 64, false);
+            if let Some(fval) = r_obj.get("facet_slug") {
+                let valid = fval
+                    .as_str()
+                    .map(|s| matches!(s, "category" | "genre" | "mood" | "source"))
+                    .unwrap_or(false);
+                if !valid {
+                    r_obj.remove("facet_slug");
+                }
+            }
             let clean_color = r_obj
                 .get("tag_color")
                 .and_then(|v| v.as_str())

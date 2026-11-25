@@ -152,7 +152,7 @@ pub(crate) fn write_profile_package_to_path(
 }
 
 /// Reads a `ProfileExportPackage` from either a compressed `.audify-profile` ZIP or a plain
-/// `.audify-profile.json` (supporting v1, v2, and v3 schemas).
+/// `.audify-profile.json` (supporting v1, v2, v3, and v4 schemas).
 pub(crate) fn read_profile_package_from_path(path: &Path) -> Result<ProfileExportPackage, String> {
     let raw_str = path.to_string_lossy();
     if crate::security::is_unc_or_network_path(&raw_str) {
@@ -394,7 +394,7 @@ mod tests {
         // Tier 1 (without AI tags): only manual tags, favorites, and collections exported
         let (_, pkg_compact) =
             build_profile_export_package_with_options(&conn, pid, false).expect("compact export");
-        assert_eq!(pkg_compact.version, 3);
+        assert_eq!(pkg_compact.version, 4);
         assert!(!pkg_compact.includes_ai_tags);
         assert_eq!(pkg_compact.sample_refs.len(), 1);
         assert_eq!(pkg_compact.favorite_ref_indices, vec![0]);
@@ -406,7 +406,7 @@ mod tests {
         // Tier 1 + AI tags: single deduplicated sample_ref shared across manual, AI, favorite, collection
         let (_, pkg_with_ai) =
             build_profile_export_package_with_options(&conn, pid, true).expect("ai export");
-        assert_eq!(pkg_with_ai.version, 3);
+        assert_eq!(pkg_with_ai.version, 4);
         assert!(pkg_with_ai.includes_ai_tags);
         assert_eq!(pkg_with_ai.sample_refs.len(), 1);
         assert_eq!(
@@ -419,7 +419,7 @@ mod tests {
         assert!(written_len > 0);
 
         let summary = read_profile_backup_summary(&zip_path);
-        assert_eq!(summary.version, 3);
+        assert_eq!(summary.version, 4);
         assert_eq!(summary.sample_count, 1);
         assert!(summary.includes_ai_tags);
 
@@ -761,5 +761,149 @@ mod tests {
             "expected rel_folder_path relinked to Drums, got '{}'",
             resolved_dir
         );
+    }
+
+    #[test]
+    fn profile_v4_roundtrips_taxonomy_hierarchy_preserves_custom_colors_and_imports_legacy_v3() {
+        use crate::db::taxonomy::{ensure_taxonomy_tag, sync_primary_genre_for_samples};
+
+        let tmp = TestTempDir::new("v4_taxonomy");
+        let user_dir = tmp.0.join("user");
+        let lib_dir = tmp.0.join("SFX");
+        fs::create_dir_all(&lib_dir).unwrap();
+        let wav_path = lib_dir.join("wolf_dark.wav");
+        fs::write(&wav_path, b"RIFF0000WAVEfmt ").unwrap();
+
+        let mut conn = init_db(&user_dir).expect("init_db");
+        let pid = get_active_profile_id(&conn);
+
+        conn.execute(
+            "INSERT INTO libraries (path, name, is_global) VALUES (?1, 'SFX', 1)",
+            params![normalize_clean_path(&lib_dir.to_string_lossy())],
+        )
+        .unwrap();
+        let lib_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO samples (library_id, file_path, file_name, extension, duration_ms, file_size)
+             VALUES (?1, ?2, 'wolf_dark.wav', 'wav', 600, 1024)",
+            params![lib_id, normalize_clean_path(&wav_path.to_string_lossy())],
+        )
+        .unwrap();
+        let sid = conn.last_insert_rowid();
+
+        let animals_id = ensure_taxonomy_tag(&conn, "Animals", Some("category"), None, Some("#22C55E"), true).unwrap();
+        let wolf_id = ensure_taxonomy_tag(&conn, "Wolf", Some("category"), Some("Animals"), None, true).unwrap();
+        let custom_facet = crate::commands::taxonomy::create_tag_facet_with_conn(
+            &conn,
+            "Mic Type",
+            "tags",
+            "#0EA5E9",
+            false,
+        )
+        .unwrap();
+        let ribbon_id = ensure_taxonomy_tag(&conn, "RibbonMic", Some(&custom_facet.slug), None, Some("#0EA5E9"), true).unwrap();
+        conn.execute(
+            "UPDATE tags SET aliases_json = '[\"Lupine\"]' WHERE id = ?1",
+            params![wolf_id],
+        )
+        .unwrap();
+        let cin_id = ensure_taxonomy_tag(&conn, "Cinematic", Some("genre"), None, None, true).unwrap();
+        let dark_id = ensure_taxonomy_tag(&conn, "Dark", Some("mood"), None, None, true).unwrap();
+
+        for tid in [wolf_id, ribbon_id, cin_id, dark_id] {
+            conn.execute(
+                "INSERT INTO sample_tags (sample_id, tag_id, is_manual, source) VALUES (?1, ?2, 1, 'manual')",
+                params![sid, tid],
+            )
+            .unwrap();
+        }
+        sync_primary_genre_for_samples(&conn, &[sid]).unwrap();
+
+        let (_, pkg_v4) =
+            build_profile_export_package_with_options(&conn, pid, false).expect("export v4");
+        assert_eq!(pkg_v4.version, 4);
+        assert!(pkg_v4.facets.iter().any(|f| f.slug == "mic_type" && f.domain == "tags"));
+        let wolf_entry = pkg_v4.tags.iter().find(|t| t.name == "Wolf").expect("Wolf exported");
+        assert_eq!(wolf_entry.parent_name.as_deref(), Some("Animals"));
+        assert_eq!(wolf_entry.aliases, vec!["Lupine".to_string()]);
+        assert!(wolf_entry.color_inherited);
+
+        let v4_path = tmp.0.join("taxonomy_v4.audify-profile");
+        write_profile_package_to_path(&pkg_v4, &v4_path).expect("write v4");
+
+        // Wipe sample_tags, Wolf, RibbonMic & custom facet, customize Animals local color to verify existing custom color is NOT clobbered
+        conn.execute("DELETE FROM sample_tags", []).unwrap();
+        conn.execute("DELETE FROM tags WHERE id IN (?1, ?2)", params![wolf_id, ribbon_id]).unwrap();
+        conn.execute("DELETE FROM tag_facets WHERE id = ?1", params![custom_facet.id]).unwrap();
+        conn.execute(
+            "UPDATE tags SET color = '#123456', color_inherited = 0 WHERE id = ?1",
+            params![animals_id],
+        )
+        .unwrap();
+        conn.execute("UPDATE samples SET genre = '', genre_is_manual = 0 WHERE id = ?1", params![sid]).unwrap();
+
+        let imported =
+            import_profile_from_file_with_conn(&mut conn, &v4_path.to_string_lossy()).expect("import v4");
+        assert_eq!(imported.report.matched, 1);
+
+        let animals_color: String = conn
+            .query_row("SELECT color FROM tags WHERE id = ?1", params![animals_id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(animals_color, "#123456", "existing local tag color must be preserved on import");
+
+        let (restored_parent, restored_aliases): (Option<i64>, String) = conn
+            .query_row(
+                "SELECT parent_id, aliases_json FROM tags WHERE name = 'Wolf'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(restored_parent, Some(animals_id));
+        assert!(restored_aliases.contains("Lupine"));
+
+        let restored_genre: String = conn
+            .query_row("SELECT genre FROM samples WHERE id = ?1", params![sid], |r| r.get(0))
+            .unwrap();
+        assert_eq!(restored_genre, "Cinematic");
+
+        let restored_ribbon_facet: String = conn
+            .query_row(
+                "SELECT f.slug FROM tags t JOIN tag_facets f ON f.id = t.facet_id WHERE t.name = 'RibbonMic'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(restored_ribbon_facet, "mic_type");
+
+        // Verify legacy v3 JSON package with "Sountrack" typo & flat genre imports cleanly
+        let v3_json = serde_json::json!({
+            "format": "audify-profile",
+            "version": 3,
+            "name": "LegacyV3",
+            "color": "#38BDF8",
+            "settings": {},
+            "libraries": [{ "name": "SFX", "path": normalize_clean_path(&lib_dir.to_string_lossy()), "is_global": true }],
+            "collections": [],
+            "tags": [{ "name": "LegacyCustom", "color": "#AA5500" }],
+            "genres": [{ "name": "Sountrack", "color": "#3B82F6" }],
+            "sample_refs": [{
+                "file_path": normalize_clean_path(&wav_path.to_string_lossy()),
+                "rel_path": "wolf_dark.wav",
+                "file_name": "wolf_dark.wav",
+                "file_size": 1024
+            }],
+            "manual_tag_ref_indices": { "LegacyCustom": [0] },
+            "manual_genre_ref_indices": { "Sountrack": [0] }
+        });
+        let v3_path = tmp.0.join("legacy_v3.audify-profile.json");
+        fs::write(&v3_path, serde_json::to_string(&v3_json).unwrap()).unwrap();
+        conn.execute("DELETE FROM sample_tags", []).unwrap();
+        conn.execute("UPDATE samples SET genre = '', genre_is_manual = 0 WHERE id = ?1", params![sid]).unwrap();
+
+        import_profile_from_file_with_conn(&mut conn, &v3_path.to_string_lossy()).expect("import legacy v3");
+        let fixed_genre: String = conn
+            .query_row("SELECT genre FROM samples WHERE id = ?1", params![sid], |r| r.get(0))
+            .unwrap();
+        assert_eq!(fixed_genre, "Soundtrack");
     }
 }

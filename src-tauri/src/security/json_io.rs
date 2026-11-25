@@ -12,9 +12,11 @@ pub const MAX_LEGACY_PROFILE_JSON_BYTES: u64 = 128 * 1024 * 1024;
 pub const MAX_PROFILE_UNCOMPRESSED_BYTES: u64 = 160 * 1024 * 1024;
 pub const MAX_SNAPSHOT_ARCHIVE_BYTES: u64 = 1024 * 1024 * 1024;
 pub const MAX_CUSTOM_BG_BYTES: u64 = 25 * 1024 * 1024;
+pub const MAX_CUSTOM_BG_VIDEO_BYTES: u64 = 50 * 1024 * 1024;
 
-/// Reads at most `max_bytes` from `path`, rejecting UNC paths and oversized files before reading.
-pub fn read_bounded_bytes(path: &Path, max_bytes: u64) -> Result<Vec<u8>, String> {
+/// Validates safety invariants (no UNC, no ADS, no symlink/junction, regular file, bounded size)
+/// and opens the canonicalized file handle for streaming reads without loading the whole file.
+pub fn open_bounded_file(path: &Path, max_bytes: u64) -> Result<(File, u64), String> {
     let raw = path.to_string_lossy();
     if is_unc_or_network_path(&raw) {
         return Err("Network and UNC paths are not allowed".to_string());
@@ -22,6 +24,7 @@ pub fn read_bounded_bytes(path: &Path, max_bytes: u64) -> Result<Vec<u8>, String
     if has_ntfs_ads_colon(&raw) {
         return Err("Alternate data streams are not allowed".to_string());
     }
+    super::path_guards::reject_symlink_ancestors(path)?;
 
     let sym = fs::symlink_metadata(path)
         .map_err(|_| format!("Failed to read file metadata for {}", display_leaf(path)))?;
@@ -47,7 +50,13 @@ pub fn read_bounded_bytes(path: &Path, max_bytes: u64) -> Result<Vec<u8>, String
 
     let file = File::open(&canon)
         .map_err(|_| format!("Failed to open file {}", display_leaf(path)))?;
-    let cap = (sym.len() as usize).min(max_bytes as usize);
+    Ok((file, sym.len()))
+}
+
+/// Reads at most `max_bytes` from `path`, rejecting UNC paths and oversized files before reading.
+pub fn read_bounded_bytes(path: &Path, max_bytes: u64) -> Result<Vec<u8>, String> {
+    let (file, file_len) = open_bounded_file(path, max_bytes)?;
+    let cap = (file_len as usize).min(max_bytes as usize);
     let mut buf = Vec::with_capacity(cap);
     file.take(max_bytes.saturating_add(1))
         .read_to_end(&mut buf)
@@ -108,6 +117,7 @@ fn validate_basic_import_path(
     {
         return Err("Reserved DOS device names are not allowed".to_string());
     }
+    super::reject_symlink_ancestors(p)?;
     if let Ok(sym) = fs::symlink_metadata(p) {
         if sym.file_type().is_symlink() {
             return Err("Symbolic links and junctions are not allowed".to_string());
@@ -177,6 +187,7 @@ fn validate_export_target_common(
         return Err("Network and UNC paths are not allowed".to_string());
     }
 
+    super::reject_symlink_ancestors(parent)?;
     if let Ok(sym_parent) = fs::symlink_metadata(parent) {
         if sym_parent.file_type().is_symlink() {
             return Err("Symbolic links and junctions are not allowed as export directories".to_string());

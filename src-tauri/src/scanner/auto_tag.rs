@@ -80,19 +80,34 @@ fn single_keyword_matches_target(
     lower_stem.contains(&kw_lower) || folded_stem.contains(&kw_folded)
 }
 
+fn path_matches_segment(dir_bounded: &str, candidate: &str) -> bool {
+    let clean = candidate.trim_matches('\\');
+    if clean.is_empty() {
+        return false;
+    }
+    let needle = format!("\\{}\\", clean);
+    dir_bounded.contains(&needle)
+}
+
 fn path_matches_filter(lower_file_path: &str, filter: &str) -> bool {
     let clean = filter.trim();
     if clean.is_empty() {
         return false;
     }
+    // Strip filename and match strictly on `\` segment boundaries so `Raw` never
+    // matches `strawberry.wav` and `SFX` never matches `SFX_Old`.
+    let dir_only = match lower_file_path.rfind('\\') {
+        Some(idx) => &lower_file_path[..idx],
+        None => return false,
+    };
+    let dir_bounded = format!("\\{}\\", dir_only.trim_matches('\\'));
     let norm = clean.replace('/', "\\").to_lowercase();
-    if lower_file_path.contains(&norm) {
+    if path_matches_segment(&dir_bounded, &norm) {
         return true;
     }
     if let Some(pos) = norm.find(':') {
         let without_drive = &norm[pos + 1..];
-        let trimmed = without_drive.trim_start_matches('\\');
-        if !trimmed.is_empty() && lower_file_path.contains(trimmed) {
+        if path_matches_segment(&dir_bounded, without_drive) {
             return true;
         }
     }
@@ -103,7 +118,7 @@ pub fn match_auto_tags(
     file_path: &str,
     file_name: &str,
     duration_ms: i64,
-    is_loop: bool,
+    _is_loop: bool,
     rules: &[AutoTagRule],
     categories: &HashMap<String, AutoTagCategoryConfig>,
 ) -> Vec<String> {
@@ -312,10 +327,6 @@ pub fn match_auto_tags(
         if !has_positive_keyword && has_duration_constraint && duration_ms > 0 {
             matched.insert(rule.tag_name.clone());
         }
-    }
-
-    if is_loop {
-        matched.insert("Loop".to_string());
     }
 
     let mut out: Vec<String> = matched.into_iter().collect();

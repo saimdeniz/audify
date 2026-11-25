@@ -6,7 +6,9 @@ pub use progress::DuplicateScanProgressPayload;
 use progress::ProgressEmitFn;
 
 use crate::db::get_active_profile_id;
-use crate::security::is_unc_or_network_path;
+use crate::security::{
+    has_ntfs_ads_colon, is_unc_or_network_path, reject_symlink_ancestors,
+};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -115,10 +117,13 @@ pub(crate) fn resolve_library_roots(raw_roots: &[(i64, String)]) -> HashMap<i64,
     let mut map = HashMap::new();
     for (lib_id, raw_path) in raw_roots {
         let trimmed = raw_path.trim();
-        if trimmed.is_empty() || is_unc_or_network_path(trimmed) {
+        if trimmed.is_empty() || is_unc_or_network_path(trimmed) || has_ntfs_ads_colon(trimmed) {
             continue;
         }
         let path = Path::new(trimmed);
+        if reject_symlink_ancestors(path).is_err() {
+            continue;
+        }
         if let Ok(sym) = fs::symlink_metadata(path) {
             if sym.file_type().is_symlink() || !sym.is_dir() {
                 continue;
@@ -217,10 +222,20 @@ pub(crate) fn build_duplicate_group(
 
 /// Queries active-profile non-trashed candidates using the WAL read connection so the
 /// connection can be released immediately before Stage 2/3 parallel disk I/O runs.
+#[cfg(test)]
 pub(crate) fn load_duplicate_candidates(
     conn: &Connection,
     mode: DuplicateScanMode,
     library_id: Option<i64>,
+) -> Result<DuplicateLoadBundle, String> {
+    load_duplicate_candidates_for_model(conn, mode, library_id, None)
+}
+
+pub(crate) fn load_duplicate_candidates_for_model(
+    conn: &Connection,
+    mode: DuplicateScanMode,
+    library_id: Option<i64>,
+    active_model_id: Option<&str>,
 ) -> Result<DuplicateLoadBundle, String> {
     let active_profile_id = get_active_profile_id(conn);
 
@@ -266,14 +281,19 @@ pub(crate) fn load_duplicate_candidates(
              NULL AS cached_partial_hash, NULL AS cached_full_hash"
         }
     };
+    let model_filter = active_model_id.unwrap_or("");
     let emb_join = match mode {
         DuplicateScanMode::Exact => "LEFT JOIN sample_hashes sh ON sh.sample_id = s.id",
+        DuplicateScanMode::Similar if !model_filter.is_empty() => {
+            "LEFT JOIN sample_embeddings e ON e.sample_id = s.id AND e.model_id = ?2"
+        }
         DuplicateScanMode::Similar => "LEFT JOIN sample_embeddings e ON e.sample_id = s.id",
     };
-    let lib_filter = if library_id.is_some() {
-        "AND s.library_id = ?2"
-    } else {
-        ""
+    let use_model_param = mode == DuplicateScanMode::Similar && !model_filter.is_empty();
+    let lib_filter = match (use_model_param, library_id.is_some()) {
+        (true, true) => "AND s.library_id = ?3",
+        (false, true) => "AND s.library_id = ?2",
+        (_, false) => "",
     };
 
     let sql = format!(
@@ -356,10 +376,13 @@ pub(crate) fn load_duplicate_candidates(
         })
     };
 
-    let rows = if let Some(lib_id) = library_id {
-        stmt.query_map(params![active_profile_id, lib_id], row_mapper)
-    } else {
-        stmt.query_map(params![active_profile_id], row_mapper)
+    let rows = match (use_model_param, library_id) {
+        (true, Some(lib_id)) => {
+            stmt.query_map(params![active_profile_id, model_filter, lib_id], row_mapper)
+        }
+        (true, None) => stmt.query_map(params![active_profile_id, model_filter], row_mapper),
+        (false, Some(lib_id)) => stmt.query_map(params![active_profile_id, lib_id], row_mapper),
+        (false, None) => stmt.query_map(params![active_profile_id], row_mapper),
     }
     .map_err(|e| format!("Failed scanning duplicate candidates: {}", e))?;
 
@@ -388,7 +411,8 @@ pub(crate) fn persist_sample_hash_cache(
         let mut stmt = tx
             .prepare_cached(
                 "INSERT INTO sample_hashes (sample_id, file_size, file_mtime, partial_hash, full_hash, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))
+                 SELECT ?1, ?2, ?3, ?4, ?5, datetime('now')
+                 WHERE EXISTS (SELECT 1 FROM samples WHERE id = ?1)
                  ON CONFLICT(sample_id) DO UPDATE SET
                      partial_hash = CASE
                          WHEN sample_hashes.file_size = excluded.file_size

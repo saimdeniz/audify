@@ -284,5 +284,97 @@ describe("Catalog Web Worker Kernel (50k & 150k scale)", () => {
 
     const clearAck = kernel.handleMessage({ type: "clear_search_cache" });
     expect(clearAck.response).toEqual({ type: "pool_ack", poolEpoch: 2 });
+
+    const removeAck = kernel.handleMessage({
+      type: "remove_ids",
+      poolEpoch: 3,
+      ids: [target.id, pool[0].id],
+    });
+    expect(removeAck.response).toEqual({ type: "pool_ack", poolEpoch: 3 });
+    expect(kernel.getPoolSize()).toBe(198);
+
+    const afterRemove = kernel.handleMessage({
+      type: "filter_query",
+      requestSeq: 2,
+      poolEpoch: 3,
+      params: {
+        folderFilter: null,
+        favoriteOnly: true,
+        recentOnly: false,
+        recentSampleIds: [],
+        selectedTagIds: [],
+        selectedGenre: null,
+        selectedLicenseGroupId: null,
+        licenseGroups: [],
+        binFilterActive: false,
+        binSampleIds: [],
+        duplicateOrderIds: null,
+        smartQuery: "",
+        searchQuery: "",
+        smartSearchSynonyms: false,
+        typeFilter: "all",
+        srFilter: null,
+        sortKey: null,
+        sortDir: "asc",
+        similarity: null,
+      },
+    });
+    expect(afterRemove.response.type).toBe("filter_result");
+    if (afterRemove.response.type === "filter_result") {
+      expect(afterRemove.response.matched).toBe(true);
+      expect(Array.from(afterRemove.response.filteredIds)).not.toContain(
+        target.id
+      );
+    }
+  });
+
+  it("filters and sorts by virtual external similarity anchor (anchorSampleId === -1)", () => {
+    const kernel = createCatalogWorkerKernel();
+    const pool = buildSyntheticPool(25);
+    kernel.handleMessage({ type: "set_pool", poolEpoch: 1, samples: pool });
+
+    const res = kernel.handleMessage({
+      type: "filter_query",
+      requestSeq: 1,
+      poolEpoch: 1,
+      params: {
+        folderFilter: null,
+        favoriteOnly: false,
+        recentOnly: false,
+        recentSampleIds: [],
+        selectedTagIds: [],
+        selectedGenre: null,
+        selectedLicenseGroupId: null,
+        licenseGroups: [],
+        binFilterActive: false,
+        binSampleIds: [],
+        duplicateOrderIds: null,
+        smartQuery: "",
+        searchQuery: "",
+        smartSearchSynonyms: false,
+        typeFilter: "all",
+        srFilter: null,
+        sortKey: "match",
+        sortDir: "desc",
+        similarity: {
+          anchorSampleId: -1,
+          minScore: 0.75,
+          scoresEntries: [
+            [pool[3].id, 0.81],
+            [pool[10].id, 0.95],
+            [pool[14].id, 0.62],
+          ],
+        },
+      },
+    });
+
+    expect(res.response.type).toBe("filter_result");
+    if (res.response.type === "filter_result") {
+      expect(res.response.matched).toBe(true);
+      expect(Array.from(res.response.filteredIds)).toEqual([
+        pool[10].id,
+        pool[3].id,
+      ]);
+    }
   });
 });

@@ -12,9 +12,10 @@ use super::{
 use crate::commands::{query_profile_by_id, FullSnapshotRestoreResult};
 use crate::db::init_schema_on_conn;
 use crate::security::{
-    detect_image_magic, ensure_not_inside_user_dir, has_ntfs_ads_colon,
+    detect_wallpaper_media_magic, ensure_not_inside_user_dir, has_ntfs_ads_colon,
     is_forbidden_os_or_root_path, is_unc_or_network_path, is_valid_collection_icon, sanitize_err,
-    sanitize_hex_color_or_default, whitelist_and_sanitize_settings, MAX_CUSTOM_BG_BYTES,
+    sanitize_hex_color_or_default, whitelist_and_sanitize_settings, ALLOWED_BG_VIDEO_EXTS,
+    MAX_CUSTOM_BG_BYTES, MAX_CUSTOM_BG_VIDEO_BYTES,
 };
 use rusqlite::config::DbConfig;
 use rusqlite::{params, Connection, OpenFlags};
@@ -124,7 +125,7 @@ fn sanitize_restored_snapshot_db(conn: &mut Connection) {
             let safe_color = sanitize_hex_color_or_default(&color, "#38BDF8");
             let parsed = serde_json::from_str::<serde_json::Value>(&raw_settings)
                 .unwrap_or_else(|_| serde_json::json!({}));
-            let sanitized_settings = whitelist_and_sanitize_settings(&parsed, false, false)
+            let sanitized_settings = whitelist_and_sanitize_settings(&parsed, false, true)
                 .unwrap_or_else(|_| serde_json::json!({}));
             let safe_json =
                 serde_json::to_string(&sanitized_settings).unwrap_or_else(|_| "{}".to_string());
@@ -135,7 +136,11 @@ fn sanitize_restored_snapshot_db(conn: &mut Connection) {
         }
     }
 
-    for (table, default_hex) in [("tags", "#3B82F6"), ("genres", "#8B5CF6")] {
+    for (table, default_hex) in [
+        ("tag_facets", "#64748B"),
+        ("tags", "#3B82F6"),
+        ("genres", "#8B5CF6"),
+    ] {
         let query = format!("SELECT id, color FROM {}", table);
         if let Ok(mut stmt) = tx.prepare(&query) {
             let rows: Vec<(i64, String)> = stmt
@@ -255,20 +260,30 @@ fn extract_snapshot_media_assets(
             continue;
         }
         if let Some(rel_img_path) = is_safe_snapshot_image_entry(entry.name()) {
+            let ext_lower = rel_img_path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_ascii_lowercase())
+                .unwrap_or_default();
+            let max_item_bytes = if ALLOWED_BG_VIDEO_EXTS.contains(&ext_lower.as_str()) {
+                MAX_CUSTOM_BG_VIDEO_BYTES
+            } else {
+                MAX_CUSTOM_BG_BYTES
+            };
             if restored_images >= MAX_SNAPSHOT_IMAGES_COUNT
-                || entry.size() > MAX_CUSTOM_BG_BYTES
+                || entry.size() > max_item_bytes
                 || total_restored_img_bytes.saturating_add(entry.size())
                     > MAX_SNAPSHOT_TOTAL_IMAGES_BYTES
             {
                 continue;
             }
             let mut img_bytes = Vec::with_capacity(entry.size() as usize);
-            if copy_bounded_from_zip(entry, &mut img_bytes, MAX_CUSTOM_BG_BYTES, "image").is_err() {
+            if copy_bounded_from_zip(entry, &mut img_bytes, max_item_bytes, "wallpaper").is_err() {
                 continue;
             }
             if total_restored_img_bytes.saturating_add(img_bytes.len() as u64)
                 > MAX_SNAPSHOT_TOTAL_IMAGES_BYTES
-                || detect_image_magic(&img_bytes).is_none()
+                || detect_wallpaper_media_magic(&img_bytes).is_none()
             {
                 continue;
             }
@@ -345,8 +360,10 @@ fn finalize_restored_snapshot_conn(
     restored_images: usize,
     restored_slices: usize,
 ) -> Result<FullSnapshotRestoreResult, String> {
+    let _ = conn.execute_batch("BEGIN IMMEDIATE;");
     relink_restored_custom_bg_paths(conn, user_dir);
     relink_restored_slice_paths(conn, user_dir);
+    let _ = conn.execute_batch("COMMIT;");
 
     let active_id = crate::db::get_active_profile_id(conn);
     let active_profile = query_profile_by_id(conn, active_id)?;
@@ -378,22 +395,29 @@ fn finalize_restored_snapshot_conn(
     })
 }
 
-/// Restores a snapshot with `lock_db()` held ONLY during SQLite backup/relink, keeping heavy
-/// ZIP decompression, integrity checks, and streaming image/slice extraction off the DB lock.
-pub(crate) fn restore_full_snapshot_with_state(
+/// Restores a snapshot atomically: stages/validates the ZIP & SQLite integrity off-lock, then
+/// holds `lock_db()` continuously from `drain_read_pool()` through DB restore, media extraction,
+/// path relinking, and AI cache invalidation so no reader/writer ever observes a partial state.
+pub(crate) fn restore_full_snapshot_with_state<F>(
     state: &crate::db::AppState,
     archive_path: &Path,
-) -> Result<FullSnapshotRestoreResult, String> {
+    on_db_swapped: F,
+) -> Result<FullSnapshotRestoreResult, String>
+where
+    F: FnOnce(),
+{
     let mut prepared = prepare_snapshot_archive_for_restore(&state.user_dir, archive_path)?;
-    {
-        let mut conn = state.lock_db();
-        apply_staged_db_backup(&mut conn, &prepared.staging_conn)?;
-    }
+    let mut conn = state.lock_db();
+    state.drain_read_pool();
+    apply_staged_db_backup(&mut conn, &prepared.staging_conn)?;
     drop(prepared.staging_conn);
     let (restored_images, restored_slices) =
         extract_snapshot_media_assets(&mut prepared.archive, &state.user_dir)?;
-    let conn = state.lock_db();
-    finalize_restored_snapshot_conn(&conn, &state.user_dir, restored_images, restored_slices)
+    let res =
+        finalize_restored_snapshot_conn(&conn, &state.user_dir, restored_images, restored_slices);
+    state.drain_read_pool();
+    on_db_swapped();
+    res
 }
 
 /// Validates a `.audify-backup.zip` archive and atomically restores SQLite + wallpaper images + slices

@@ -1,8 +1,14 @@
 import { SampleItem } from "../../types";
 import { foldSearchText } from "../format";
+import type { TaxonomyWorkerIndex } from "../taxonomyTree";
 import { normalizeMusicalOrCamelotKey } from "./musicalKey";
 
-const MAX_SAMPLE_INDEX_CACHE = 250000;
+const MAX_FOLDER_INDEX_CACHE = 4096;
+const MAX_FOLDED_STR_POOL = 8192;
+const EMPTY_STRINGS: readonly string[] = Object.freeze([]);
+const EMPTY_CUSTOM_FACETS: Readonly<Record<string, readonly string[]>> =
+  Object.freeze({});
+const BUILTIN_FACET_SLUGS = new Set(["category", "genre", "mood", "source"]);
 
 /**
  * Splits camelCase, PascalCase, letter-digit boundaries, and delimiters into folded tokens.
@@ -11,7 +17,7 @@ const MAX_SAMPLE_INDEX_CACHE = 250000;
 export function tokenizeSearchWords(raw: string): string[] {
   if (!raw) return [];
   const tokens = new Set<string>();
-  const chunks = raw.split(/[^a-zA-Z0-9\u00C0-\u024F\u011E-\u015F]+/);
+  const chunks = raw.split(/[^\p{L}\p{N}]+/u);
 
   for (const chunk of chunks) {
     if (!chunk) continue;
@@ -39,57 +45,118 @@ export function tokenizeSearchWords(raw: string): string[] {
   return Array.from(tokens);
 }
 
+interface FolderIndexEntry {
+  foldedParent: string;
+  foldedFolder: string;
+  parentWords: readonly string[];
+}
+
 export interface IndexedSampleEntry {
-  sampleId: number;
-  fileName: string;
-  folderPath: string;
-  tagsSig: string;
-  rawGenre: string;
-  rawArtist: string;
-  rawAlbum: string;
-  rawYear: string;
-  rawBpm: number | null;
-  rawMusicalKey: string;
-  rawCamelotKey: string;
   foldedGenre: string;
   foldedArtist: string;
   foldedAlbum: string;
   foldedYear: string;
   foldedStem: string;
-  normalizedPhraseStem: string;
   foldedExt: string;
   foldedParent: string;
   foldedFolder: string;
-  nameWords: string[];
-  parentWords: string[];
-  tagNamesFolded: string[];
+  nameWords: readonly string[];
+  parentWords: readonly string[];
+  tagNamesFolded: readonly string[];
+  tagPathsFolded: readonly string[];
+  genreTagNamesFolded: readonly string[];
+  moodTagNamesFolded: readonly string[];
+  sourceTagNamesFolded: readonly string[];
+  customFacetTermsFolded: Readonly<Record<string, readonly string[]>>;
   detectedBpm: number | null;
   effectiveCamelotKey: string;
 }
 
-const sampleIndexCache = new Map<number, IndexedSampleEntry>();
+/**
+ * WeakMap keyed by immutable `SampleItem` references so evicted/mutated samples
+ * are automatically GC'd without storing 10 duplicate raw-field copies per row.
+ */
+let sampleIndexCache = new WeakMap<SampleItem, IndexedSampleEntry>();
+let activeSearchTaxonomy: TaxonomyWorkerIndex | null = null;
+let knownCustomFacetSlugs: ReadonlySet<string> = new Set<string>();
+const folderIndexCache = new Map<string, FolderIndexEntry>();
+const foldedStringPool = new Map<string, string>();
+
+export function getKnownCustomFacetSlugs(): ReadonlySet<string> {
+  return knownCustomFacetSlugs;
+}
+
+export function setSmartSearchTaxonomy(
+  taxonomy: TaxonomyWorkerIndex | null
+): void {
+  if (activeSearchTaxonomy === taxonomy) return;
+  activeSearchTaxonomy = taxonomy;
+  if (taxonomy?.facetDomainBySlug) {
+    const custom = new Set<string>();
+    for (const rawSlug of Object.keys(taxonomy.facetDomainBySlug)) {
+      const foldedSlug = foldSearchText(rawSlug);
+      if (foldedSlug && !BUILTIN_FACET_SLUGS.has(foldedSlug)) {
+        custom.add(foldedSlug);
+      }
+    }
+    knownCustomFacetSlugs = custom;
+  } else {
+    knownCustomFacetSlugs = new Set<string>();
+  }
+  sampleIndexCache = new WeakMap<SampleItem, IndexedSampleEntry>();
+}
 
 export function clearSmartSearchCache(): void {
-  sampleIndexCache.clear();
+  sampleIndexCache = new WeakMap<SampleItem, IndexedSampleEntry>();
+  folderIndexCache.clear();
+  foldedStringPool.clear();
 }
 
 /**
- * Removes only entries whose sample IDs are no longer in the active catalog,
- * preserving valid `IndexedSampleEntry` records across incremental updates.
+ * Kept for API compatibility; `sampleIndexCache` is a `WeakMap<SampleItem, ...>`
+ * so removed samples are reclaimed automatically by GC.
  */
 export function pruneSmartSearchCache(
   validIds: ReadonlyMap<number, unknown>
 ): void {
-  if (sampleIndexCache.size === 0) return;
   if (validIds.size === 0) {
-    sampleIndexCache.clear();
-    return;
+    clearSmartSearchCache();
   }
-  for (const id of sampleIndexCache.keys()) {
-    if (!validIds.has(id)) {
-      sampleIndexCache.delete(id);
-    }
+}
+
+function internFolded(raw: string): string {
+  if (!raw) return "";
+  let cached = foldedStringPool.get(raw);
+  if (cached !== undefined) return cached;
+  cached = foldSearchText(raw);
+  if (foldedStringPool.size < MAX_FOLDED_STR_POOL) {
+    foldedStringPool.set(raw, cached);
   }
+  return cached;
+}
+
+function getFolderIndex(folderPath: string): FolderIndexEntry {
+  const key = folderPath || "";
+  const hit = folderIndexCache.get(key);
+  if (hit) return hit;
+
+  const normFolder = key.replace(/\\/g, "/");
+  const lastSlash = normFolder.lastIndexOf("/");
+  const rawParent = lastSlash >= 0 ? normFolder.slice(lastSlash + 1) : normFolder;
+  const foldedParent = foldSearchText(rawParent);
+  const foldedFolder = foldSearchText(normFolder);
+  const parentWords = rawParent ? tokenizeSearchWords(rawParent) : EMPTY_STRINGS;
+  const entry: FolderIndexEntry = { foldedParent, foldedFolder, parentWords };
+
+  if (folderIndexCache.size >= MAX_FOLDER_INDEX_CACHE) {
+    folderIndexCache.clear();
+  }
+  folderIndexCache.set(key, entry);
+  return entry;
+}
+
+export function getNormalizedPhraseStem(idx: IndexedSampleEntry): string {
+  return idx.foldedStem.replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
 function extractBpmFromStem(foldedStem: string): number | null {
@@ -105,21 +172,12 @@ function extractBpmFromStem(foldedStem: string): number | null {
   return null;
 }
 
-function buildTagsSignature(sample: SampleItem): string {
-  if (!sample.tags || sample.tags.length === 0) return "";
-  if (sample.tags.length === 1) {
-    return `${sample.tags[0].id}:${sample.tags[0].name}`;
-  }
-  let sig = "";
-  for (let i = 0; i < sample.tags.length; i++) {
-    const t = sample.tags[i];
-    if (i > 0) sig += "|";
-    sig += `${t.id}:${t.name}`;
-  }
-  return sig;
-}
-
 export function getIndexedSample(sample: SampleItem): IndexedSampleEntry {
+  const cached = sampleIndexCache.get(sample);
+  if (cached) {
+    return cached;
+  }
+
   const rawGenre = sample.genre || "";
   const rawArtist = sample.artist || "";
   const rawAlbum = sample.album || "";
@@ -127,48 +185,150 @@ export function getIndexedSample(sample: SampleItem): IndexedSampleEntry {
   const rawBpm = sample.bpm ?? null;
   const rawMusicalKey = sample.musical_key || "";
   const rawCamelotKey = sample.camelot_key || "";
-  const tagsSig = buildTagsSignature(sample);
-
-  const cached = sampleIndexCache.get(sample.id);
-  if (
-    cached &&
-    cached.fileName === sample.file_name &&
-    cached.folderPath === sample.folder_path &&
-    cached.tagsSig === tagsSig &&
-    cached.rawGenre === rawGenre &&
-    cached.rawArtist === rawArtist &&
-    cached.rawAlbum === rawAlbum &&
-    cached.rawYear === rawYear &&
-    cached.rawBpm === rawBpm &&
-    cached.rawMusicalKey === rawMusicalKey &&
-    cached.rawCamelotKey === rawCamelotKey
-  ) {
-    return cached;
-  }
 
   const dotIdx = sample.file_name.lastIndexOf(".");
   const rawStem =
     dotIdx > 0 ? sample.file_name.slice(0, dotIdx) : sample.file_name;
   const foldedStem = foldSearchText(rawStem);
-  const normalizedPhraseStem = foldedStem
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-  const foldedExt = foldSearchText(sample.extension || "").replace(/^\./, "");
-  const foldedGenre = foldSearchText(rawGenre);
-  const foldedArtist = foldSearchText(rawArtist);
-  const foldedAlbum = foldSearchText(rawAlbum);
-  const foldedYear = foldSearchText(rawYear);
+  const rawExt = sample.extension || "";
+  const foldedExt = rawExt
+    ? internFolded(rawExt.startsWith(".") ? rawExt.slice(1) : rawExt)
+    : "";
+  const foldedGenre = internFolded(rawGenre);
+  const foldedArtist = internFolded(rawArtist);
+  const foldedAlbum = internFolded(rawAlbum);
+  const foldedYear = internFolded(rawYear);
 
-  const normFolder = (sample.folder_path || "").replace(/\\/g, "/");
-  const lastSlash = normFolder.lastIndexOf("/");
-  const rawParent =
-    lastSlash >= 0 ? normFolder.slice(lastSlash + 1) : normFolder;
-  const foldedParent = foldSearchText(rawParent);
-  const foldedFolder = foldSearchText(normFolder);
+  const folderEntry = getFolderIndex(sample.folder_path || "");
+  const nameWords = rawStem ? tokenizeSearchWords(rawStem) : EMPTY_STRINGS;
 
-  const nameWords = tokenizeSearchWords(rawStem);
-  const parentWords = tokenizeSearchWords(rawParent);
-  const tagNamesFolded = sample.tags.map((t) => foldSearchText(t.name));
+  let tagNamesFolded: readonly string[] = EMPTY_STRINGS;
+  let tagPathsFolded: readonly string[] = EMPTY_STRINGS;
+  let genreTagNamesFolded: readonly string[] = EMPTY_STRINGS;
+  let moodTagNamesFolded: readonly string[] = EMPTY_STRINGS;
+  let sourceTagNamesFolded: readonly string[] = EMPTY_STRINGS;
+  let customFacetTermsFolded: Readonly<Record<string, readonly string[]>> =
+    EMPTY_CUSTOM_FACETS;
+
+  if (sample.tags && sample.tags.length > 0) {
+    const names = new Set<string>();
+    const paths = new Set<string>();
+    const genres = new Set<string>();
+    const moods = new Set<string>();
+    const sources = new Set<string>();
+    const customSets = new Map<string, Set<string>>();
+    const metaMap = activeSearchTaxonomy?.searchMetaByTagId;
+    const facetDomains = activeSearchTaxonomy?.facetDomainBySlug;
+    const facetSlugsById = activeSearchTaxonomy?.facetByTagId;
+
+    const addCustomTerm = (slug: string, val: string) => {
+      if (!val) return;
+      let bucket = customSets.get(slug);
+      if (!bucket) {
+        bucket = new Set<string>();
+        customSets.set(slug, bucket);
+      }
+      bucket.add(val);
+    };
+
+    for (let i = 0; i < sample.tags.length; i++) {
+      const t = sample.tags[i];
+      const foldedName = internFolded(t.name);
+      if (foldedName) names.add(foldedName);
+      const meta = metaMap?.[t.id];
+      if (meta) {
+        if (meta.slashPath) paths.add(internFolded(meta.slashPath));
+        const foldedAncestors: string[] = [];
+        for (let a = 0; a < meta.ancestors.length; a++) {
+          const fa = internFolded(meta.ancestors[a]);
+          if (fa) {
+            names.add(fa);
+            foldedAncestors.push(fa);
+          }
+        }
+        const foldedAliases: string[] = [];
+        for (let a = 0; a < meta.aliases.length; a++) {
+          const al = internFolded(meta.aliases[a]);
+          if (al) {
+            names.add(al);
+            foldedAliases.push(al);
+          }
+        }
+
+        const facetSlugFolded = internFolded(meta.facet);
+        const isGenreDomain =
+          meta.domain === "genres" ||
+          meta.facet === "genre" ||
+          meta.facet === "mood" ||
+          facetDomains?.[meta.facet] === "genres";
+
+        if (isGenreDomain) {
+          if (foldedName) genres.add(foldedName);
+          for (let a = 0; a < foldedAncestors.length; a++) {
+            genres.add(foldedAncestors[a]);
+          }
+          for (let a = 0; a < foldedAliases.length; a++) {
+            genres.add(foldedAliases[a]);
+          }
+        }
+        if (meta.facet === "mood") {
+          if (foldedName) moods.add(foldedName);
+          for (let a = 0; a < foldedAncestors.length; a++) {
+            moods.add(foldedAncestors[a]);
+          }
+          for (let a = 0; a < foldedAliases.length; a++) {
+            moods.add(foldedAliases[a]);
+          }
+        } else if (meta.facet === "source") {
+          if (foldedName) sources.add(foldedName);
+          for (let a = 0; a < foldedAliases.length; a++) {
+            sources.add(foldedAliases[a]);
+          }
+        }
+        if (facetSlugFolded && !BUILTIN_FACET_SLUGS.has(facetSlugFolded)) {
+          addCustomTerm(facetSlugFolded, foldedName);
+          for (let a = 0; a < foldedAncestors.length; a++) {
+            addCustomTerm(facetSlugFolded, foldedAncestors[a]);
+          }
+          for (let a = 0; a < foldedAliases.length; a++) {
+            addCustomTerm(facetSlugFolded, foldedAliases[a]);
+          }
+        }
+      } else {
+        if (foldedName) paths.add(foldedName);
+        const mappedSlug = facetSlugsById?.[t.id];
+        const rawSlug = mappedSlug ? internFolded(mappedSlug) : "";
+        if (rawSlug === "genre") {
+          if (foldedName) genres.add(foldedName);
+        } else if (rawSlug === "mood") {
+          if (foldedName) {
+            genres.add(foldedName);
+            moods.add(foldedName);
+          }
+        } else if (rawSlug === "source") {
+          if (foldedName) sources.add(foldedName);
+        } else if (rawSlug && !BUILTIN_FACET_SLUGS.has(rawSlug)) {
+          if (facetDomains?.[rawSlug] === "genres" && foldedName) {
+            genres.add(foldedName);
+          }
+          addCustomTerm(rawSlug, foldedName);
+        }
+      }
+    }
+    tagNamesFolded = names.size > 0 ? Array.from(names) : EMPTY_STRINGS;
+    tagPathsFolded = paths.size > 0 ? Array.from(paths) : EMPTY_STRINGS;
+    genreTagNamesFolded = genres.size > 0 ? Array.from(genres) : EMPTY_STRINGS;
+    moodTagNamesFolded = moods.size > 0 ? Array.from(moods) : EMPTY_STRINGS;
+    sourceTagNamesFolded = sources.size > 0 ? Array.from(sources) : EMPTY_STRINGS;
+    if (customSets.size > 0) {
+      const rec: Record<string, readonly string[]> = {};
+      for (const [slug, vals] of customSets.entries()) {
+        rec[slug] = Array.from(vals);
+      }
+      customFacetTermsFolded = rec;
+    }
+  }
+
   const detectedBpm = rawBpm ?? extractBpmFromStem(foldedStem);
 
   let effectiveCamelotKey = rawCamelotKey.trim().toUpperCase();
@@ -178,41 +338,26 @@ export function getIndexedSample(sample: SampleItem): IndexedSampleEntry {
   }
 
   const entry: IndexedSampleEntry = {
-    sampleId: sample.id,
-    fileName: sample.file_name,
-    folderPath: sample.folder_path,
-    tagsSig,
-    rawGenre,
-    rawArtist,
-    rawAlbum,
-    rawYear,
-    rawBpm,
-    rawMusicalKey,
-    rawCamelotKey,
     foldedGenre,
     foldedArtist,
     foldedAlbum,
     foldedYear,
     foldedStem,
-    normalizedPhraseStem,
     foldedExt,
-    foldedParent,
-    foldedFolder,
+    foldedParent: folderEntry.foldedParent,
+    foldedFolder: folderEntry.foldedFolder,
     nameWords,
-    parentWords,
+    parentWords: folderEntry.parentWords,
     tagNamesFolded,
+    tagPathsFolded,
+    genreTagNamesFolded,
+    moodTagNamesFolded,
+    sourceTagNamesFolded,
+    customFacetTermsFolded,
     detectedBpm,
     effectiveCamelotKey,
   };
 
-  if (sampleIndexCache.size >= MAX_SAMPLE_INDEX_CACHE) {
-    let toEvict = Math.floor(MAX_SAMPLE_INDEX_CACHE / 5);
-    for (const k of sampleIndexCache.keys()) {
-      sampleIndexCache.delete(k);
-      if (--toEvict <= 0) break;
-    }
-  }
-
-  sampleIndexCache.set(sample.id, entry);
+  sampleIndexCache.set(sample, entry);
   return entry;
 }

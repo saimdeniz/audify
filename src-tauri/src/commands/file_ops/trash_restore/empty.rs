@@ -174,15 +174,8 @@ pub(super) fn commit_empty_trash_db(
     }
     let affected_ids: Vec<i64> = rows.iter().map(|(sid, _, _)| *sid).collect();
 
-    // Clean up orphaned auto-tags and auto-genres while preserving user-created ones
-    let _ = tx.execute(
-        "DELETE FROM tags WHERE is_manual = 0 AND id NOT IN (SELECT DISTINCT tag_id FROM sample_tags)",
-        [],
-    );
-    let _ = tx.execute(
-        "DELETE FROM genres WHERE is_manual = 0 AND LOWER(name) NOT IN (SELECT DISTINCT LOWER(genre) FROM samples WHERE genre != '')",
-        [],
-    );
+    // Clean up orphaned auto-tags and auto-genres while preserving user-created ones, system roots, and parent tags
+    let _ = crate::db::prune_orphan_auto_tags(&tx);
 
     tx.commit().map_err(|e| {
         format!(

@@ -25,15 +25,72 @@ pub fn resample_mono_to_16k(mono: &[f32], in_sr: u32, max_samples: usize) -> Vec
     let est_out = ((mono.len() as f64) / ratio).floor().max(1.0) as usize;
     let out_len = est_out.min(max_samples);
     let mut out = Vec::with_capacity(out_len);
-    let last_idx = mono.len() - 1;
+    let last_idx = (mono.len() - 1) as isize;
+    let use_aa_sinc = ratio > 1.05;
+    let aa_cutoff = (0.92 / ratio).min(1.0);
+    // Allow up to 32 taps so 192 kHz (ratio = 12, 2*ratio = 24) retains full 2-lobe anti-aliasing
+    let aa_radius = if use_aa_sinc {
+        ((2.0 * ratio).ceil() as isize).clamp(3, 32)
+    } else {
+        0
+    };
+
+    // Precompute symmetric Hann-windowed sinc LUT (64 subdivisions/tap) to eliminate ~18M sin/cos
+    // transcendental calls per 192 kHz clip during AI indexing.
+    const SINC_LUT_SUBDIV: usize = 64;
+    let sinc_lut: Vec<f64> = if use_aa_sinc {
+        let r_f64 = aa_radius as f64;
+        let entries = (aa_radius as usize) * SINC_LUT_SUBDIV + 2;
+        let mut table = Vec::with_capacity(entries);
+        for i in 0..entries {
+            let d = (i as f64) / (SINC_LUT_SUBDIV as f64);
+            if d >= r_f64 {
+                table.push(0.0);
+            } else {
+                let x = std::f64::consts::PI * d * aa_cutoff;
+                let sinc = if x.abs() < 1e-9 { 1.0 } else { x.sin() / x };
+                let win = 0.5 * (1.0 + (std::f64::consts::PI * d / r_f64).cos());
+                table.push(sinc * win);
+            }
+        }
+        table
+    } else {
+        Vec::new()
+    };
 
     for i in 0..out_len {
         let src_pos = (i as f64) * ratio;
-        let idx = (src_pos.floor() as usize).min(last_idx);
-        let frac = (src_pos - (idx as f64)) as f32;
-        let a = mono[idx];
-        let b = mono[(idx + 1).min(last_idx)];
-        let sample = a + (b - a) * frac;
+        let idx = src_pos.floor() as isize;
+        let sample = if use_aa_sinc {
+            // Hann-windowed sinc low-pass filter prevents HF cymbal/transient aliasing into 16 kHz YAMNet band
+            let r_f64 = aa_radius as f64;
+            let mut acc = 0.0_f64;
+            let mut w_sum = 0.0_f64;
+            for k in -aa_radius..=aa_radius {
+                let s_idx = (idx + k).clamp(0, last_idx) as usize;
+                let d_abs = ((idx + k) as f64 - src_pos).abs();
+                if d_abs >= r_f64 {
+                    continue;
+                }
+                let lut_pos = d_abs * (SINC_LUT_SUBDIV as f64);
+                let lut_i = lut_pos as usize;
+                let lut_t = lut_pos - (lut_i as f64);
+                let w = sinc_lut[lut_i] + (sinc_lut[lut_i + 1] - sinc_lut[lut_i]) * lut_t;
+                w_sum += w;
+                acc += (mono[s_idx] as f64) * w;
+            }
+            if w_sum.abs() > 1e-9 {
+                (acc / w_sum) as f32
+            } else {
+                mono[idx.clamp(0, last_idx) as usize]
+            }
+        } else {
+            let idx_u = idx.clamp(0, last_idx) as usize;
+            let frac = (src_pos - (idx as f64)) as f32;
+            let a = mono[idx_u];
+            let b = mono[(idx_u + 1).min(last_idx as usize)];
+            a + (b - a) * frac
+        };
         out.push(if sample.is_finite() {
             sample.clamp(-1.0, 1.0)
         } else {
@@ -113,14 +170,22 @@ pub fn decode_waveform_for_ai(path: &Path) -> Result<Vec<f32>, String> {
     loop {
         let packet = match format.next_packet() {
             Ok(p) => p,
-            Err(SymphoniaError::IoError(_)) | Err(SymphoniaError::ResetRequired) => break,
-            Err(_) => break,
+            Err(SymphoniaError::ResetRequired) => {
+                decoder.reset();
+                continue;
+            }
+            Err(SymphoniaError::IoError(_)) | Err(_) => break,
         };
         if packet.track_id() != track_id {
             continue;
         }
-        let Ok(decoded) = decoder.decode(&packet) else {
-            continue;
+        let decoded = match decoder.decode(&packet) {
+            Ok(d) => d,
+            Err(SymphoniaError::ResetRequired) => {
+                decoder.reset();
+                continue;
+            }
+            Err(_) => continue,
         };
         let frames = decoded.frames();
         if frames == 0 {
@@ -172,7 +237,7 @@ pub fn decode_waveform_for_ai(path: &Path) -> Result<Vec<f32>, String> {
     }
 
     if orig_sr == 0 || mono.is_empty() {
-        return Err("Decoded audio stream is empty".to_string());
+        return Err(EMPTY_AUDIO_ERR.to_string());
     }
 
     let max_decode_16k = (AI_DECODE_WINDOW_SECONDS * (AI_TARGET_SAMPLE_RATE as f64)).ceil() as usize;
@@ -181,7 +246,14 @@ pub fn decode_waveform_for_ai(path: &Path) -> Result<Vec<f32>, String> {
     let window = select_active_window(&resampled, max_ai_samples);
 
     if !has_usable_audio_energy(&window) {
-        return Err("Audio signal is silent or below energy threshold".to_string());
+        return Err(SILENT_AUDIO_ERR.to_string());
     }
     Ok(window)
+}
+
+pub(super) const EMPTY_AUDIO_ERR: &str = "Decoded audio stream is empty";
+pub(super) const SILENT_AUDIO_ERR: &str = "Audio signal is silent or below energy threshold";
+
+pub(super) fn is_non_fatal_silent_audio_err(err: &str) -> bool {
+    err == SILENT_AUDIO_ERR || err == EMPTY_AUDIO_ERR
 }

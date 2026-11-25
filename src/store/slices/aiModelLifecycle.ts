@@ -19,9 +19,30 @@ export type AiModelLifecycleActions = Pick<
  * to keep store modules focused and under size budgets.
  */
 export function createAiModelLifecycleActions(
-  ctx: StoreSliceContext
+  ctx: StoreSliceContext,
+  cancelPendingSimilaritySearch?: () => void
 ): AiModelLifecycleActions {
   const { set, get, getProfileEpoch, emitNotice } = ctx;
+
+  const buildClearedAiDataPatch = () => {
+    cancelPendingSimilaritySearch?.();
+    const prevSim = get().similaritySession;
+    const prevSortKey = get().sortKey;
+    return {
+      aiSuggestionsBySampleId: {},
+      similaritySession: null,
+      externalSimilarityPendingFile: null,
+      ...(prevSim
+        ? {
+            sortKey:
+              prevSim.prevSortKey === "match" ? null : prevSim.prevSortKey,
+            sortDir: prevSim.prevSortDir,
+          }
+        : prevSortKey === "match"
+        ? { sortKey: null }
+        : {}),
+    };
+  };
 
   return {
     fetchAiModelStatus: async () => {
@@ -176,9 +197,7 @@ export function createAiModelLifecycleActions(
         set({
           aiModelStatus: status,
           pendingAiSuggestionsCount: status.pending_suggestions_count,
-          ...(clearAiData
-            ? { aiSuggestionsBySampleId: {}, similaritySession: null }
-            : {}),
+          ...(clearAiData ? buildClearedAiDataPatch() : {}),
         });
         emitNotice(
           clearAiData
@@ -191,7 +210,7 @@ export function createAiModelLifecycleActions(
         if (epoch !== getProfileEpoch()) return;
         // Partial delete (e.g. yamnet.onnx removed + DB cleared while loaded onnxruntime.dll stays locked on Windows)
         if (clearAiData) {
-          set({ aiSuggestionsBySampleId: {}, similaritySession: null });
+          set(buildClearedAiDataPatch());
         }
         await get().fetchAiModelStatus();
         postCrossWindowSync("catalog");

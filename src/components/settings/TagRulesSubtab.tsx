@@ -1,16 +1,24 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { AUDIFY_STORAGE_KEYS } from "../../constants/storageKeys";
 import { useSampleStore } from "../../store/useSampleStore";
 import {
   AutoTagCategoryConfig,
   AutoTagPreviewResult,
   AutoTagRule,
+  TaxonomyFacetSlug,
 } from "../../types";
+import { detectLegacyFlatAutoTagRules } from "../../utils/autoTagRuleUpgrade";
+import {
+  loadPersistedBoolMap,
+  savePersistedBoolMap,
+} from "./settingsTreeStorage";
 import { TagRuleCategoryList } from "./TagRuleCategoryList";
 import { TagRuleInspector } from "./TagRuleInspector";
 import { useMainFilterAction } from "./useMainFilterAction";
 
 export const TagRulesSubtab: React.FC = () => {
   const activeProfileId = useSampleStore((s) => s.activeProfile?.id);
+  const tagFacets = useSampleStore((s) => s.tagFacets);
   const tags = useSampleStore((s) => s.tags);
   const autoTagRules = useSampleStore((s) => s.autoTagRules);
   const autoTagCategories = useSampleStore((s) => s.autoTagCategories);
@@ -23,6 +31,9 @@ export const TagRulesSubtab: React.FC = () => {
   const addAutoTagCategory = useSampleStore((s) => s.addAutoTagCategory);
   const renameAutoTagCategory = useSampleStore((s) => s.renameAutoTagCategory);
   const deleteAutoTagCategory = useSampleStore((s) => s.deleteAutoTagCategory);
+  const upgradeLegacyAutoTagRules = useSampleStore(
+    (s) => s.upgradeLegacyAutoTagRules
+  );
   const setAutoTagCategoryPaths = useSampleStore(
     (s) => s.setAutoTagCategoryPaths
   );
@@ -31,9 +42,12 @@ export const TagRulesSubtab: React.FC = () => {
   );
 
   const [autoTagSearchQuery, setAutoTagSearchQuery] = useState("");
+  const [facetFilter, setFacetFilter] = useState<"all" | TaxonomyFacetSlug>("all");
   const [collapsedCategories, setCollapsedCategories] = useState<
     Record<string, boolean>
-  >({});
+  >(() =>
+    loadPersistedBoolMap(AUDIFY_STORAGE_KEYS.settingsRuleCollapsedCategories)
+  );
   const [confirmDeleteCategoryName, setConfirmDeleteCategoryName] = useState<
     string | null
   >(null);
@@ -42,8 +56,12 @@ export const TagRulesSubtab: React.FC = () => {
     string | null
   >(null);
   const [inspectorCategoryName, setInspectorCategoryName] = useState("");
-  const [inspectorRuleKeywords, setInspectorRuleKeywords] = useState("");
-  const [inspectorRuleTagName, setInspectorRuleTagName] = useState("");
+  const [inspectorRuleKeywords, setInspectorRuleKeywords] = useState(() =>
+    ((autoTagRules || [])[0]?.keywords || []).join(", ")
+  );
+  const [inspectorRuleTagName, setInspectorRuleTagName] = useState(
+    () => (autoTagRules || [])[0]?.tag_name || ""
+  );
   const [confirmDeleteRuleId, setConfirmDeleteRuleId] = useState<string | null>(
     null
   );
@@ -74,8 +92,16 @@ export const TagRulesSubtab: React.FC = () => {
     return () => window.removeEventListener("keydown", onEsc, true);
   }, [isRuleCategoryDropdownOpen]);
 
-  const toggleCategoryCollapse = (cat: string) =>
-    setCollapsedCategories((prev) => ({ ...prev, [cat]: !prev[cat] }));
+  const toggleCategoryCollapse = useCallback((cat: string) => {
+    setCollapsedCategories((prev) => {
+      const next = { ...prev, [cat]: !prev[cat] };
+      savePersistedBoolMap(
+        AUDIFY_STORAGE_KEYS.settingsRuleCollapsedCategories,
+        next
+      );
+      return next;
+    });
+  }, []);
 
   const allAvailableCategories = useMemo(() => {
     const canonicalByLower = new Map<string, string>();
@@ -97,18 +123,26 @@ export const TagRulesSubtab: React.FC = () => {
     return Array.from(canonicalByLower.values());
   }, [autoTagCategories, autoTagRules]);
 
+  const hasLegacyFlatRules = useMemo(
+    () => detectLegacyFlatAutoTagRules(autoTagRules || []),
+    [autoTagRules]
+  );
+
   const filteredAutoTagRules = useMemo(() => {
     const q = autoTagSearchQuery.trim().toLowerCase();
-    if (!q) return autoTagRules || [];
     return (autoTagRules || []).filter((r) => {
+      const ruleFacet: TaxonomyFacetSlug = r.facet_slug || "category";
+      if (facetFilter !== "all" && ruleFacet !== facetFilter) return false;
+      if (!q) return true;
       const matchName = r.tag_name.toLowerCase().includes(q);
       const matchKw = (r.keywords || []).some((k) =>
         k.toLowerCase().includes(q)
       );
       const matchCat = (r.category || "").toLowerCase().includes(q);
-      return matchName || matchKw || matchCat;
+      const matchParent = (r.parent_tag_name || "").toLowerCase().includes(q);
+      return matchName || matchKw || matchCat || matchParent;
     });
-  }, [autoTagRules, autoTagSearchQuery]);
+  }, [autoTagRules, autoTagSearchQuery, facetFilter]);
 
   const rulesByCategory = useMemo(() => {
     const map = new Map<string, AutoTagRule[]>();
@@ -142,11 +176,34 @@ export const TagRulesSubtab: React.FC = () => {
   const visibleCategories = useMemo(() => {
     const list = Array.from(rulesByCategory.entries());
     const q = autoTagSearchQuery.trim().toLowerCase();
+    if (facetFilter !== "all") {
+      return list.filter(([, rules]) => rules.length > 0);
+    }
     if (!q) return list;
     return list.filter(
       ([cat, rules]) => rules.length > 0 || cat.toLowerCase().includes(q)
     );
-  }, [rulesByCategory, autoTagSearchQuery]);
+  }, [rulesByCategory, autoTagSearchQuery, facetFilter]);
+
+  const expandAllCategories = useCallback(() => {
+    savePersistedBoolMap(
+      AUDIFY_STORAGE_KEYS.settingsRuleCollapsedCategories,
+      {}
+    );
+    setCollapsedCategories({});
+  }, []);
+
+  const collapseAllCategories = useCallback(() => {
+    const next: Record<string, boolean> = {};
+    for (const [cat] of visibleCategories) {
+      next[cat] = true;
+    }
+    savePersistedBoolMap(
+      AUDIFY_STORAGE_KEYS.settingsRuleCollapsedCategories,
+      next
+    );
+    setCollapsedCategories(next);
+  }, [visibleCategories]);
 
   const activeInspectedCategory = useMemo(() => {
     if (!selectedCategoryName) return null;
@@ -295,8 +352,14 @@ export const TagRulesSubtab: React.FC = () => {
     <div className="flex flex-col gap-2.5 flex-1 min-h-0">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 flex-1 min-h-0">
         <TagRuleCategoryList
+          tagFacets={tagFacets}
+          tags={tags}
           autoTagSearchQuery={autoTagSearchQuery}
           setAutoTagSearchQuery={setAutoTagSearchQuery}
+          facetFilter={facetFilter}
+          setFacetFilter={setFacetFilter}
+          hasLegacyFlatRules={hasLegacyFlatRules}
+          onUpgradeLegacyRules={upgradeLegacyAutoTagRules}
           allAvailableCategories={allAvailableCategories}
           autoTagRules={autoTagRules}
           autoTagCategories={autoTagCategories}
@@ -304,6 +367,8 @@ export const TagRulesSubtab: React.FC = () => {
           visibleCategories={visibleCategories}
           collapsedCategories={collapsedCategories}
           toggleCategoryCollapse={toggleCategoryCollapse}
+          onExpandAllCategories={expandAllCategories}
+          onCollapseAllCategories={collapseAllCategories}
           activeInspectedCategory={activeInspectedCategory}
           activeInspectedRule={activeInspectedRule}
           confirmDeleteCategoryName={confirmDeleteCategoryName}
@@ -320,9 +385,11 @@ export const TagRulesSubtab: React.FC = () => {
           addAutoTagCategory={addAutoTagCategory}
           deleteAutoTagCategory={deleteAutoTagCategory}
           addAutoTagRule={addAutoTagRule}
+          updateAutoTagRule={updateAutoTagRule}
         />
 
         <TagRuleInspector
+          tagFacets={tagFacets}
           tags={tags}
           allAvailableCategories={allAvailableCategories}
           rulesByCategory={rulesByCategory}

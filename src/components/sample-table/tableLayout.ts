@@ -17,20 +17,87 @@ export type VisibleColumnsState = {
   dateAdded: boolean;
 };
 
+// Balanced studio default for fresh installs (~1,134px — fits 1080p with zero horizontal scroll).
+// Existing users' saved column visibility in localStorage is preserved untouched.
 export const DEFAULT_VISIBLE_COLS: VisibleColumnsState = {
   class: true,
-  artist: true,
-  album: true,
-  year: true,
+  artist: false,
+  album: false,
+  year: false,
   genre: true,
   bpm: true,
   key: true,
   tags: true,
   time: true,
   format: true,
-  dateModified: true,
-  dateAdded: true,
+  dateModified: false,
+  dateAdded: false,
 };
+
+export const COLUMN_LAYOUT_PRESETS: readonly {
+  id: "sfx" | "music" | "minimal";
+  label: string;
+  title: string;
+  cols: VisibleColumnsState;
+}[] = [
+  {
+    id: "sfx",
+    label: "SFX Post",
+    title: "Optimized for sound design & video editing (Class, Tags, Time, Format)",
+    cols: {
+      class: true,
+      artist: false,
+      album: false,
+      year: false,
+      genre: true,
+      bpm: false,
+      key: false,
+      tags: true,
+      time: true,
+      format: true,
+      dateModified: false,
+      dateAdded: false,
+    },
+  },
+  {
+    id: "music",
+    label: "Music / DJ",
+    title: "Optimized for music & loops (BPM, Key, Genre, Tags, Time, Artist)",
+    cols: {
+      class: true,
+      artist: true,
+      album: false,
+      year: false,
+      genre: true,
+      bpm: true,
+      key: true,
+      tags: true,
+      time: true,
+      format: false,
+      dateModified: false,
+      dateAdded: false,
+    },
+  },
+  {
+    id: "minimal",
+    label: "Minimal",
+    title: "Compact view with zero horizontal scrolling (Name, Waveform, Tags, Time)",
+    cols: {
+      class: false,
+      artist: false,
+      album: false,
+      year: false,
+      genre: false,
+      bpm: false,
+      key: false,
+      tags: true,
+      time: true,
+      format: false,
+      dateModified: false,
+      dateAdded: false,
+    },
+  },
+];
 
 export type ColumnId =
   | "class"

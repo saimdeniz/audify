@@ -5,10 +5,12 @@ import {
   SliceOpHistoryItem,
 } from "../../types";
 import { normalizePathForMatch } from "../../utils/pathHelpers";
+import { internSamplePool } from "../../utils/sampleInterning";
 import { clearSmartSearchCache } from "../../utils/smartSearch";
 import { resetPlayheadClock } from "../playheadClock";
 import { persistNavigationFilters } from "../storageHelpers";
 import type { StoreSliceContext } from "../types";
+import { cancelPendingSimilaritySearch } from "./aiSlice";
 
 const MAX_SLICE_OP_HISTORY = 30;
 
@@ -170,6 +172,7 @@ export function createSliceUndoAndJumpActions(
     },
 
     jumpToSliceSource: async (entry: SliceHistoryEntry) => {
+      const startEpoch = ctx.getProfileEpoch();
       const st = get();
       // Unwrap any legacy chained slice-of-slice hops safely before library lookup
       let rootEntry = entry;
@@ -204,10 +207,15 @@ export function createSliceUndoAndJumpActions(
               includePeaks: false,
             }
           );
+          if (sourceSample) {
+            internSamplePool([sourceSample], get().tags);
+          }
         } catch {
           sourceSample = null;
         }
       }
+
+      if (startEpoch !== ctx.getProfileEpoch()) return;
 
       if (!sourceSample) {
         emitNotice(
@@ -217,6 +225,8 @@ export function createSliceUndoAndJumpActions(
         return;
       }
 
+      const prevSim = get().similaritySession;
+      cancelPendingSimilaritySearch();
       clearSmartSearchCache();
       persistNavigationFilters(null, null, false, null);
       set({
@@ -233,10 +243,21 @@ export function createSliceUndoAndJumpActions(
         selectedLicenseGroupId: null,
         selectedTagIds: [],
         selectedGenre: null,
+        typeFilter: "all",
+        srFilter: null,
+        similaritySession: null,
+        ...(prevSim
+          ? {
+              sortKey:
+                prevSim.prevSortKey === "match" ? null : prevSim.prevSortKey,
+              sortDir: prevSim.prevSortDir,
+            }
+          : {}),
       });
 
       if (!applyInstantMemoryFilter({ preserveMultiSelect: false })) {
         await get().fetchSamples({ preserveMultiSelect: false });
+        if (startEpoch !== ctx.getProfileEpoch()) return;
       }
 
       const nextPitch = Number.isFinite(rootEntry.pitch_semitones)

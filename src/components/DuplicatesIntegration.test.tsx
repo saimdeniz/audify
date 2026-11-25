@@ -350,7 +350,6 @@ describe("Integrated Duplicates View & UI Polish", () => {
           dropFlashTarget={null}
           favoriteOnly={false}
           recentOnly={false}
-          typeFilter="all"
           totalSamplesCount={100}
           totalFavoritesCount={5}
           recentSamplesCount={3}
@@ -360,7 +359,6 @@ describe("Integrated Duplicates View & UI Polish", () => {
           setFavoriteOnly={vi.fn()}
           setRecentOnly={vi.fn()}
           clearRecentSamples={vi.fn()}
-          setTypeFilter={vi.fn()}
           updateDragHoverTarget={vi.fn()}
         />
       </>
@@ -643,7 +641,6 @@ describe("Integrated Duplicates View & UI Polish", () => {
       <SampleTableRow
         sample={s}
         rowIndex={2}
-        totalSamples={4}
         startOffsetPx={68}
         totalTableWidth={900}
         isSimilarityMode={false}
@@ -680,7 +677,7 @@ describe("Integrated Duplicates View & UI Polish", () => {
       />
     );
 
-    const row = container.querySelector('[role="option"]');
+    const row = container.querySelector('[role="row"]');
     expect(row?.className).toContain("audify-dup-group-start");
     expect(row?.className).toContain("audify-row-surface-alt");
     expect(row?.className).not.toContain("border-t-2");
@@ -917,7 +914,6 @@ describe("Integrated Duplicates View & UI Polish", () => {
       <SampleTableRow
         sample={s4}
         rowIndex={1}
-        totalSamples={4}
         startOffsetPx={34}
         totalTableWidth={900}
         isSimilarityMode={false}
@@ -954,7 +950,7 @@ describe("Integrated Duplicates View & UI Polish", () => {
     );
     const badge = screen.getByText("#G2 · 95%");
     expect(badge.className).toContain("text-warn");
-    expect(container.querySelector('[role="option"]')).toBeTruthy();
+    expect(container.querySelector('[role="row"]')).toBeTruthy();
   });
 
   it("supports All (80%+ min) in Similar Audio scan dropdown and locks compact Mini Dock FilterDrawer to a single-row h-[74px]", async () => {
@@ -1069,9 +1065,9 @@ describe("Integrated Duplicates View & UI Polish", () => {
     const { container } = render(<FilterDrawer compact={true} />);
 
     const simBtn = await screen.findByRole("button", { name: /^Similar$/i });
-    const drawerBody = container.querySelector(".h-\\[74px\\]");
-    expect(drawerBody).toBeTruthy();
-    expect(drawerBody?.className).toContain("overflow-y-auto");
+    const drawerBody = screen.getByTestId("filter-drawer-body");
+    expect(drawerBody.style.height).toBe("74px");
+    expect(drawerBody.className).toContain("overflow-y-auto");
     expect(container.querySelector(".min-h-\\[68px\\]")).toBeNull();
 
     const controlsRow = simBtn.parentElement?.parentElement;

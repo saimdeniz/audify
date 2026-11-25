@@ -5,7 +5,11 @@ use lofty::probe::Probe;
 use std::fs::{self, File};
 use std::path::Path;
 use symphonia::core::audio::{SampleBuffer, SignalSpec};
-use symphonia::core::codecs::{Decoder, DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::codecs::{
+    Decoder, DecoderOptions, CODEC_TYPE_NULL, CODEC_TYPE_PCM_F32BE, CODEC_TYPE_PCM_F32LE,
+    CODEC_TYPE_PCM_F64BE, CODEC_TYPE_PCM_F64LE, CODEC_TYPE_PCM_S24BE, CODEC_TYPE_PCM_S24LE,
+    CODEC_TYPE_PCM_S32BE, CODEC_TYPE_PCM_S32LE,
+};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::{FormatOptions, FormatReader};
 use symphonia::core::io::MediaSourceStream;
@@ -66,7 +70,20 @@ pub(crate) fn open_audio_decoder(path: &Path) -> Result<OpenedAudioDecoder, Stri
         .map(|c| c.count())
         .filter(|&c| c > 0)
         .unwrap_or(0);
-    let bit_depth = track.codec_params.bits_per_sample.unwrap_or(16);
+    let bit_depth = track
+        .codec_params
+        .bits_per_sample
+        .or(track.codec_params.bits_per_coded_sample)
+        .or(match track.codec_params.codec {
+            CODEC_TYPE_PCM_S24LE | CODEC_TYPE_PCM_S24BE => Some(24),
+            CODEC_TYPE_PCM_S32LE
+            | CODEC_TYPE_PCM_S32BE
+            | CODEC_TYPE_PCM_F32LE
+            | CODEC_TYPE_PCM_F32BE => Some(32),
+            CODEC_TYPE_PCM_F64LE | CODEC_TYPE_PCM_F64BE => Some(64),
+            _ => None,
+        })
+        .unwrap_or(16);
     let n_frames = track.codec_params.n_frames;
 
     let decoder = symphonia::default::get_codecs()
@@ -95,7 +112,7 @@ struct DecodedBlocks {
     n_frames_hint: Option<u64>,
 }
 
-pub(super) fn copy_packet_samples<'a>(
+pub(crate) fn copy_packet_samples<'a>(
     slot: &'a mut Option<(SignalSpec, usize, SampleBuffer<f32>)>,
     decoded: symphonia::core::audio::AudioBufferRef<'_>,
 ) -> Option<(SignalSpec, usize, &'a [f32])> {
@@ -145,15 +162,26 @@ fn decode_audio_blocks(path: &Path) -> Option<DecodedBlocks> {
     loop {
         let packet = match format.next_packet() {
             Ok(p) => p,
-            Err(SymphoniaError::IoError(_)) | Err(SymphoniaError::ResetRequired) => break,
-            Err(_) => break,
+            Err(SymphoniaError::ResetRequired) => {
+                decoder.reset();
+                continue;
+            }
+            Err(SymphoniaError::IoError(_)) | Err(_) => break,
         };
 
         if packet.track_id() != track_id {
             continue;
         }
 
-        if let Ok(decoded) = decoder.decode(&packet) {
+        let decoded = match decoder.decode(&packet) {
+            Ok(d) => d,
+            Err(SymphoniaError::ResetRequired) => {
+                decoder.reset();
+                continue;
+            }
+            Err(_) => continue,
+        };
+        {
             let Some((spec, frames, samples)) = copy_packet_samples(&mut sample_buf_slot, decoded)
             else {
                 continue;
@@ -390,13 +418,24 @@ pub fn compute_preview_norm_gain(path: &Path) -> Option<f32> {
     loop {
         let packet = match format.next_packet() {
             Ok(p) => p,
-            Err(SymphoniaError::IoError(_)) | Err(SymphoniaError::ResetRequired) => break,
-            Err(_) => break,
+            Err(SymphoniaError::ResetRequired) => {
+                decoder.reset();
+                continue;
+            }
+            Err(SymphoniaError::IoError(_)) | Err(_) => break,
         };
         if packet.track_id() != track_id {
             continue;
         }
-        if let Ok(decoded) = decoder.decode(&packet) {
+        let decoded = match decoder.decode(&packet) {
+            Ok(d) => d,
+            Err(SymphoniaError::ResetRequired) => {
+                decoder.reset();
+                continue;
+            }
+            Err(_) => continue,
+        };
+        {
             let Some((spec, frames, samples)) = copy_packet_samples(&mut sample_buf_slot, decoded)
             else {
                 continue;

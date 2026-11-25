@@ -63,44 +63,75 @@ pub const UCS_CATID_MAP: &[(&str, &str)] = &[
     ("WHSH", "Whoosh"),
     ("SWSH", "Whoosh"),
     ("WEAP", "Weapons"),
-    ("GUN", "Weapons"),
-    ("SWD", "Weapons"),
+    ("GUN", "Gunshot"),
+    ("SWD", "Melee"),
     ("MAGC", "Magic"),
     ("SPLL", "Magic"),
     ("FIRE", "Fire"),
     ("WATR", "Water"),
+    ("SCIFI", "Sci-Fi"),
     ("SCIF", "Sci-Fi"),
     ("SCI", "Sci-Fi"),
     ("UI", "UI"),
     ("ANML", "Animals"),
-    ("MOSTR", "Animals"),
-    ("CRTR", "Animals"),
-    ("FOLY", "Footsteps"),
+    ("MOSTR", "Monster"),
+    ("CRTR", "Monster"),
+    ("FOLY", "Foley"),
     ("FOOT", "Footsteps"),
+    ("DOOR", "Door"),
+    ("GLAS", "Glass"),
+    ("WOOD", "Wood"),
+    ("METL", "Metal"),
+    ("CLTH", "Cloth"),
     ("WEAT", "Weather"),
     ("RAIN", "Weather"),
     ("WIND", "Weather"),
     ("AMB", "Ambience"),
     ("AMBN", "Ambience"),
     ("BGD", "Ambience"),
-    ("IMPT", "Combat"),
-    ("FITE", "Combat"),
-    ("HIT", "Combat"),
+    ("IMPT", "Impact"),
+    ("FITE", "Impact"),
+    ("HIT", "Impact"),
+    ("VOX", "Vocal"),
+    ("VEHC", "Vehicles"),
+    ("ALRM", "Alarm"),
     ("MUSC", "Music"),
     ("MCOM", "Music"),
     ("SONG", "Music"),
 ];
 
 /// Extracts the Category ID (CatID) from a Universal Category System (UCS) filename.
+/// Requires an underscore separator (`<CatID>_<Description>`) and enforces exact match
+/// or a valid UCS subcategory boundary (all-uppercase CatID or uppercase/digit suffix start)
+/// so regular English words (`Rainbow.wav`, `Window_Break.wav`, `Amber_Pad.wav`,
+/// `Scissors_Cut.wav`, `Football_Crowd.wav`) are never misclassified.
 pub fn extract_ucs_cat_id(file_name: &str) -> Option<&'static str> {
-    let prefix = file_name.split('_').next()?;
-    if prefix.is_empty() || prefix.len() > 15 {
+    let (prefix, _rest) = file_name.split_once('_')?;
+    if prefix.is_empty() || prefix.len() > 15 || !prefix.is_ascii() {
         return None;
     }
-    let upper = prefix.to_uppercase();
+    let upper = prefix.to_ascii_uppercase();
     for &(cat_code, tag_name) in UCS_CATID_MAP {
-        if upper == cat_code || upper.starts_with(cat_code) {
+        if upper == cat_code {
             return Some(tag_name);
+        }
+        if upper.starts_with(cat_code) {
+            let cat_part = &prefix[..cat_code.len()];
+            let suffix = &prefix[cat_code.len()..];
+            let cat_is_upper = cat_part.bytes().all(|b| b.is_ascii_uppercase());
+            let starts_digit_or_hyphen = suffix
+                .as_bytes()
+                .first()
+                .is_some_and(|b| b.is_ascii_digit() || *b == b'-');
+            let is_camel_subcat = cat_is_upper
+                && suffix
+                    .as_bytes()
+                    .first()
+                    .is_some_and(|b| b.is_ascii_uppercase())
+                && suffix.bytes().any(|b| b.is_ascii_lowercase());
+            if starts_digit_or_hyphen || is_camel_subcat {
+                return Some(tag_name);
+            }
         }
     }
     None

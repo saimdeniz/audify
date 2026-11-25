@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { Profile, SampleItem } from "../types";
+import { clearCatalogSortCaches } from "../utils/catalogFilterCore";
 import { computeSmartCollectionCounts } from "../utils/smartCollectionCounts";
 import { clearSmartSearchCache, executeSmartSearch } from "../utils/smartSearch";
 import {
@@ -7,6 +8,7 @@ import {
   clearCatalogWorkerSearchCache,
   shouldUseCatalogWorker,
   syncCatalogWorkerPool,
+  syncCatalogWorkerTaxonomy,
 } from "../workers/catalogWorkerClient";
 import {
   applyClientFacetFilters,
@@ -21,6 +23,7 @@ import {
   applyProfileSettingsToStore,
   buildProfileSettingsJsonFromStore,
 } from "./profileSettingsBridge";
+import { resetPlayheadClock } from "./playheadClock";
 import { createAiSlice, invalidateAiSliceAsyncState } from "./slices/aiSlice";
 import { createCatalogMutationSlice } from "./slices/catalogMutationSlice";
 import { createCatalogSyncSlice } from "./slices/catalogSyncSlice";
@@ -31,13 +34,17 @@ import {
 import { createFileOpsSlice } from "./slices/fileOpsSlice";
 import { createFilterSlice } from "./slices/filterSlice";
 import { createLibrarySyncSlice } from "./slices/librarySyncSlice";
-import { createPlaybackSlice } from "./slices/playbackSlice";
+import {
+  createPlaybackSlice,
+  PlaybackSliceTimers,
+} from "./slices/playbackSlice";
 import { createProfileSlice } from "./slices/profileSlice";
 import {
   createSettingsAndBinSlice,
   SettingsSliceTimers,
 } from "./slices/settingsAndBinSlice";
 import { createSliceHistorySlice } from "./slices/sliceHistorySlice";
+import { createStatusNoticeController } from "./statusNoticeController";
 import { persistNavigationFilters } from "./storageHelpers";
 import {
   CreditToastPayload,
@@ -60,7 +67,6 @@ export type {
 };
 
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-let noticeDismissTimer: ReturnType<typeof setTimeout> | null = null;
 let currentFetchSeq = 0;
 let currentProfileEpoch = 0;
 
@@ -88,15 +94,63 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
     ) {
       patch = { ...patch, trashedProfileSamples: [] };
     }
+    if (patch && typeof patch === "object") {
+      const nextSearchQuery =
+        "searchQuery" in patch && typeof patch.searchQuery === "string"
+          ? patch.searchQuery
+          : state.searchQuery;
+      const nextColId =
+        "selectedCollectionId" in patch
+          ? patch.selectedCollectionId
+          : state.selectedCollectionId;
+      const nextCollections = patch.collections ?? state.collections;
+      const prevCol =
+        state.selectedCollectionId !== null
+          ? state.collections.find((c) => c.id === state.selectedCollectionId) ??
+            null
+          : null;
+      const nextCol =
+        nextColId !== null && nextColId !== undefined
+          ? nextCollections.find((c) => c.id === nextColId) ?? null
+          : null;
+      const hadActiveSearchOrSmart =
+        state.searchQuery.trim() !== "" ||
+        Boolean(prevCol?.smart_query?.trim());
+      const hasActiveSearchOrSmart =
+        nextSearchQuery.trim() !== "" ||
+        Boolean(nextCol?.smart_query?.trim());
+      if (hadActiveSearchOrSmart && !hasActiveSearchOrSmart) {
+        clearCatalogWorkerSearchCache();
+      }
+    }
     if (
       patch &&
       typeof patch === "object" &&
-      "searchQuery" in patch &&
-      typeof patch.searchQuery === "string" &&
-      patch.searchQuery.trim() === "" &&
-      state.searchQuery.trim() !== ""
+      (("tags" in patch && patch.tags !== undefined && patch.tags !== state.tags) ||
+        ("tagFacets" in patch &&
+          patch.tagFacets !== undefined &&
+          patch.tagFacets !== state.tagFacets))
     ) {
-      clearCatalogWorkerSearchCache();
+      const nextTags =
+        "tags" in patch && patch.tags !== undefined ? patch.tags : state.tags;
+      const nextFacets =
+        "tagFacets" in patch && patch.tagFacets !== undefined
+          ? patch.tagFacets
+          : state.tagFacets;
+      syncCatalogWorkerTaxonomy(nextTags, nextFacets);
+    }
+    if (
+      patch &&
+      typeof patch === "object" &&
+      "allProfileSamples" in patch &&
+      patch.allProfileSamples !== undefined &&
+      patch.allProfileSamples !== state.allProfileSamples
+    ) {
+      if (shouldUseCatalogWorker(patch.allProfileSamples.length)) {
+        syncCatalogWorkerPool(patch.allProfileSamples);
+      } else {
+        clearCatalogWorkerPool();
+      }
     }
     if (
       patch &&
@@ -110,13 +164,6 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
       const nextCollections = patch.collections ?? state.collections;
       const nextSynonyms =
         patch.smartSearchSynonyms ?? state.smartSearchSynonyms;
-      if ("allProfileSamples" in patch) {
-        if (shouldUseCatalogWorker(nextPool.length)) {
-          syncCatalogWorkerPool(nextPool);
-        } else {
-          clearCatalogWorkerPool();
-        }
-      }
       const hasSmartCollections = nextCollections.some((c) =>
         Boolean(c.smart_query?.trim())
       );
@@ -162,32 +209,24 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
 
   const settingsTimers: SettingsSliceTimers = {
     flushPendingTint: () => {},
+    cancelPendingTint: () => {},
     clearToastTimers: () => {},
   };
-
-  const emitNotice = (
-    message: string,
-    kind: "info" | "success" | "error" = "info"
-  ) => {
-    if (noticeDismissTimer !== null) {
-      clearTimeout(noticeDismissTimer);
-      noticeDismissTimer = null;
-    }
-    const seq = (get().statusNotice?.seq || 0) + 1;
-    set({
-      statusMessage: message,
-      statusNotice: { message, kind, seq },
-    });
-    noticeDismissTimer = setTimeout(() => {
-      noticeDismissTimer = null;
-      if (get().statusNotice?.seq === seq) {
-        set({ statusNotice: null });
-      }
-    }, 4200);
+  const playbackTimers: PlaybackSliceTimers = {
+    flushPendingVolume: () => {},
+    cancelPendingVolume: () => {},
   };
+
+  const {
+    emitNotice,
+    clearStatusNotice,
+    pauseStatusNotice,
+    resumeStatusNotice,
+  } = createStatusNoticeController(set, get);
 
   const prepareForProfileTransition = async () => {
     clearSearchDebounceTimer();
+    playbackTimers.flushPendingVolume();
     settingsTimers.flushPendingTint();
   };
 
@@ -195,12 +234,27 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
     clearSearchDebounceTimer();
     persistNavigationFilters(null, null, false, null);
     clearSmartSearchCache();
+    clearCatalogSortCaches();
+    resetPlayheadClock(0);
     const prevSim = get().similaritySession;
     set({
       allProfileSamples: [],
       trashedProfileSamples: [],
       favoritesCount: 0,
       knownSampleIds: EMPTY_SAMPLE_ID_SET,
+      selectedSample: null,
+      isPlaying: false,
+      currentTimeSec: 0,
+      sliceRange: null,
+      fileOpUndoStack: [],
+      fileOpRedoStack: [],
+      pendingTrashRequest: null,
+      pendingFileConflictPrompt: null,
+      batchRenameSampleIds: null,
+      autoTagImpactPreview: null,
+      canUndoAutoTagApply: false,
+      aiSuggestionsBySampleId: {},
+      pendingAiSuggestionsCount: 0,
       searchQuery: "",
       folderFilter: null,
       selectedCollectionId: null,
@@ -232,6 +286,8 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
       favoriteOnly: false,
       recentOnly: false,
       selectedTagIds: [],
+      excludedTagIds: [],
+      tagMatchMode: "all",
       selectedGenre: null,
       selectedSampleIds: [],
       lastSelectedIndex: null,
@@ -291,6 +347,7 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
 
     const runSyncMemoryFilter = () => {
       const live = get();
+      const taxonomyIndex = syncCatalogWorkerTaxonomy(live.tags, live.tagFacets);
       const baseResult = filterBaseSamplesInMemory(
         live.allProfileSamples,
         live.folderFilter,
@@ -306,7 +363,10 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
         buildDuplicateOrderMap(
           live.duplicatesFilterActive,
           live.duplicateScanResult
-        )
+        ),
+        live.excludedTagIds,
+        taxonomyIndex,
+        live.tagMatchMode
       );
       const smartBaseResult = smartQuery
         ? executeSmartSearch(baseResult, smartQuery, live.smartSearchSynonyms)
@@ -323,6 +383,9 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
       if (!smartQuery && trimmedSearch === "") {
         clearSmartSearchCache();
       }
+      if (!live.sortKey) {
+        clearCatalogSortCaches();
+      }
       const filtered = applyClientFacetFilters(
         searchedResult,
         live.typeFilter,
@@ -338,6 +401,12 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
         preserveMultiSelect
       );
 
+      const selectionChanged =
+        (reconciled.nextSelected?.id ?? null) !== (live.selectedSample?.id ?? null);
+      if (selectionChanged) {
+        resetPlayheadClock(0);
+      }
+
       set({
         rawSamples: searchedResult,
         samples: filtered,
@@ -347,6 +416,7 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
         durationSec: reconciled.nextSelected
           ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
           : live.durationSec,
+        ...(selectionChanged ? { sliceRange: null, currentTimeSec: 0 } : {}),
       });
     };
 
@@ -378,6 +448,8 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
     applyProfileSettingsImmediately,
     buildCurrentProfileSettingsJson,
     bumpProfileEpoch: () => {
+      playbackTimers.cancelPendingVolume();
+      settingsTimers.cancelPendingTint();
       invalidateAiSliceAsyncState();
       return ++currentProfileEpoch;
     },
@@ -400,7 +472,7 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
     bumpFetchSeq: () => ++currentFetchSeq,
   });
   const profileSlice = createProfileSlice(sliceCtx);
-  const playbackSlice = createPlaybackSlice(sliceCtx);
+  const playbackSlice = createPlaybackSlice(sliceCtx, playbackTimers);
   const catalogMutationSlice = createCatalogMutationSlice(sliceCtx);
   const settingsAndBinSlice = createSettingsAndBinSlice(sliceCtx, settingsTimers);
   const fileOpsSlice = createFileOpsSlice(sliceCtx);
@@ -421,6 +493,9 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
     ...duplicateSlice,
     ...aiSlice,
     ...sliceHistorySlice,
+    clearStatusNotice,
+    pauseStatusNotice,
+    resumeStatusNotice,
   };
 });
 

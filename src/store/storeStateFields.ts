@@ -9,14 +9,18 @@ import {
   AsciiMagicLook,
   AsciiPresetId,
   AutoTagCategoryConfig,
+  AutoTagImpactPreview,
   AutoTagRule,
   BackupFileInfo,
+  BatchJobProgressPayload,
   BpmKeyProgressPayload,
   Collection,
   CollectionRuleTemplate,
   DuplicateScanMode,
   DuplicateScanProgressPayload,
   DuplicateScanResult,
+  ExportAudioPreset,
+  ExportLoudnessMode,
   FileOpJournalEntry,
   TrashOpStatus,
   FolderStat,
@@ -24,6 +28,7 @@ import {
   KeyboardShortcuts,
   Library,
   LicenseGroup,
+  MiniDockEdgeSide,
   PendingSnapshotRestore,
   Profile,
   SampleItem,
@@ -37,6 +42,7 @@ import {
   SortDir,
   SortKey,
   Tag,
+  TagFacet,
   ThemeMode,
   TrashViewTab,
   TypeFilter,
@@ -66,6 +72,7 @@ export interface SampleStoreDataState {
   samples: SampleItem[];
   favoritesCount: number;
   knownSampleIds: ReadonlySet<number>;
+  tagFacets: TagFacet[];
   tags: Tag[];
   genres: Genre[];
   collections: Collection[];
@@ -80,8 +87,11 @@ export interface SampleStoreDataState {
   recentOnly: boolean;
   recentSampleIds: number[];
   selectedTagIds: number[];
+  excludedTagIds: number[];
+  tagMatchMode: import("../types").TagMatchMode;
   selectedGenre: string | null;
   isDetectingGenres: boolean;
+  genreDetectProgress: BatchJobProgressPayload | null;
   selectedCollectionId: number | null;
   selectedLicenseGroupId: string | null;
   binFilterActive: boolean;
@@ -156,6 +166,8 @@ export interface SampleStoreDataState {
   playTriggerSeq: number;
 
   // Settings, Theme, Visual Customization, Audio, Shortcuts, Auto-Tag & Licenses
+  sidebarCollapsed: boolean;
+  sidebarCompactHover: boolean;
   isSettingsOpen: boolean;
   isSettingsWindowVisible: boolean;
   settingsTab: SettingsTab;
@@ -168,6 +180,9 @@ export interface SampleStoreDataState {
   playheadLatencyMs: number | null;
   audioOutputDeviceId: string;
   sliceMicroFade: boolean;
+  exportAudioPreset: ExportAudioPreset;
+  exportLoudnessMode: ExportLoudnessMode;
+  skipLeadingSilence: boolean;
   normalizePreview: boolean;
   autoAnalyzeBpmKey: boolean;
   enableLiveFolderWatch: boolean;
@@ -175,6 +190,8 @@ export interface SampleStoreDataState {
   bpmKeyProgress: BpmKeyProgressPayload | null;
   isMiniDock: boolean;
   isMiniDockPinned: boolean;
+  miniDockEdgePeek: boolean;
+  miniDockEdgeSide: MiniDockEdgeSide;
   enableMica: boolean;
   themeTintIntensity: number;
   customBgImage: string;
@@ -191,6 +208,10 @@ export interface SampleStoreDataState {
   autoTagRules: AutoTagRule[];
   autoTagCategories: AutoTagCategoryConfig[];
   autoTagRulesDirty: boolean;
+  isApplyingAutoTags: boolean;
+  autoTagProgress: BatchJobProgressPayload | null;
+  autoTagImpactPreview: AutoTagImpactPreview | null;
+  canUndoAutoTagApply: boolean;
   localBackups: BackupFileInfo[];
   pendingSnapshotRestore: PendingSnapshotRestore | null;
   enableLicensesSystem: boolean;
@@ -204,6 +225,7 @@ export interface SampleStoreDataState {
   // In-App Drag-and-Drop state
   inAppDragSample: SampleItem | null;
   inAppDragSamples: SampleItem[];
+  inAppDragOrigin: "list" | "deck-header" | null;
 
   // Scanner & Diagnostics
   isScanning: boolean;
@@ -226,6 +248,7 @@ export interface SampleStoreDataState {
   isAnalyzingAi: boolean;
   aiIndexProgress: AiIndexProgressPayload | null;
   similaritySession: SimilaritySession | null;
+  externalSimilarityPendingFile: string | null;
   aiSuggestionsBySampleId: Record<number, AiTagSuggestionItem[]>;
   pendingAiSuggestionsCount: number;
 }
@@ -239,7 +262,11 @@ export interface SampleFilterAndPlaybackActions {
   clearRecentSamples: () => void;
   toggleTagFilter: (tagId: number) => void;
   selectOrToggleTagFilter: (tagId: number, append: boolean) => void;
-  clearTagFilters: () => void;
+  toggleExcludeTagFilter: (tagId: number) => void;
+  setTagMatchMode: (mode: import("../types").TagMatchMode) => void;
+  toggleTagMatchMode: () => void;
+  clearExcludedTagFilters: () => void;
+  clearTagFilters: (facetSlugs?: readonly import("../types").TaxonomyFacetSlug[]) => void;
   setSelectedGenre: (genre: string | null) => void;
   setCollectionFilter: (collectionId: number | null) => void;
   setTypeFilter: (type: TypeFilter) => void;
@@ -271,6 +298,9 @@ export interface SampleFilterAndPlaybackActions {
   setDurationSec: (sec: number) => void;
   requestSeek: (timeSec: number, playImmediately?: boolean) => void;
   setSliceRange: (range: SliceRange | null) => void;
-  setInAppDragSample: (sample: SampleItem | null) => void;
+  setInAppDragSample: (
+    sample: SampleItem | null,
+    opts?: { single?: boolean; origin?: "list" | "deck-header" }
+  ) => void;
   showInFolder: (filePath: string) => Promise<void>;
 }

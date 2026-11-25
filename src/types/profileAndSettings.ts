@@ -1,5 +1,10 @@
 import type { AiSimilarityScope, AiTaggingMode } from "./aiAndSearch";
 
+export type BuiltInFacetSlug = "category" | "genre" | "mood" | "source";
+export type TaxonomyFacetSlug = BuiltInFacetSlug | (string & {});
+export type TaxonomyDomain = "tags" | "genres";
+export type TagMatchMode = "all" | "any";
+
 export type CollectionIconId =
   | "layers"
   | "folder"
@@ -29,6 +34,9 @@ export interface CollectionRuleTemplate {
 export type ThemeMode = "dark" | "light" | "contrast";
 export type WaveformSensitivity = "logarithmic" | "high_boost" | "linear";
 export type WaveformStyle = "solid_baseline" | "symmetric";
+export type ExportAudioPreset = "original" | "wav_24" | "nle_48k_24";
+export type ExportLoudnessMode = "off" | "peak_m1" | "lufs_m14" | "lufs_m24";
+export type MiniDockEdgeSide = "right" | "left";
 
 export type WallpaperKind = "none" | "image" | "ascii_preset" | "ascii_magic";
 export type AsciiMagicLook =
@@ -204,6 +212,10 @@ export interface KeyboardShortcuts {
   toggleAutoPreview: string;
   toggleMute: string;
   toggleFavorite: string;
+  openTagPicker?: string;
+  openGenrePicker?: string;
+  markSliceIn?: string;
+  markSliceOut?: string;
   saveSlice?: string;
   clearSlice: string;
   removeFromCollection: string;
@@ -248,11 +260,20 @@ export interface AutoTagRule {
   rel_exclude_paths?: string[];
   min_duration_ms?: number;
   max_duration_ms?: number;
+  facet_slug?: TaxonomyFacetSlug;
+  parent_tag_name?: string;
 }
 
 export interface AutoTagPreviewResult {
   match_count: number;
   sample_names: string[];
+}
+
+export interface AutoTagImpactPreview {
+  affected_samples: number;
+  added_links: number;
+  removed_links: number;
+  can_undo: boolean;
 }
 
 export interface ProfileSettings {
@@ -268,12 +289,18 @@ export interface ProfileSettings {
   isShuffle?: boolean;
   volume?: number;
   sliceMicroFade?: boolean;
+  exportAudioPreset?: ExportAudioPreset;
+  exportLoudnessMode?: ExportLoudnessMode;
+  skipLeadingSilence?: boolean;
+  miniDockEdgePeek?: boolean;
+  miniDockEdgeSide?: MiniDockEdgeSide;
   normalizePreview?: boolean;
   autoAnalyzeBpmKey?: boolean;
   smartSearchSynonyms?: boolean;
   autoBinOnNleDrag?: boolean;
   binSampleIds?: number[];
   enableMica?: boolean;
+  sidebarCompactHover?: boolean;
   themeTintIntensity?: number;
   customBgImage?: string;
   customBgBlur?: number;

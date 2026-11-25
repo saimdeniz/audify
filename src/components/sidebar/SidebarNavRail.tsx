@@ -7,7 +7,6 @@ import {
   LayoutGrid,
   Music,
   SlidersHorizontal,
-  Star,
   Trash2,
 } from "lucide-react";
 import type { SidebarTab } from "../LeftSidebar";
@@ -15,9 +14,13 @@ import type { SidebarTab } from "../LeftSidebar";
 interface SidebarNavRailProps {
   railRef: React.RefObject<HTMLDivElement>;
   isMiniOverlay: boolean;
+  isHoverOverlayMode?: boolean;
   showContentColumn: boolean;
   activeTab: SidebarTab;
   setActiveTab: (tab: SidebarTab) => void;
+  onPrimaryTabSelect?: (tab: SidebarTab) => void;
+  onBinRailSelect?: () => void;
+  onTrashRailSelect?: () => void;
   setIsOverlayOpen: (open: boolean) => void;
   isDraggingInApp: boolean;
   isExternalFileDragActive: boolean;
@@ -32,7 +35,7 @@ interface SidebarNavRailProps {
   selectedCollectionId: number | null;
   selectedTagIdsCount: number;
   selectedGenre: string | null;
-  favoriteOnly: boolean;
+  favoriteOnly?: boolean;
   validBinCount: number;
   binFilterActive: boolean;
   trashedCount: number;
@@ -42,7 +45,8 @@ interface SidebarNavRailProps {
   scheduleDragTabSwitch: (tab: SidebarTab) => void;
   cancelDragTabSwitch: () => void;
   updateDragHoverTarget: (next: string | null) => void;
-  setFavoriteOnly: (v: boolean) => void;
+  setFavoriteOnly?: (v: boolean) => void;
+  setBinFilterActive?: (v: boolean) => void;
   setTrashFilterActive: (v: boolean) => void;
   setSettingsOpen: (v: boolean) => void;
 }
@@ -50,9 +54,13 @@ interface SidebarNavRailProps {
 export const SidebarNavRail: React.FC<SidebarNavRailProps> = ({
   railRef,
   isMiniOverlay,
+  isHoverOverlayMode = isMiniOverlay,
   showContentColumn,
   activeTab,
   setActiveTab,
+  onPrimaryTabSelect,
+  onBinRailSelect,
+  onTrashRailSelect,
   setIsOverlayOpen,
   isDraggingInApp,
   isExternalFileDragActive,
@@ -67,7 +75,6 @@ export const SidebarNavRail: React.FC<SidebarNavRailProps> = ({
   selectedCollectionId,
   selectedTagIdsCount,
   selectedGenre,
-  favoriteOnly,
   validBinCount,
   binFilterActive,
   trashedCount,
@@ -77,19 +84,12 @@ export const SidebarNavRail: React.FC<SidebarNavRailProps> = ({
   scheduleDragTabSwitch,
   cancelDragTabSwitch,
   updateDragHoverTarget,
-  setFavoriteOnly,
+  setBinFilterActive,
   setTrashFilterActive,
   setSettingsOpen,
 }) => {
-  const railBtnSize = isMiniOverlay ? "w-[26px] h-[28px]" : "w-[32px] h-[34px]";
-  const railIconSize = isMiniOverlay ? "w-[15px] h-[15px]" : "w-[18px] h-[18px]";
-  const lastPrimaryTabRef = React.useRef<Exclude<SidebarTab, "bin">>("folders");
-
-  React.useEffect(() => {
-    if (activeTab !== "bin") {
-      lastPrimaryTabRef.current = activeTab;
-    }
-  }, [activeTab]);
+  const railBtnSize = "w-[32px] h-[34px]";
+  const railIconSize = "w-[18px] h-[18px]";
 
   const primaryTabs: {
     id: SidebarTab;
@@ -151,19 +151,11 @@ export const SidebarNavRail: React.FC<SidebarNavRailProps> = ({
       ref={railRef}
       data-sidebar="true"
       onMouseLeave={() => {
-        if (isMiniOverlay) scheduleOverlayClose();
+        if (isHoverOverlayMode) scheduleOverlayClose();
       }}
-      className={`${
-        isMiniOverlay
-          ? "w-[30px] py-1.5 px-0.5"
-          : "w-[40px] border-r border-line py-2 px-1"
-      } bg-surface-rail flex flex-col items-center justify-between shrink-0 relative z-20`}
+      className="w-[40px] border-r border-line py-2 px-1 bg-surface-rail flex flex-col items-center justify-between shrink-0 relative z-20"
     >
-      <div
-        className={`flex flex-col items-center ${
-          isMiniOverlay ? "space-y-1" : "space-y-1.5"
-        } w-full`}
-      >
+      <div className="flex flex-col items-center space-y-1.5 w-full">
         {primaryTabs.map((tab) => {
           const isDropHovered =
             tab.dragActive && tab.dragEligible && hoveredRailTab === tab.id;
@@ -176,12 +168,18 @@ export const SidebarNavRail: React.FC<SidebarNavRailProps> = ({
               key={tab.id}
               type="button"
               data-sidebar-tab={tab.id}
-              data-tooltip={isMiniOverlay ? undefined : tab.label}
+              data-tooltip={isHoverOverlayMode ? undefined : tab.label}
               aria-label={tab.label}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
-                setActiveTab(tab.id);
-                if (isMiniOverlay) setIsOverlayOpen(true);
+                if (onPrimaryTabSelect) {
+                  onPrimaryTabSelect(tab.id);
+                } else if (isHoverOverlayMode) {
+                  setActiveTab(tab.id);
+                  setIsOverlayOpen(true);
+                } else {
+                  setActiveTab(tab.id);
+                }
               }}
               onMouseEnter={() => {
                 handleRailTabHoverEnter(tab.id);
@@ -216,137 +214,120 @@ export const SidebarNavRail: React.FC<SidebarNavRailProps> = ({
       </div>
 
       <div className="flex flex-col items-center space-y-1 w-full pt-1.5 border-t border-line">
-        {isMiniOverlay && (
-          <button
-            type="button"
-            data-sidebar-drop="favorites"
-            data-tooltip="Favorites"
-            aria-label="Toggle Favorites"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => setFavoriteOnly(!favoriteOnly)}
-            onMouseEnter={() => {
-              if (isDraggingInApp) updateDragHoverTarget("favorites");
-            }}
-            onMouseLeave={() => {
-              if (dragHoverTarget === "favorites") updateDragHoverTarget(null);
-            }}
-            className={`relative ${railBtnSize} rounded-sm flex items-center justify-center transition-all ${
-              dropFlashTarget === "favorites"
-                ? "text-accent-fg bg-accent-soft ring-2 ring-inset ring-accent"
-                : isDraggingInApp && dragHoverTarget === "favorites"
-                ? "text-accent-on bg-accent ring-2 ring-accent"
-                : favoriteOnly
-                ? "text-accent-fg bg-accent-soft"
-                : "text-fg-head hover:text-fg hover:bg-surface-hover"
-            }`}
-          >
-            <Star
-              className={`${railIconSize} ${
-                favoriteOnly ? "fill-current" : ""
+        {(() => {
+          const isBinActiveTab =
+            binFilterActive && (showContentColumn ? activeTab === "bin" : true);
+          const isBinCrossFiltering =
+            binFilterActive && showContentColumn && activeTab !== "bin";
+          return (
+            <button
+              type="button"
+              data-drop-bin="true"
+              data-sidebar-drop="bin"
+              data-sidebar-tab="bin"
+              data-tooltip="Session Bin"
+              aria-label="Session Bin"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                if (onBinRailSelect) {
+                  onBinRailSelect();
+                } else {
+                  setBinFilterActive?.(!binFilterActive);
+                  if (isHoverOverlayMode) setIsOverlayOpen(false);
+                }
+              }}
+              onMouseEnter={() => {
+                if (isDraggingInApp) {
+                  updateDragHoverTarget("bin");
+                } else if (isHoverOverlayMode && binFilterActive) {
+                  handleRailTabHoverEnter("bin");
+                }
+              }}
+              onMouseLeave={() => {
+                if (dragHoverTarget === "bin") updateDragHoverTarget(null);
+              }}
+              className={`relative ${railBtnSize} rounded-sm flex items-center justify-center transition-all ${
+                dropFlashTarget === "bin"
+                  ? "text-accent-fg bg-accent-soft ring-2 ring-inset ring-accent"
+                  : isDraggingInApp && dragHoverTarget === "bin"
+                  ? "text-accent-on bg-accent ring-2 ring-accent"
+                  : isDraggingInApp && !isDroppableActiveTab
+                  ? "text-accent-fg bg-accent/[0.06] ring-1 ring-inset ring-accent/55"
+                  : isBinActiveTab
+                  ? "text-accent-fg bg-accent-soft"
+                  : isBinCrossFiltering
+                  ? "text-accent-fg hover:bg-surface-hover"
+                  : "text-fg-head hover:text-fg hover:bg-surface-hover"
               }`}
-            />
-          </button>
-        )}
-
-        <button
-          type="button"
-          data-drop-bin="true"
-          data-sidebar-drop="bin"
-          data-sidebar-tab="bin"
-          data-tooltip={isMiniOverlay ? undefined : "Session Bin"}
-          aria-label="Session Bin"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => {
-            if (isMiniOverlay) {
-              if (activeTab === "bin" && showContentColumn) {
-                setIsOverlayOpen(false);
-              } else {
-                setActiveTab("bin");
-                setIsOverlayOpen(true);
-              }
-              return;
-            }
-            if (activeTab === "bin") {
-              setActiveTab(lastPrimaryTabRef.current);
-            } else {
-              setActiveTab("bin");
-            }
-          }}
-          onMouseEnter={() => {
-            handleRailTabHoverEnter("bin");
-            if (isDraggingInApp) updateDragHoverTarget("bin");
-            scheduleDragTabSwitch("bin");
-          }}
-          onMouseLeave={() => {
-            if (dragHoverTarget === "bin") updateDragHoverTarget(null);
-            cancelDragTabSwitch();
-          }}
-          className={`relative ${railBtnSize} rounded-sm flex items-center justify-center transition-all ${
-            dropFlashTarget === "bin"
-              ? "text-accent-fg bg-accent-soft ring-2 ring-inset ring-accent"
-              : isDraggingInApp && dragHoverTarget === "bin"
-              ? "text-accent-on bg-accent ring-2 ring-accent"
-              : isDraggingInApp && !isDroppableActiveTab
-              ? "text-accent-fg bg-accent/[0.06] ring-1 ring-inset ring-accent/55"
-              : (activeTab === "bin" && showContentColumn) ||
-                (isMiniOverlay && binFilterActive)
-              ? "text-accent-fg bg-accent-soft"
-              : "text-fg-head hover:text-fg hover:bg-surface-hover"
-          }`}
-        >
-          {activeTab === "bin" && showContentColumn && (
-            <span className="absolute left-[1px] top-1/2 -translate-y-1/2 w-[2.5px] h-[15px] rounded-full bg-accent" />
-          )}
-          <Inbox className={railIconSize} />
-          {validBinCount > 0 && (
-            <span className="absolute top-0.5 right-0 min-w-[13px] h-[12px] px-0.5 rounded-full bg-accent text-accent-on font-mono text-[8.5px] font-bold flex items-center justify-center">
-              {validBinCount > 99 ? "99+" : validBinCount}
-            </span>
-          )}
-        </button>
+            >
+              {isBinActiveTab && (
+                <span className="absolute left-[1px] top-1/2 -translate-y-1/2 w-[2.5px] h-[15px] rounded-full bg-accent" />
+              )}
+              <Inbox className={railIconSize} />
+              {validBinCount > 0 && (
+                <span className="absolute top-0.5 right-0 min-w-[13px] h-[12px] px-0.5 rounded-full bg-accent text-accent-on font-mono text-[8.5px] font-bold flex items-center justify-center">
+                  {validBinCount > 99 ? "99+" : validBinCount}
+                </span>
+              )}
+            </button>
+          );
+        })()}
 
         {(trashedCount > 0 ||
           trashFilterActive ||
-          (isDraggingInApp && enableAdvancedFileOps)) && (
-          <button
-            type="button"
-            data-sidebar-drop={enableAdvancedFileOps ? "trash" : undefined}
-            data-tooltip="Trash"
-            aria-label="Trash"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              setTrashFilterActive(!trashFilterActive);
-              if (isMiniOverlay) setIsOverlayOpen(false);
-            }}
-            onMouseEnter={() => {
-              if (isDraggingInApp && enableAdvancedFileOps) {
-                updateDragHoverTarget("trash");
-              }
-            }}
-            onMouseLeave={() => {
-              if (dragHoverTarget === "trash") updateDragHoverTarget(null);
-            }}
-            className={`relative ${railBtnSize} rounded-sm flex items-center justify-center transition-all ${
-              dropFlashTarget === "trash"
-                ? "text-accent-fg bg-accent-soft ring-2 ring-inset ring-accent"
-                : isDraggingInApp && dragHoverTarget === "trash"
-                ? "text-accent-on bg-accent ring-2 ring-accent"
-                : trashFilterActive
-                ? "text-accent-fg bg-accent-soft"
-                : "text-fg-head hover:text-fg hover:bg-surface-hover"
-            }`}
-          >
-            {trashFilterActive && (
-              <span className="absolute left-[1px] top-1/2 -translate-y-1/2 w-[2.5px] h-[15px] rounded-full bg-accent" />
-            )}
-            <Trash2 className={railIconSize} />
-            {trashedCount > 0 && (
-              <span className="absolute top-0.5 right-0 min-w-[13px] h-[12px] px-0.5 rounded-full bg-accent text-accent-on font-mono text-[8.5px] font-bold flex items-center justify-center">
-                {trashedCount > 99 ? "99+" : trashedCount}
-              </span>
-            )}
-          </button>
-        )}
+          (isDraggingInApp && enableAdvancedFileOps)) &&
+          (() => {
+            const isTrashActiveTab =
+              trashFilterActive &&
+              (showContentColumn ? activeTab === "trash" : true);
+            return (
+              <button
+                type="button"
+                data-sidebar-drop={enableAdvancedFileOps ? "trash" : undefined}
+                data-sidebar-tab="trash"
+                data-tooltip="Trash"
+                aria-label="Trash"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  if (onTrashRailSelect) {
+                    onTrashRailSelect();
+                  } else {
+                    setTrashFilterActive(!trashFilterActive);
+                    if (isHoverOverlayMode) setIsOverlayOpen(false);
+                  }
+                }}
+                onMouseEnter={() => {
+                  if (isDraggingInApp && enableAdvancedFileOps) {
+                    updateDragHoverTarget("trash");
+                  } else if (isHoverOverlayMode && trashFilterActive) {
+                    handleRailTabHoverEnter("trash");
+                  }
+                }}
+                onMouseLeave={() => {
+                  if (dragHoverTarget === "trash") updateDragHoverTarget(null);
+                }}
+                className={`relative ${railBtnSize} rounded-sm flex items-center justify-center transition-all ${
+                  dropFlashTarget === "trash"
+                    ? "text-accent-fg bg-accent-soft ring-2 ring-inset ring-accent"
+                    : isDraggingInApp && dragHoverTarget === "trash"
+                    ? "text-accent-on bg-accent ring-2 ring-accent"
+                    : isTrashActiveTab
+                    ? "text-accent-fg bg-accent-soft"
+                    : "text-fg-head hover:text-fg hover:bg-surface-hover"
+                }`}
+              >
+                {isTrashActiveTab && (
+                  <span className="absolute left-[1px] top-1/2 -translate-y-1/2 w-[2.5px] h-[15px] rounded-full bg-accent" />
+                )}
+                <Trash2 className={railIconSize} />
+                {trashedCount > 0 && (
+                  <span className="absolute top-0.5 right-0 min-w-[13px] h-[12px] px-0.5 rounded-full bg-accent text-accent-on font-mono text-[8.5px] font-bold flex items-center justify-center">
+                    {trashedCount > 99 ? "99+" : trashedCount}
+                  </span>
+                )}
+              </button>
+            );
+          })()}
 
         <button
           type="button"
@@ -356,11 +337,7 @@ export const SidebarNavRail: React.FC<SidebarNavRailProps> = ({
           onClick={() => setSettingsOpen(true)}
           className={`relative ${railBtnSize} rounded-sm flex items-center justify-center text-fg-head hover:text-accent-fg hover:bg-surface-header transition-colors`}
         >
-          <SlidersHorizontal
-            className={
-              isMiniOverlay ? "w-[14px] h-[14px]" : "w-[17px] h-[17px]"
-            }
-          />
+          <SlidersHorizontal className={railIconSize} />
         </button>
       </div>
     </div>

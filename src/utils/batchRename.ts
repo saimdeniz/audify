@@ -182,8 +182,8 @@ export function buildBatchRenamePreview(
       const rawCollisionCount = countsByTargetKey.get(desiredKey) ?? 0;
 
       if (
-        (!occupiedKeys.has(desiredKey) && rawCollisionCount <= 1) ||
-        (isOwnUnchanged && rawCollisionCount <= 1 && !externalOccupiedKeys.has(desiredKey))
+        (isOwnUnchanged && !externalOccupiedKeys.has(desiredKey)) ||
+        (!occupiedKeys.has(desiredKey) && rawCollisionCount <= 1)
       ) {
         item.finalStem = item.rawNewStem;
         occupiedKeys.add(desiredKey);

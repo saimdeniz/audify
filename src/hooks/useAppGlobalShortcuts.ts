@@ -5,15 +5,24 @@ import { useSampleStore } from "../store/useSampleStore";
 import { resolveSamplesByIds } from "../utils/sampleLookup";
 import {
   isHardwareMediaKey,
+  isRangeSliderTarget,
   isSafeGlobalShortcutInTextEntry,
   isTextEntryTarget,
   matchesShortcut,
   shouldBlurSearchInputOnPointerDown,
 } from "../utils/shortcuts";
 import {
+  handleDawListNavigationShortcut,
+  handleDawTransportAndSliceShortcut,
+} from "./dawShortcutsHelper";
+import {
+  handleF2RenameShortcut,
+  handleMarkSliceInOutShortcut,
+  handleRapidTaxonomyPickerShortcut,
   handleSliceModeKeyDown,
   handleSliceTextEntryUtility,
   handleSliceUndoRedoShortcut,
+  handleToggleFavoriteShortcut,
 } from "./sliceShortcutsHelper";
 
 type AppStoreState = ReturnType<typeof useSampleStore.getState>;
@@ -159,67 +168,6 @@ function handleUndoRedoShortcut(
   return false;
 }
 
-function handleF2RenameShortcut(e: KeyboardEvent, state: AppStoreState): boolean {
-  if (
-    e.key !== "F2" ||
-    e.ctrlKey ||
-    e.metaKey ||
-    e.altKey ||
-    e.shiftKey
-  ) {
-    return false;
-  }
-  e.preventDefault();
-  if (e.repeat) return true;
-  if (state.trashFilterActive) {
-    state.setStatusMessage("Restore file from Trash before renaming");
-    return true;
-  }
-  if (!state.enableAdvancedFileOps) {
-    state.setStatusMessage(
-      "F2 Rename is disabled in Safe Read-Only Mode (Enable in Settings > Advanced)"
-    );
-    return true;
-  }
-  if (state.selectedSampleIds.length > 1) {
-    state.openBatchRenameModal(state.selectedSampleIds);
-    return true;
-  }
-  const { selectedSample } = state;
-  if (selectedSample) {
-    const lib = state.libraries.find((l) => l.id === selectedSample.library_id);
-    if (lib?.is_read_only) {
-      state.setStatusMessage(
-        `Library "${lib.name}" is locked as a Protected Read-Only Vault`
-      );
-      return true;
-    }
-    state.openBatchRenameModal([selectedSample.id]);
-  }
-  return true;
-}
-
-function handleToggleFavoriteShortcut(state: AppStoreState): void {
-  const { selectedSampleIds, selectedSample, samples } = state;
-  if (selectedSampleIds.length > 1) {
-    const idSet = new Set(selectedSampleIds);
-    let hasAny = false;
-    let allFav = true;
-    for (let i = 0; i < samples.length; i++) {
-      if (idSet.has(samples[i].id)) {
-        hasAny = true;
-        if (!samples[i].is_favorite) {
-          allFav = false;
-          break;
-        }
-      }
-    }
-    void state.toggleFavoritesBatch(selectedSampleIds, !(hasAny && allFav));
-  } else if (selectedSample) {
-    void state.toggleFavorite(selectedSample.id);
-  }
-}
-
 function handleCollectionOrTrashDelete(
   e: KeyboardEvent,
   state: AppStoreState
@@ -245,6 +193,16 @@ function handleCollectionOrTrashDelete(
       : matchesShortcut(e, removeKey));
 
   if (selectedCollectionId !== null && matchedRemoveFromCollection) {
+    const activeCol = state.collections.find((c) => c.id === selectedCollectionId);
+    if (activeCol?.smart_query?.trim()) {
+      e.preventDefault();
+      if (!e.repeat) {
+        state.setStatusMessage(
+          "Smart Collections are dynamic — switch to All Samples to trash files"
+        );
+      }
+      return true;
+    }
     const idsToRemove =
       selectedSampleIds.length > 0
         ? selectedSampleIds
@@ -258,6 +216,29 @@ function handleCollectionOrTrashDelete(
           selectedCollectionId,
           idsToRemove
         );
+      }
+    }
+    return true;
+  }
+
+  if (
+    state.binFilterActive &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey &&
+    !e.shiftKey &&
+    (e.key === "Delete" || e.key === "Backspace")
+  ) {
+    const idsToRemove =
+      selectedSampleIds.length > 0
+        ? selectedSampleIds
+        : selectedSample
+        ? [selectedSample.id]
+        : [];
+    if (idsToRemove.length > 0) {
+      e.preventDefault();
+      if (!e.repeat) {
+        state.removeSamplesFromBin(idsToRemove);
       }
     }
     return true;
@@ -294,7 +275,7 @@ function handleCollectionOrTrashDelete(
 
 /**
  * Registers Audify's global keyboard shortcuts for settings, Mini Dock,
- * playback navigation, selection, file operations, and quick tag 1-9 hotkeys.
+ * playback navigation, selection, and file operations.
  */
 export function useAppGlobalShortcuts(): void {
   useEffect(() => {
@@ -308,7 +289,15 @@ export function useAppGlobalShortcuts(): void {
         return;
       }
 
-      if ((e.ctrlKey || e.metaKey) && e.key === ",") {
+      const target = e.target as HTMLElement | null;
+      const isRecordingShortcut = target?.dataset?.shortcutRecorder === "true";
+      const hasBlockingModal =
+        isRecordingShortcut ||
+        state.batchRenameSampleIds !== null ||
+        state.batchRenameSliceIds !== null ||
+        document.querySelector('[data-modal-portal="true"]') !== null;
+
+      if (!hasBlockingModal && (e.ctrlKey || e.metaKey) && e.key === ",") {
         e.preventDefault();
         if (state.isMiniDock) {
           void state.toggleMiniDock().then(() => {
@@ -320,14 +309,12 @@ export function useAppGlobalShortcuts(): void {
         return;
       }
 
-      const target = e.target as HTMLElement | null;
-      const isRecordingShortcut = target?.dataset?.shortcutRecorder === "true";
       const miniDockKey = state.shortcuts.toggleMiniDock ?? "Ctrl+M";
 
       // Allow modifier-chord toggleMiniDock (e.g. Ctrl+M) even when search input is focused
       if (
         !state.isSettingsOpen &&
-        !isRecordingShortcut &&
+        !hasBlockingModal &&
         miniDockKey &&
         isSafeGlobalShortcutInTextEntry(e, miniDockKey)
       ) {
@@ -336,12 +323,7 @@ export function useAppGlobalShortcuts(): void {
         return;
       }
 
-      if (
-        isRecordingShortcut ||
-        state.batchRenameSampleIds !== null ||
-        state.batchRenameSliceIds !== null ||
-        document.querySelector('[data-modal-portal="true"]') !== null
-      ) return;
+      if (hasBlockingModal) return;
       if (!state.isSettingsOpen && handleHardwareMediaKey(e, state)) return;
       if (isTextEntryTarget(target)) {
         if (!state.isSettingsOpen) {
@@ -354,6 +336,20 @@ export function useAppGlobalShortcuts(): void {
         return;
       }
       if (state.isSettingsOpen) return;
+
+      if (
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        (e.key === "F1" || e.key === "?")
+      ) {
+        e.preventDefault();
+        if (!e.repeat) {
+          window.dispatchEvent(new CustomEvent("audify:toggle-shortcuts-cheatsheet"));
+        }
+        return;
+      }
+
       if (handleSliceUndoRedoShortcut(e, state) || handleUndoRedoShortcut(e, state)) return;
 
       if (miniDockKey && matchesShortcut(e, miniDockKey)) {
@@ -437,16 +433,49 @@ export function useAppGlobalShortcuts(): void {
         return;
       }
 
-      if (handleSliceModeKeyDown(e, state)) {
+      const isRangeSlider = isRangeSliderTarget(target);
+      const hasOpenFloatingMenu =
+        document.querySelector(
+          "[data-context-menu-portal='true'], [data-popover-portal='true'], [data-color-picker-portal='true'], [data-quick-create-portal='true']"
+        ) !== null;
+
+      if (
+        !hasOpenFloatingMenu &&
+        handleSliceModeKeyDown(e, state, isRangeSlider)
+      ) {
         return;
       }
 
-      if (e.key === "ArrowDown" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (
+        !isRangeSlider &&
+        !hasOpenFloatingMenu &&
+        handleDawListNavigationShortcut(e, state)
+      ) {
+        return;
+      }
+
+      if (
+        !isRangeSlider &&
+        !hasOpenFloatingMenu &&
+        e.key === "ArrowDown" &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !e.shiftKey
+      ) {
         e.preventDefault();
         state.selectRelativeSample(1);
         return;
       }
-      if (e.key === "ArrowUp" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (
+        !isRangeSlider &&
+        !hasOpenFloatingMenu &&
+        e.key === "ArrowUp" &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !e.shiftKey
+      ) {
         e.preventDefault();
         state.selectRelativeSample(-1);
         return;
@@ -457,13 +486,21 @@ export function useAppGlobalShortcuts(): void {
         selectedSample,
         selectedSampleIds,
         sliceRange,
-        tags,
       } = state;
 
       if (handleTransportShortcuts(e, state, false)) {
         return;
       }
+      if (hasOpenFloatingMenu) {
+        return;
+      }
+      if (handleDawTransportAndSliceShortcut(e, state)) {
+        return;
+      }
       if (handleFileUtilityShortcuts(e, state, false)) {
+        return;
+      }
+      if (handleMarkSliceInOutShortcut(e, state)) {
         return;
       }
       if (matchesShortcut(e, shortcuts.clearSlice)) {
@@ -477,6 +514,9 @@ export function useAppGlobalShortcuts(): void {
       if (matchesShortcut(e, shortcuts.toggleFavorite)) {
         e.preventDefault();
         if (!e.repeat) handleToggleFavoriteShortcut(state);
+        return;
+      }
+      if (handleRapidTaxonomyPickerShortcut(e, state)) {
         return;
       }
 
@@ -513,23 +553,6 @@ export function useAppGlobalShortcuts(): void {
           if (ids.length > 0) {
             e.preventDefault();
             if (!e.repeat) state.addSamplesToBin(ids);
-          }
-        }
-        return;
-      }
-
-      if (/^[1-9]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        if (state.slicesFilterActive) return;
-        const idx = parseInt(e.key, 10) - 1;
-        if (tags[idx]) {
-          e.preventDefault();
-          if (!e.repeat) {
-            const targetTagIds = selectedSampleIds.filter((id) => id > 0);
-            if (targetTagIds.length > 1) {
-              void state.assignTagBatch(targetTagIds, tags[idx].id);
-            } else if (selectedSample && selectedSample.id > 0) {
-              void state.assignTag(selectedSample.id, tags[idx].id);
-            }
           }
         }
         return;

@@ -160,7 +160,7 @@ pub(super) fn scan_js_tokens(source: &str) -> Result<Vec<JsToken>, String> {
             can_start_regex = matches!(
                 ident.as_str(),
                 "return"
-                    | "throw" | "case" | "else" | "typeof" | "void" | "delete" | "in" | "of"
+                    | "throw" | "case" | "else" | "typeof" | "void" | "delete" | "in"
                     | "instanceof" | "await" | "yield" | "new" | "do"
             );
             tokens.push(JsToken { kind: TokenKind::Ident, value: ident, template_id: 0 });

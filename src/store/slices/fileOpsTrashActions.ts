@@ -5,6 +5,7 @@ import { resolveSamplesByIds } from "../../utils/sampleLookup";
 import { clearSmartSearchCache } from "../../utils/smartSearch";
 import { invokeCommand } from "../../utils/tauriCommands";
 export { formatTrashOpLabel } from "../../utils/trashStatusFormat";
+import { resetPlayheadClock } from "../playheadClock";
 import {
   AUDIFY_STORAGE_KEYS,
   safeSetItem,
@@ -21,6 +22,7 @@ export interface FileOpsTrashDeps {
   get: StoreGet;
   applyInstantMemoryFilter: (opts?: { preserveMultiSelect?: boolean }) => boolean;
   emitNotice: (message: string, kind?: "info" | "success" | "error") => void;
+  getProfileEpoch: () => number;
   releaseMatchingAudioHandle: (targetSampleIds: number[]) => Promise<unknown>;
   pushBoundedHistory: (
     stack: FileOpHistoryItem[],
@@ -28,11 +30,34 @@ export interface FileOpsTrashDeps {
   ) => FileOpHistoryItem[];
 }
 
+function pruneFileOpHistoryStack(
+  stack: FileOpHistoryItem[],
+  deletedSet: ReadonlySet<number>
+): FileOpHistoryItem[] {
+  const next: FileOpHistoryItem[] = [];
+  for (const item of stack) {
+    if (item.kind === "rename") {
+      if (!deletedSet.has(item.sampleId)) next.push(item);
+    } else if (item.kind === "batch_rename") {
+      const entries = item.entries.filter((e) => !deletedSet.has(e.sampleId));
+      if (entries.length > 0) next.push({ ...item, entries });
+    } else if (item.kind === "move") {
+      const moves = item.moves.filter((m) => !deletedSet.has(m.sample_id));
+      if (moves.length > 0) next.push({ ...item, moves });
+    } else {
+      const sampleIds = item.sampleIds.filter((id) => !deletedSet.has(id));
+      if (sampleIds.length > 0) next.push({ ...item, sampleIds });
+    }
+  }
+  return next;
+}
+
 export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
   const {
     set,
     get,
     emitNotice,
+    getProfileEpoch,
     releaseMatchingAudioHandle,
     pushBoundedHistory,
   } = deps;
@@ -104,6 +129,7 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
       if (!sampleIds || sampleIds.length === 0 || get().trashOpStatus) {
         return null;
       }
+      const epoch = getProfileEpoch();
       set({
         trashOpStatus: { kind: "moving", count: sampleIds.length },
       });
@@ -112,6 +138,7 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
         const summary = await invokeCommand("move_samples_to_trash", {
           sampleIds,
         });
+        if (epoch !== getProfileEpoch()) return null;
         saveTrashStatus(summary.trashed_count, summary.total_bytes);
         clearSmartSearchCache();
         clearSlicePathCache();
@@ -168,6 +195,12 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
             }
             if (removedAny) nextKnownIds = mutated;
           }
+          const selectedWasTrashed = Boolean(
+            state.selectedSample && targetSet.has(state.selectedSample.id)
+          );
+          if (selectedWasTrashed) {
+            resetPlayheadClock(0);
+          }
           return {
             allProfileSamples: nextAll,
             rawSamples: nextRaw,
@@ -187,10 +220,16 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
             selectedSampleIds: nextSelectedIds,
             lastSelectedIndex:
               nextIdx !== null && nextIdx >= 0 ? nextIdx : null,
-            isPlaying:
-              state.selectedSample && targetSet.has(state.selectedSample.id)
-                ? false
-                : state.isPlaying,
+            isPlaying: selectedWasTrashed ? false : state.isPlaying,
+            ...(selectedWasTrashed
+              ? {
+                  sliceRange: null,
+                  currentTimeSec: 0,
+                  durationSec: nextSelected
+                    ? Math.max(0.01, nextSelected.duration_ms / 1000)
+                    : 0,
+                }
+              : {}),
             trashedCount: summary.trashed_count,
             trashedTotalBytes: summary.total_bytes,
             fileOpUndoStack: nextUndoStack,
@@ -239,6 +278,7 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
         sampleIds && sampleIds.length > 0
           ? sampleIds.length
           : get().trashedCount || idsToRelease.length;
+      const epoch = getProfileEpoch();
       set({
         trashOpStatus: { kind: "restoring", count: targetCount },
       });
@@ -248,6 +288,7 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
           "restore_samples_from_trash",
           { sampleIds: sampleIds && sampleIds.length > 0 ? sampleIds : [] }
         );
+        if (epoch !== getProfileEpoch()) return null;
         clearSmartSearchCache();
         saveTrashStatus(summary.trashed_count, summary.total_bytes);
         set((state) => {
@@ -330,6 +371,7 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
         sampleIds && sampleIds.length > 0
           ? sampleIds.length
           : get().trashedCount || idsToRelease.length;
+      const epoch = getProfileEpoch();
       set({
         trashOpStatus: { kind: "emptying", count: targetCount },
       });
@@ -338,6 +380,7 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
         const summary = await invoke<TrashActionSummary>("empty_audify_trash", {
           sampleIds: sampleIds && sampleIds.length > 0 ? sampleIds : null,
         });
+        if (epoch !== getProfileEpoch()) return null;
         saveTrashStatus(summary.trashed_count, summary.total_bytes);
         clearSmartSearchCache();
         clearSlicePathCache();
@@ -362,14 +405,6 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
           );
         }
         set((state) => {
-          const retainHistoryItem = (item: FileOpHistoryItem) =>
-            item.kind === "rename"
-              ? !deletedSet.has(item.sampleId)
-              : item.kind === "batch_rename"
-              ? item.entries.some((entry) => !deletedSet.has(entry.sampleId))
-              : item.kind === "move"
-              ? item.moves.some((m) => !deletedSet.has(m.sample_id))
-              : item.sampleIds.some((id) => !deletedSet.has(id));
           return {
             trashedCount: summary.trashed_count,
             trashedTotalBytes: summary.total_bytes,
@@ -391,8 +426,14 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
                   sliceRange: null,
                 }
               : {}),
-            fileOpUndoStack: state.fileOpUndoStack.filter(retainHistoryItem),
-            fileOpRedoStack: state.fileOpRedoStack.filter(retainHistoryItem),
+            fileOpUndoStack: pruneFileOpHistoryStack(
+              state.fileOpUndoStack,
+              deletedSet
+            ),
+            fileOpRedoStack: pruneFileOpHistoryStack(
+              state.fileOpRedoStack,
+              deletedSet
+            ),
             ...(summary.trashed_count === 0
               ? state.trashedSliceCount > 0
                 ? { trashViewTab: "slices" as const, folderFilter: null }

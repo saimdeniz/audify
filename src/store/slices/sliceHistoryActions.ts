@@ -68,15 +68,18 @@ export function createSliceHistoryActions(ctx: StoreSliceContext) {
       return false;
     }
     if (!entries || entries.length === 0) return false;
+    const epoch = ctx.getProfileEpoch();
     const st = get();
     const historyMap = new Map(st.sliceHistory.map((s) => [s.id, s]));
     const targetPaths = entries
       .map((e) => historyMap.get(e.slice_id)?.slice_path)
       .filter((p): p is string => Boolean(p));
     await stopAudioIfMatchesAnyPath(targetPaths);
+    if (epoch !== ctx.getProfileEpoch()) return false;
 
     try {
       const outcomes = await invokeCommand("batch_rename_slices", { entries });
+      if (epoch !== ctx.getProfileEpoch()) return false;
       if (outcomes.length === 0) {
         set({ batchRenameSliceIds: null });
         return false;
@@ -139,6 +142,7 @@ export function createSliceHistoryActions(ctx: StoreSliceContext) {
       }
       return true;
     } catch (err) {
+      if (epoch !== ctx.getProfileEpoch()) return false;
       emitNotice(`Slice rename failed: ${String(err)}`, "error");
       return false;
     }
@@ -160,15 +164,18 @@ export function createSliceHistoryActions(ctx: StoreSliceContext) {
     );
     if (cleanIds.length === 0) return false;
 
+    const epoch = ctx.getProfileEpoch();
     const st = get();
     const idSet = new Set(cleanIds);
     const affected = st.sliceHistory.filter((s) => idSet.has(s.id));
     await stopAudioIfMatchesAnyPath(collectSliceMediaPaths(affected));
+    if (epoch !== ctx.getProfileEpoch()) return false;
 
     try {
       const trashedIds = await invokeCommand("trash_slice_files", {
         sliceIds: cleanIds,
       });
+      if (epoch !== ctx.getProfileEpoch()) return false;
       const trashedSet = new Set(trashedIds);
       const removedNames = affected
         .filter((s) => trashedSet.has(s.id))
@@ -234,6 +241,7 @@ export function createSliceHistoryActions(ctx: StoreSliceContext) {
       }
       return true;
     } catch (err) {
+      if (epoch !== ctx.getProfileEpoch()) return false;
       emitNotice(`Move slice to Trash failed: ${String(err)}`, "error");
       return false;
     }
@@ -291,9 +299,12 @@ export function createSliceHistoryActions(ctx: StoreSliceContext) {
         {
           pitchSemitones: st.pitchSemitones,
           applyMicroFade: st.sliceMicroFade,
+          exportPreset: st.exportAudioPreset,
+          loudnessMode: st.exportLoudnessMode,
         }
       );
 
+      const epoch = ctx.getProfileEpoch();
       try {
         const saved = await invokeCommand("save_slice_to_export", {
           filePath: sample.file_path,
@@ -306,13 +317,21 @@ export function createSliceHistoryActions(ctx: StoreSliceContext) {
             Math.abs(st.pitchSemitones) >= 0.01 ? st.pitchSemitones : null,
           applyMicroFade: st.sliceMicroFade,
           customName: customName?.trim() || null,
+          ...(st.exportAudioPreset !== "original"
+            ? { exportPreset: st.exportAudioPreset }
+            : {}),
+          ...(st.exportLoudnessMode !== "off"
+            ? { exportLoudnessMode: st.exportLoudnessMode }
+            : {}),
         });
+        if (epoch !== ctx.getProfileEpoch()) return null;
         set((prev) => ({
           sliceHistory: upsertSliceEntryInList(prev.sliceHistory, saved),
         }));
         emitNotice(`Saved slice "${saved.slice_name}"`, "success");
         return saved;
       } catch (err) {
+        if (epoch !== ctx.getProfileEpoch()) return null;
         emitNotice(`Save slice failed: ${String(err)}`, "error");
         return null;
       }
@@ -334,6 +353,7 @@ export function createSliceHistoryActions(ctx: StoreSliceContext) {
       ) {
         return null;
       }
+      const epoch = ctx.getProfileEpoch();
       try {
         const recorded = await invokeCommand("record_slice_export", {
           slicePath: payload.slicePath,
@@ -347,27 +367,32 @@ export function createSliceHistoryActions(ctx: StoreSliceContext) {
           pitchSemitones: payload.pitchSemitones ?? 0,
           applyMicroFade: Boolean(payload.applyMicroFade),
         });
+        if (epoch !== ctx.getProfileEpoch()) return null;
         set((prev) => ({
           sliceHistory: upsertSliceEntryInList(prev.sliceHistory, recorded),
         }));
         return recorded;
       } catch (err) {
+        if (epoch !== ctx.getProfileEpoch()) return null;
         console.error("Failed recording exported slice:", err);
         return null;
       }
     },
 
     toggleSliceFavorite: async (sliceId: number) => {
+      const epoch = ctx.getProfileEpoch();
       try {
         const updated = await invokeCommand("toggle_slice_favorite", {
           sliceId,
         });
+        if (epoch !== ctx.getProfileEpoch()) return;
         set((prev) => ({
           sliceHistory: prev.sliceHistory.map((item) =>
             item.id === sliceId ? updated : item
           ),
         }));
       } catch (err) {
+        if (epoch !== ctx.getProfileEpoch()) return;
         emitNotice(`Failed toggling slice favorite: ${String(err)}`, "error");
       }
     },
@@ -380,11 +405,13 @@ export function createSliceHistoryActions(ctx: StoreSliceContext) {
         new Set(sliceIds.filter((id) => Number.isSafeInteger(id) && id > 0))
       );
       if (cleanIds.length === 0) return;
+      const epoch = ctx.getProfileEpoch();
       try {
         const updatedIds = await invokeCommand("toggle_slice_favorites_batch", {
           sliceIds: cleanIds,
           isFavorite,
         });
+        if (epoch !== ctx.getProfileEpoch()) return;
         const idSet = new Set(updatedIds);
         set((prev) => ({
           sliceHistory: prev.sliceHistory.map((item) =>
@@ -392,6 +419,7 @@ export function createSliceHistoryActions(ctx: StoreSliceContext) {
           ),
         }));
       } catch (err) {
+        if (epoch !== ctx.getProfileEpoch()) return;
         emitNotice(`Failed updating slice favorites: ${String(err)}`, "error");
       }
     },
@@ -404,8 +432,10 @@ export function createSliceHistoryActions(ctx: StoreSliceContext) {
     },
 
     clearMissingSlices: async () => {
+      const epoch = ctx.getProfileEpoch();
       try {
         const removed = await invokeCommand("clear_missing_slices", {});
+        if (epoch !== ctx.getProfileEpoch()) return 0;
         set((prev) => ({
           sliceHistory: prev.sliceHistory.filter((item) => item.file_exists),
         }));
@@ -419,6 +449,7 @@ export function createSliceHistoryActions(ctx: StoreSliceContext) {
         );
         return removed;
       } catch (err) {
+        if (epoch !== ctx.getProfileEpoch()) return 0;
         emitNotice(`Failed cleaning missing slices: ${String(err)}`, "error");
         return 0;
       }

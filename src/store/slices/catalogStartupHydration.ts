@@ -10,6 +10,7 @@ import {
   SampleRateFilter,
   SliceTrashSummary,
   Tag,
+  TagFacet,
   TrashStatusInfo,
   TypeFilter,
 } from "../../types";
@@ -26,7 +27,10 @@ import {
 } from "../storageHelpers";
 import type { SampleStoreState, StoreSliceContext } from "../types";
 
-export function summarizeSamplePool(list: SampleItem[]): {
+export function summarizeSamplePool(
+  list: SampleItem[],
+  trackedIds?: ReadonlySet<number>
+): {
   knownIds: Set<number>;
   favCount: number;
 } {
@@ -34,7 +38,9 @@ export function summarizeSamplePool(list: SampleItem[]): {
   let favCount = 0;
   for (let i = 0; i < list.length; i++) {
     const s = list[i];
-    knownIds.add(s.id);
+    if (!trackedIds || trackedIds.has(s.id)) {
+      knownIds.add(s.id);
+    }
     if (s.is_favorite) favCount++;
   }
   return { knownIds, favCount };
@@ -120,7 +126,8 @@ export function resolveInitialSelectedSample(
         srFilter,
       })
     ) {
-      filteredInitial.unshift(directSavedSample);
+      // Keep the saved sample ready in the waveform deck without unshifting it
+      // into row 0 (which would cause a visible list jump when Stage 2 loads).
       initialSelected = directSavedSample;
     }
   } else if (savedLast.id !== null || savedLast.path !== null) {
@@ -177,7 +184,8 @@ export function scheduleStartupBackgroundStages(
           fetchCollections
             ? invoke<Collection[]>("get_collections").catch(() => null)
             : Promise.resolve(null),
-        ]).then(([bgTags, bgGenres, bgCollections]) => {
+          invoke<TagFacet[]>("get_tag_facets").catch(() => null),
+        ]).then(([bgTags, bgGenres, bgCollections, bgFacets]) => {
           if (bootEpoch !== getProfileEpoch()) return;
           set((state) => ({
             ...(bgTags !== null && state.tags.length === 0
@@ -188,6 +196,9 @@ export function scheduleStartupBackgroundStages(
               : {}),
             ...(bgCollections !== null && state.collections.length === 0
               ? { collections: bgCollections }
+              : {}),
+            ...(bgFacets !== null && state.tagFacets.length === 0
+              ? { tagFacets: bgFacets }
               : {}),
           }));
         });
@@ -254,6 +265,7 @@ export function buildSidebarRefreshState(
     profiles: Profile[];
     activeProfile: Profile | null;
     libraries: Library[];
+    tagFacets?: TagFacet[];
     tags: Tag[];
     genres: Genre[];
     collections: Collection[];
@@ -266,6 +278,7 @@ export function buildSidebarRefreshState(
     profiles,
     activeProfile,
     libraries,
+    tagFacets,
     tags,
     genres,
     collections,
@@ -279,6 +292,9 @@ export function buildSidebarRefreshState(
   const validCollectionIds = new Set(collections.map((c) => c.id));
 
   const prunedTagIds = state.selectedTagIds.filter((id) => validTagIds.has(id));
+  const prunedExcludedTagIds = state.excludedTagIds.filter((id) =>
+    validTagIds.has(id)
+  );
   const nextGenre =
     state.selectedGenre &&
     validGenresLower.has(state.selectedGenre.toLowerCase())
@@ -307,11 +323,13 @@ export function buildSidebarRefreshState(
     profiles,
     activeProfile,
     libraries,
+    ...(tagFacets ? { tagFacets } : {}),
     tags,
     genres,
     collections,
     folderStats: folderStats ?? state.folderStats,
     selectedTagIds: prunedTagIds,
+    excludedTagIds: prunedExcludedTagIds,
     selectedGenre: nextGenre,
     selectedCollectionId: nextColId,
     ...(trashStatus

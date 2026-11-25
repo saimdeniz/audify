@@ -1,4 +1,12 @@
-import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ChevronsDown,
@@ -16,25 +24,26 @@ import { EMPTY_SAMPLES } from "../../utils/sampleLookup";
 import { FolderTreeRow } from "./FolderTreeRow";
 import {
   buildFolderTreeByLibrary,
-  FolderTreeSampleRef,
   normalizeTreeKey,
 } from "./folderTreeBuilder";
 import { buildFlatFolderRows } from "./folderTreeFlatten";
 import type { SidebarFolderContextMenuState } from "./SidebarFolderContextMenu";
+import {
+  SIDEBAR_TREE_CHILD_HEIGHT,
+  SIDEBAR_TREE_ROOT_HEIGHT,
+} from "./SidebarTreeRow";
+import { useFoldersTreeScope } from "./useFoldersTreeScope";
 
 const LazySidebarFolderContextMenu = lazy(() =>
   import("./SidebarFolderContextMenu").then((m) => ({
     default: m.SidebarFolderContextMenu,
   }))
 );
-import {
-  SIDEBAR_TREE_CHILD_HEIGHT,
-  SIDEBAR_TREE_ROOT_HEIGHT,
-} from "./SidebarTreeRow";
 
 let sessionFolderSearch = "";
 
 export interface FoldersTreeTabProps {
+  forcedScope?: "bin" | "trash";
   dragHoverTarget?: string | null;
   setDragHoverTarget?: (target: string | null) => void;
   dropFlashTarget?: string | null;
@@ -42,6 +51,7 @@ export interface FoldersTreeTabProps {
 }
 
 export const FoldersTreeTab: React.FC<FoldersTreeTabProps> = ({
+  forcedScope,
   dragHoverTarget = null,
   setDragHoverTarget,
   dropFlashTarget = null,
@@ -52,49 +62,6 @@ export const FoldersTreeTab: React.FC<FoldersTreeTabProps> = ({
   const folderStats = useSampleStore((s) => s.folderStats);
   const folderFilter = useSampleStore((s) => s.folderFilter);
   const favoriteOnly = useSampleStore((s) => s.favoriteOnly);
-  const trashFilterActive = useSampleStore((s) => s.trashFilterActive);
-  const duplicatesFilterActive = useSampleStore(
-    (s) => s.duplicatesFilterActive
-  );
-  const duplicateScanResult = useSampleStore((s) => s.duplicateScanResult);
-  const trashedSamples = useSampleStore((s) => {
-    if (!s.trashFilterActive) return EMPTY_SAMPLES;
-    return s.trashedProfileSamples.length > 0
-      ? s.trashedProfileSamples
-      : s.rawSamples;
-  });
-  const favoritesCount = useSampleStore((s) => s.favoritesCount);
-  const loadedPoolLength = useSampleStore((s) => s.allProfileSamples.length);
-  const favoriteSamples = useMemo(() => {
-    if (!favoriteOnly || (favoritesCount === 0 && loadedPoolLength > 0)) {
-      return EMPTY_SAMPLES;
-    }
-    const st = useSampleStore.getState();
-    const pool =
-      st.allProfileSamples.length > 0 ? st.allProfileSamples : st.rawSamples;
-    return folderStats.length >= 0
-      ? pool.filter((item) => item.is_favorite)
-      : EMPTY_SAMPLES;
-  }, [favoriteOnly, favoritesCount, loadedPoolLength, folderStats]);
-  const duplicateSamples = useMemo((): FolderTreeSampleRef[] => {
-    if (!duplicatesFilterActive || !duplicateScanResult) return [];
-    const seenIds = new Set<number>();
-    const list: FolderTreeSampleRef[] = [];
-    for (const group of duplicateScanResult.groups) {
-      for (const entry of group.items) {
-        if (!seenIds.has(entry.sample_id)) {
-          seenIds.add(entry.sample_id);
-          const normFile = entry.file_path.replace(/\\/g, "/");
-          const slash = normFile.lastIndexOf("/");
-          list.push({
-            library_id: entry.library_id,
-            folder_path: slash > 0 ? normFile.slice(0, slash) : normFile,
-          });
-        }
-      }
-    }
-    return list;
-  }, [duplicatesFilterActive, duplicateScanResult]);
   const fallbackSamplesForTree = useSampleStore((s) =>
     s.folderStats.length > 0 ? EMPTY_SAMPLES : s.rawSamples
   );
@@ -151,25 +118,38 @@ export const FoldersTreeTab: React.FC<FoldersTreeTabProps> = ({
     }
   }, [isSearchOpen]);
 
-  const handleCopyFolderPath = (path: string) => {
-    navigator.clipboard
-      ?.writeText(path)
-      .then(() => setStatusMessage(`Copied folder path: ${path}`))
-      .catch(() => {});
-  };
+  const handleCopyFolderPath = useCallback(
+    (path: string) => {
+      navigator.clipboard
+        ?.writeText(path)
+        .then(() => setStatusMessage(`Copied folder path: ${path}`))
+        .catch(() => {});
+    },
+    [setStatusMessage]
+  );
+
+  const handleCloseFolderContextMenu = useCallback(() => {
+    setFolderContextMenu(null);
+  }, []);
+
+  const handleShowFolderInExplorer = useCallback(
+    (path: string) => {
+      void showInFolder(path);
+    },
+    [showInFolder]
+  );
 
   const displayLibraries = useMemo(
     () => filterVisibleLibraries(libraries),
     [libraries]
   );
 
-  const subsetSamples = favoriteOnly
-    ? favoriteSamples
-    : duplicatesFilterActive
-    ? duplicateSamples
-    : trashFilterActive
-    ? trashedSamples
-    : null;
+  const {
+    isReadOnlyScope,
+    headerTitle,
+    emptyMessage,
+    subsetSamples,
+  } = useFoldersTreeScope(displayLibraries, forcedScope);
 
   const folderTreeByLibrary = useMemo(
     () =>
@@ -178,7 +158,7 @@ export const FoldersTreeTab: React.FC<FoldersTreeTabProps> = ({
         folderStats,
         fallbackSamples: fallbackSamplesForTree,
         favoriteOnly,
-        favoriteSamples,
+        favoriteSamples: EMPTY_SAMPLES,
         subsetSamples,
       }),
     [
@@ -186,7 +166,6 @@ export const FoldersTreeTab: React.FC<FoldersTreeTabProps> = ({
       folderStats,
       fallbackSamplesForTree,
       favoriteOnly,
-      favoriteSamples,
       subsetSamples,
     ]
   );
@@ -234,9 +213,9 @@ export const FoldersTreeTab: React.FC<FoldersTreeTabProps> = ({
     displayLibraries,
     folderTreeByLibrary,
     folderFilter,
-    enableAdvancedFileOps,
-    isDraggingInApp,
-    isExternalFileDragActive,
+    enableAdvancedFileOps: !isReadOnlyScope && enableAdvancedFileOps,
+    isDraggingInApp: !isReadOnlyScope && isDraggingInApp,
+    isExternalFileDragActive: !isReadOnlyScope && isExternalFileDragActive,
     dragHoverTarget,
     setStatusMessage,
     setFolderFilter,
@@ -251,19 +230,21 @@ export const FoldersTreeTab: React.FC<FoldersTreeTabProps> = ({
         displayLibraries,
         folderTreeByLibrary,
         folderSearch,
-        favoriteOnly,
+        favoriteOnly: isReadOnlyScope,
         favCountByLibrary: subsetCountByLibrary,
         subsetCountByLibrary,
         normActiveLower,
         expandedLibIds,
         expandedFolderPaths,
-        creatingSubfolderTarget,
+        creatingSubfolderTarget: isReadOnlyScope
+          ? null
+          : creatingSubfolderTarget,
       }),
     [
       displayLibraries,
       folderTreeByLibrary,
       folderSearch,
-      favoriteOnly,
+      isReadOnlyScope,
       subsetCountByLibrary,
       normActiveLower,
       expandedLibIds,
@@ -283,14 +264,15 @@ export const FoldersTreeTab: React.FC<FoldersTreeTabProps> = ({
     overscan: 18,
   });
 
-  const isAnyDragActive = isDraggingInApp || isExternalFileDragActive;
+  const isAnyDragActive =
+    !isReadOnlyScope && (isDraggingInApp || isExternalFileDragActive);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       <div className="h-[32px] px-2.5 border-b border-line bg-surface-header flex items-center justify-between shrink-0">
         <div className="flex items-center space-x-1.5 min-w-0">
           <span className="text-[10px] uppercase tracking-wider font-semibold text-fg-head truncate">
-            FOLDERS ({displayLibraries.length.toLocaleString()})
+            {headerTitle}
           </span>
           {folderFilter !== null && selectedLicenseGroupId === null && (
             <button
@@ -305,17 +287,19 @@ export const FoldersTreeTab: React.FC<FoldersTreeTabProps> = ({
         </div>
 
         <div className="flex items-center space-x-1 shrink-0">
-          {enableAdvancedFileOps && displayLibraries.length > 0 && (
-            <button
-              type="button"
-              onClick={handleHeaderCreateSubfolder}
-              className="w-[20px] h-[20px] rounded-xs flex items-center justify-center text-accent-fg hover:bg-accent-soft border border-accent/30 shrink-0 transition-colors"
-              title="New Physical Subfolder on Disk (inside selected folder or library)"
-            >
-              <FolderPlus className="w-3.5 h-3.5" />
-            </button>
-          )}
-          {displayLibraries.length > 0 && (
+          {!isReadOnlyScope &&
+            enableAdvancedFileOps &&
+            displayLibraries.length > 0 && (
+              <button
+                type="button"
+                onClick={handleHeaderCreateSubfolder}
+                className="w-[20px] h-[20px] rounded-xs flex items-center justify-center text-accent-fg hover:bg-accent-soft border border-accent/30 shrink-0 transition-colors"
+                title="New Physical Subfolder on Disk (inside selected folder or library)"
+              >
+                <FolderPlus className="w-3.5 h-3.5" />
+              </button>
+            )}
+          {flatRows.length > 0 && (
             <>
               <button
                 type="button"
@@ -354,14 +338,16 @@ export const FoldersTreeTab: React.FC<FoldersTreeTabProps> = ({
           >
             <Search className="w-3 h-3" />
           </button>
-          <button
-            type="button"
-            onClick={() => setSettingsOpen(true, "libraries")}
-            className="w-[20px] h-[20px] rounded-xs flex items-center justify-center text-fg-3 hover:text-fg hover:bg-line shrink-0 transition-colors"
-            title="Manage Libraries in Settings"
-          >
-            <Settings className="w-3 h-3" />
-          </button>
+          {!isReadOnlyScope && (
+            <button
+              type="button"
+              onClick={() => setSettingsOpen(true, "libraries")}
+              className="w-[20px] h-[20px] rounded-xs flex items-center justify-center text-fg-3 hover:text-fg hover:bg-line shrink-0 transition-colors"
+              title="Manage Libraries in Settings"
+            >
+              <Settings className="w-3 h-3" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -438,13 +424,15 @@ export const FoldersTreeTab: React.FC<FoldersTreeTabProps> = ({
             </button>
           </div>
         ) : flatRows.length === 0 ? (
-          <div className="py-4 text-center text-[11px] text-fg-3 font-mono">
-            No folders match filter.
+          <div className="py-5 px-3 text-center text-[11px] text-fg-3 font-mono">
+            {isSearching ? "No folders match filter." : emptyMessage}
           </div>
         ) : (
           <div
             className={`relative w-full text-[12px] transition-opacity ${
-              isDraggingInApp && !enableAdvancedFileOps ? "opacity-40" : ""
+              !isReadOnlyScope && isDraggingInApp && !enableAdvancedFileOps
+                ? "opacity-40"
+                : ""
             }`}
             style={{
               height: `${rowVirtualizer.getTotalSize()}px`,
@@ -453,27 +441,57 @@ export const FoldersTreeTab: React.FC<FoldersTreeTabProps> = ({
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const row = flatRows[virtualRow.index];
               if (!row) return null;
+              const rowDropKey =
+                row.kind === "library"
+                  ? `folder:${row.lib.id}:${row.lib.path}`
+                  : row.kind === "folder"
+                    ? `folder:${row.lib.id}:${row.node.fullPath}`
+                    : "";
+              const rowCanDrop =
+                row.kind !== "create-input" &&
+                !isReadOnlyScope &&
+                enableAdvancedFileOps &&
+                !row.lib.is_read_only;
+              const isDropHovered =
+                rowCanDrop && isAnyDragActive && dragHoverTarget === rowDropKey;
+              const isDropFlashed =
+                row.kind !== "create-input" &&
+                !isReadOnlyScope &&
+                dropFlashTarget === rowDropKey;
+              const isRenamingThisFolder = Boolean(
+                row.kind === "folder" &&
+                  !isReadOnlyScope &&
+                  renamingFolderTarget &&
+                  renamingFolderTarget.libraryId === row.lib.id &&
+                  normalizeTreeKey(renamingFolderTarget.folderPath) ===
+                    normalizeTreeKey(row.node.fullPath)
+              );
               return (
                 <FolderTreeRow
                   key={row.key}
                   row={row}
                   virtualStart={virtualRow.start}
                   virtualSize={virtualRow.size}
+                  readOnlyScope={isReadOnlyScope}
                   enableAdvancedFileOps={enableAdvancedFileOps}
                   isAnyDragActive={isAnyDragActive}
                   isExternalFileDragActive={isExternalFileDragActive}
                   inAppDragCount={inAppDragCount}
-                  dragHoverTarget={dragHoverTarget}
-                  dropFlashTarget={dropFlashTarget}
+                  isDropHovered={isDropHovered}
+                  isDropFlashed={isDropFlashed}
                   isScanning={isScanning}
                   createInputRef={createInputRef}
-                  newSubfolderName={newSubfolderName}
+                  newSubfolderName={
+                    row.kind === "create-input" ? newSubfolderName : ""
+                  }
                   setNewSubfolderName={setNewSubfolderName}
                   setCreatingSubfolderTarget={setCreatingSubfolderTarget}
                   submitCreateSubfolder={submitCreateSubfolder}
-                  renamingFolderTarget={renamingFolderTarget}
+                  isRenamingThisFolder={isRenamingThisFolder}
                   renameInputRef={renameInputRef}
-                  renameFolderDraft={renameFolderDraft}
+                  renameFolderDraft={
+                    isRenamingThisFolder ? renameFolderDraft : ""
+                  }
                   setRenameFolderDraft={setRenameFolderDraft}
                   setRenamingFolderTarget={setRenamingFolderTarget}
                   submitRenameSubfolder={submitRenameSubfolder}
@@ -499,8 +517,8 @@ export const FoldersTreeTab: React.FC<FoldersTreeTabProps> = ({
         <Suspense fallback={null}>
           <LazySidebarFolderContextMenu
             menu={folderContextMenu}
-            onClose={() => setFolderContextMenu(null)}
-            onShowInFolder={(path) => void showInFolder(path)}
+            onClose={handleCloseFolderContextMenu}
+            onShowInFolder={handleShowFolderInExplorer}
             onCopyPath={handleCopyFolderPath}
           />
         </Suspense>

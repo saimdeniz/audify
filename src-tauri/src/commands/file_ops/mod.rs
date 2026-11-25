@@ -17,7 +17,7 @@ pub use trash_restore::*;
 use crate::db::get_active_profile_id;
 use crate::security::{
     display_leaf, has_ntfs_ads_colon, is_unc_or_network_path, normalize_clean_path,
-    strip_verbatim_prefix,
+    reject_symlink_ancestors, strip_verbatim_prefix,
 };
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -133,6 +133,19 @@ pub(super) fn is_same_folder_path(a: &str, b: &str) -> bool {
     }
 }
 
+fn is_cross_device_rename_err(err: &std::io::Error) -> bool {
+    #[cfg(windows)]
+    {
+        // ERROR_NOT_SAME_DEVICE (17)
+        err.raw_os_error() == Some(17)
+    }
+    #[cfg(not(windows))]
+    {
+        // EXDEV (18)
+        err.raw_os_error() == Some(18)
+    }
+}
+
 pub(crate) fn move_file_resilient(src: &Path, dst: &Path) -> Result<(), String> {
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent).map_err(|_| {
@@ -141,15 +154,48 @@ pub(crate) fn move_file_resilient(src: &Path, dst: &Path) -> Result<(), String> 
     }
     match fs::rename(src, dst) {
         Ok(()) => Ok(()),
-        Err(_) => {
-            // Fallback for rare cross-mount points on the same drive letter
-            fs::copy(src, dst).map_err(|_| {
-                format!(
+        Err(rename_err) => {
+            if !is_cross_device_rename_err(&rename_err) {
+                return Err(format!(
                     "Failed to move file '{}' -> '{}'",
+                    display_leaf(src),
+                    display_leaf(dst),
+                ));
+            }
+            let src_len = fs::metadata(src)
+                .map_err(|_| format!("Source file unavailable '{}'", display_leaf(src)))?
+                .len();
+            let mut src_file = fs::File::open(src)
+                .map_err(|_| format!("Failed to read source file '{}'", display_leaf(src)))?;
+            let mut dst_file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(dst)
+                .map_err(|_| {
+                    format!(
+                        "Destination '{}' already exists or cannot be created",
+                        display_leaf(dst)
+                    )
+                })?;
+            let copied = std::io::copy(&mut src_file, &mut dst_file).map_err(|_| {
+                let _ = fs::remove_file(dst);
+                format!(
+                    "Failed to copy file '{}' -> '{}'",
                     display_leaf(src),
                     display_leaf(dst),
                 )
             })?;
+            if copied != src_len || dst_file.sync_all().is_err() {
+                drop(dst_file);
+                let _ = fs::remove_file(dst);
+                return Err(format!(
+                    "Incomplete file copy for '{}' -> '{}'",
+                    display_leaf(src),
+                    display_leaf(dst),
+                ));
+            }
+            drop(dst_file);
+            drop(src_file);
             fs::remove_file(src).map_err(|_| {
                 let _ = fs::remove_file(dst);
                 format!("Failed to finalize file move '{}'", display_leaf(src))
@@ -421,6 +467,7 @@ pub(super) fn validate_writable_library_folder(
     }
 
     let raw_pb = PathBuf::from(trimmed);
+    reject_symlink_ancestors(&raw_pb)?;
     let sym_meta = fs::symlink_metadata(&raw_pb)
         .map_err(|_| format!("Folder does not exist on disk: {}", display_leaf(&raw_pb)))?;
     if sym_meta.file_type().is_symlink() || !sym_meta.file_type().is_dir() {

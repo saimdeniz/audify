@@ -1,26 +1,24 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Check,
   Film,
   FolderOpen,
   Image as ImageIcon,
   Plus,
   RefreshCw,
-  X,
 } from "lucide-react";
 import { useSampleStore } from "../../store/useSampleStore";
 import { hasActiveVisualBackdrop } from "../../store/storageHelpers";
 import { ASCII_PRESETS } from "../../constants/asciiPresets";
 import { folderNameFromPath } from "../../utils/format";
 import {
-  evictThumbnailCache,
-  getCachedThumbnailUrl,
-  getWallpaperThumbnailUrl,
+  getVideoWallpaperExtBadge,
   isGifWallpaperPath,
+  isVideoWallpaperPath,
 } from "../../utils/thumbnailCache";
 import { AsciiWallpaperSection } from "./AsciiWallpaperSection";
+import { WallpaperTile } from "./WallpaperTile";
 
-type UploadedMediaFilter = "all" | "image" | "gif";
+type UploadedMediaFilter = "all" | "image" | "video" | "gif";
 
 function extractBgSubfolder(filePath: string): string {
   const normalized = filePath.replace(/\\/g, "/");
@@ -33,105 +31,8 @@ function extractBgSubfolder(filePath: string): string {
   return lastSlash > 0 ? rel.slice(0, lastSlash) : "";
 }
 
-interface WallpaperTileProps {
-  filePath: string;
-  subfolder: string;
-  isSelected: boolean;
-  onSelect: (filePath: string) => void;
-  onDelete: (filePath: string) => void;
-}
-
-const WallpaperTile: React.FC<WallpaperTileProps> = React.memo(
-  ({ filePath, subfolder, isSelected, onSelect, onDelete }) => {
-    const [thumbUrl, setThumbUrl] = useState<string>(
-      () => getCachedThumbnailUrl(filePath) || ""
-    );
-
-    useEffect(() => {
-      let active = true;
-      const cached = getCachedThumbnailUrl(filePath);
-      if (cached) {
-        setThumbUrl(cached);
-      } else {
-        getWallpaperThumbnailUrl(filePath).then((url) => {
-          if (active) setThumbUrl(url);
-        });
-      }
-      return () => {
-        active = false;
-      };
-    }, [filePath]);
-
-    const fileName = folderNameFromPath(filePath, "Wallpaper");
-    const isGif = isGifWallpaperPath(filePath);
-    const showFolderBadge =
-      Boolean(subfolder) && !(isGif && subfolder.toLowerCase() === "gifs");
-
-    return (
-      <div
-        className={`group relative aspect-video w-full rounded-xs border overflow-hidden cursor-pointer ${
-          isSelected
-            ? "border-accent ring-1 ring-accent"
-            : "border-line hover:border-accent"
-        }`}
-        onClick={() => onSelect(filePath)}
-        title={
-          subfolder
-            ? `${subfolder}/${fileName}${isGif ? " (Animated GIF)" : ""}`
-            : isGif
-              ? `${fileName} (Animated GIF)`
-              : fileName
-        }
-      >
-        {thumbUrl ? (
-          <img
-            src={thumbUrl}
-            alt={fileName}
-            loading="lazy"
-            decoding="async"
-            className="w-full h-full object-cover pointer-events-none"
-          />
-        ) : (
-          <div className="w-full h-full bg-surface-3" />
-        )}
-
-        {isSelected && (
-          <div className="absolute top-1 left-1 w-3.5 h-3.5 rounded-full bg-accent text-accent-on flex items-center justify-center shadow-xs pointer-events-none">
-            <Check className="w-2.5 h-2.5 stroke-[3]" />
-          </div>
-        )}
-
-        {showFolderBadge && (
-          <span className="absolute bottom-1 left-1 max-w-[70%] truncate px-1 py-[1px] rounded-xs bg-surface-1 border border-line-strong font-mono text-[8px] font-medium text-fg-2 shadow-xs pointer-events-none">
-            {subfolder}
-          </span>
-        )}
-
-        {isGif && (
-          <span className="absolute bottom-1 right-1 px-1 py-[1px] rounded-xs bg-surface-1 border border-line-strong font-mono text-[8.5px] font-bold text-accent-fg uppercase tracking-wider shadow-xs pointer-events-none">
-            GIF
-          </span>
-        )}
-
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            evictThumbnailCache(filePath);
-            onDelete(filePath);
-          }}
-          className="absolute top-1 right-1 w-4 h-4 rounded-xs bg-surface-3 border border-line-strong hover:bg-accent hover:border-accent text-fg hover:text-accent-on flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
-          title="Delete wallpaper"
-        >
-          <X className="w-2.5 h-2.5" />
-        </button>
-      </div>
-    );
-  }
-);
-
 /**
- * Unified Studio Wallpaper Deck: Live ASCII Scenes & Uploaded Image Wallpapers.
+ * Unified Studio Wallpaper Deck: Live ASCII Scenes & Uploaded Image/Video/GIF Wallpapers.
  */
 export const WallpaperCanvasControl: React.FC = React.memo(() => {
   const wallpaperKind = useSampleStore((s) => s.wallpaperKind);
@@ -156,14 +57,24 @@ export const WallpaperCanvasControl: React.FC = React.memo(() => {
     void loadCustomBgGallery();
   }, [loadCustomBgGallery]);
 
-  const { gifPaths, staticPaths, folderNames, folderCounts, rootCount } = useMemo(() => {
+  const {
+    gifPaths,
+    videoPaths,
+    staticPaths,
+    folderNames,
+    folderCounts,
+    rootCount,
+  } = useMemo(() => {
     const gifs: string[] = [];
+    const videos: string[] = [];
     const statics: string[] = [];
     const counts = new Map<string, number>();
     let root = 0;
     for (const p of customBgGallery) {
       if (isGifWallpaperPath(p)) {
         gifs.push(p);
+      } else if (isVideoWallpaperPath(p)) {
+        videos.push(p);
       } else {
         statics.push(p);
       }
@@ -176,6 +87,7 @@ export const WallpaperCanvasControl: React.FC = React.memo(() => {
     }
     return {
       gifPaths: gifs,
+      videoPaths: videos,
       staticPaths: statics,
       folderNames: Array.from(counts.keys()).sort(),
       folderCounts: counts,
@@ -210,9 +122,11 @@ export const WallpaperCanvasControl: React.FC = React.memo(() => {
   const mediaFilteredGallery =
     mediaFilter === "gif"
       ? gifPaths
-      : mediaFilter === "image"
-        ? staticPaths
-        : customBgGallery;
+      : mediaFilter === "video"
+        ? videoPaths
+        : mediaFilter === "image"
+          ? staticPaths
+          : customBgGallery;
 
   const visibleGallery = useMemo(() => {
     if (folderFilter === "all") return mediaFilteredGallery;
@@ -226,11 +140,20 @@ export const WallpaperCanvasControl: React.FC = React.memo(() => {
     Boolean(customBgImage) &&
     isGifWallpaperPath(customBgImage);
 
+  const isActiveImageVideo =
+    wallpaperKind === "image" &&
+    Boolean(customBgImage) &&
+    isVideoWallpaperPath(customBgImage);
+
   const hasBackdrop = hasActiveVisualBackdrop(
     wallpaperKind,
     customBgImage,
     asciiMagicSlug
   );
+
+  const activeVideoBadge = isActiveImageVideo
+    ? getVideoWallpaperExtBadge(customBgImage) ?? "VIDEO"
+    : "";
 
   const activeLabel =
     wallpaperKind === "ascii_preset"
@@ -241,7 +164,13 @@ export const WallpaperCanvasControl: React.FC = React.memo(() => {
       : wallpaperKind === "ascii_magic" && asciiMagicSlug
         ? `Catalog · ${asciiMagicSlug}`
         : wallpaperKind === "image" && customBgImage
-          ? `${isActiveImageGif ? "GIF · " : ""}${folderNameFromPath(customBgImage)}`
+          ? `${
+              isActiveImageGif
+                ? "GIF · "
+                : isActiveImageVideo
+                  ? `${activeVideoBadge} · `
+                  : ""
+            }${folderNameFromPath(customBgImage)}`
           : "";
 
   return (
@@ -293,7 +222,7 @@ export const WallpaperCanvasControl: React.FC = React.memo(() => {
             type="button"
             onClick={() => void selectCustomBgImageFile()}
             className="h-[22px] px-2.5 bg-accent hover:bg-accent-hover text-accent-on rounded-xs inline-flex items-center space-x-1 text-[10.5px] font-semibold transition-colors shadow-xs cursor-pointer"
-            title="Add wallpaper image(s)"
+            title="Add wallpaper image(s), GIF(s), or MP4/WebM loop video(s)"
           >
             <Plus className="w-3 h-3 shrink-0" />
             <span>Add</span>
@@ -331,7 +260,14 @@ export const WallpaperCanvasControl: React.FC = React.memo(() => {
                     hasActive:
                       wallpaperKind === "image" &&
                       Boolean(customBgImage) &&
-                      !isActiveImageGif,
+                      !isActiveImageGif &&
+                      !isActiveImageVideo,
+                  },
+                  {
+                    id: "video" as const,
+                    label: "Videos",
+                    count: videoPaths.length,
+                    hasActive: isActiveImageVideo,
                   },
                   {
                     id: "gif" as const,
@@ -417,7 +353,31 @@ export const WallpaperCanvasControl: React.FC = React.memo(() => {
             </div>
           )}
 
-          {mediaFilter === "gif" && gifPaths.length === 0 ? (
+          {mediaFilter === "gif" && (
+            <p className="text-[10px] text-fg-3 font-mono leading-tight">
+              Tip: MP4/WebM loop videos use hardware decoding and significantly less RAM than large GIFs.
+            </p>
+          )}
+
+          {mediaFilter === "video" && videoPaths.length === 0 ? (
+            <div className="h-[112px] rounded-xs border border-dashed border-line bg-surface-sub px-3 flex flex-col items-center justify-center text-center gap-1.5">
+              <div className="flex items-center space-x-1.5 text-[11px] font-medium text-fg-2">
+                <Film className="w-3.5 h-3.5 text-accent-fg shrink-0" />
+                <span>No loop videos in library</span>
+              </div>
+              <span className="text-[10px] font-mono text-fg-3">
+                Add lightweight .mp4 or .webm loops (hardware decoded, auto-pauses in background)
+              </span>
+              <button
+                type="button"
+                onClick={() => void selectCustomBgImageFile()}
+                className="mt-0.5 h-[22px] px-2.5 bg-surface-2 hover:bg-surface-3 border border-line hover:border-accent text-fg rounded-xs inline-flex items-center space-x-1 text-[10px] font-medium transition-colors cursor-pointer"
+              >
+                <Plus className="w-3 h-3 text-accent-fg shrink-0" />
+                <span>Add Loop Video</span>
+              </button>
+            </div>
+          ) : mediaFilter === "gif" && gifPaths.length === 0 ? (
             <div className="h-[112px] rounded-xs border border-dashed border-line bg-surface-sub px-3 flex flex-col items-center justify-center text-center gap-1.5">
               <div className="flex items-center space-x-1.5 text-[11px] font-medium text-fg-2">
                 <Film className="w-3.5 h-3.5 text-accent-fg shrink-0" />
@@ -454,7 +414,7 @@ export const WallpaperCanvasControl: React.FC = React.memo(() => {
                 type="button"
                 onClick={() => void selectCustomBgImageFile()}
                 className="aspect-video w-full rounded-xs border border-dashed border-line hover:border-accent bg-surface-sub hover:bg-surface-2 flex items-center justify-center cursor-pointer text-fg-3 hover:text-accent-fg"
-                title="Add wallpaper image(s) or GIF(s)"
+                title="Add wallpaper image(s), GIF(s), or MP4/WebM loop video(s)"
               >
                 <Plus className="w-3.5 h-3.5" />
               </button>

@@ -55,7 +55,10 @@ export function createProfileSlice(
   | "updateAutoTagRule"
   | "deleteAutoTagRule"
   | "resetAutoTagRules"
+  | "upgradeLegacyAutoTagRules"
   | "reapplyAutoTagRules"
+  | "refreshAutoTagImpactPreview"
+  | "undoLastAutoTagApply"
   | "setAutoTagCategoryPaths"
   | "addAutoTagCategory"
   | "renameAutoTagCategory"
@@ -284,6 +287,11 @@ export function createProfileSlice(
             playheadLatencyMs: get().playheadLatencyMs,
             audioOutputDeviceId: get().audioOutputDeviceId,
             sliceMicroFade: get().sliceMicroFade,
+            exportAudioPreset: get().exportAudioPreset,
+            exportLoudnessMode: get().exportLoudnessMode,
+            skipLeadingSilence: get().skipLeadingSilence,
+            miniDockEdgePeek: get().miniDockEdgePeek,
+            miniDockEdgeSide: get().miniDockEdgeSide,
             normalizePreview: get().normalizePreview,
             autoAnalyzeBpmKey: get().autoAnalyzeBpmKey,
             autoPreview: get().autoPreview,
@@ -294,6 +302,7 @@ export function createProfileSlice(
             autoBinOnNleDrag: get().autoBinOnNleDrag,
             binSampleIds: [],
             enableMica: get().enableMica,
+            sidebarCompactHover: get().sidebarCompactHover,
             themeTintIntensity: get().themeTintIntensity,
             customBgImage: "",
             customBgBlur: 0,
@@ -479,8 +488,14 @@ export function createProfileSlice(
       (await loadAutoTagActions()).deleteAutoTagRule(ruleId),
     resetAutoTagRules: async () =>
       (await loadAutoTagActions()).resetAutoTagRules(),
+    upgradeLegacyAutoTagRules: async () =>
+      (await loadAutoTagActions()).upgradeLegacyAutoTagRules(),
     reapplyAutoTagRules: async () =>
       (await loadAutoTagActions()).reapplyAutoTagRules(),
+    refreshAutoTagImpactPreview: async () =>
+      (await loadAutoTagActions()).refreshAutoTagImpactPreview(),
+    undoLastAutoTagApply: async () =>
+      (await loadAutoTagActions()).undoLastAutoTagApply(),
     setAutoTagCategoryPaths: async (
       categoryName: string,
       includePaths: string[],

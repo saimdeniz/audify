@@ -8,6 +8,7 @@ import type {
   SimilaritySession,
 } from "../../types";
 import type { WaveformDisplayConfig } from "../MiniWaveform";
+import type { TaxonomyIndex } from "../../utils/taxonomyTree";
 import { SampleTableRow } from "./SampleTableRow";
 import type {
   ColumnId,
@@ -24,22 +25,24 @@ interface SampleTableRowsPaneProps {
   selectedIdSet: ReadonlySet<number>;
   selectedTagSet: ReadonlySet<number>;
   selectedCollectionId: number | null;
+  isSmartCollectionActive: boolean;
   selectedGenre: string | null;
   similaritySession: SimilaritySession | null;
   isSimilarityMode: boolean;
   duplicateMetaBySampleId: ReadonlyMap<number, DuplicateSampleMeta> | null;
   aiSuggestionsBySampleId: Record<number, AiTagSuggestionItem[]>;
-  rowTagPopover: RowPopoverPosition | null;
-  rowGenrePopover: RowPopoverPosition | null;
-  hoverOverflowTags: RowPopoverPosition | null;
+  activeTagPopoverSampleId: number | null;
+  activeGenrePopoverSampleId: number | null;
   setHoverOverflowTags: React.Dispatch<
     React.SetStateAction<RowPopoverPosition | null>
   >;
+  onTableScroll?: () => void;
   columnOrder: ColumnId[];
   visibleCols: VisibleColumnsState;
   colWidths: Record<ResizableColKey, number>;
   totalTableWidth: number;
   genreColorMap: ReadonlyMap<string, string>;
+  taxonomyIndex: TaxonomyIndex;
   waveformDisplay: WaveformDisplayConfig;
   favoriteShortcutLabel: string;
   onRowClick: (e: React.MouseEvent, sample: SampleItem, index: number) => void;
@@ -57,7 +60,8 @@ interface SampleTableRowsPaneProps {
  * Virtualized scrollable rows pane for `SampleTable`, owning row virtualization,
  * horizontal scroll header sync, and active-sample scroll-into-view tracking.
  */
-export const SampleTableRowsPane: React.FC<SampleTableRowsPaneProps> = ({
+export const SampleTableRowsPane: React.FC<SampleTableRowsPaneProps> =
+  React.memo(({
   parentRef,
   headerRef,
   samples,
@@ -65,20 +69,22 @@ export const SampleTableRowsPane: React.FC<SampleTableRowsPaneProps> = ({
   selectedIdSet,
   selectedTagSet,
   selectedCollectionId,
+  isSmartCollectionActive,
   selectedGenre,
   similaritySession,
   isSimilarityMode,
   duplicateMetaBySampleId,
   aiSuggestionsBySampleId,
-  rowTagPopover,
-  rowGenrePopover,
-  hoverOverflowTags,
+  activeTagPopoverSampleId,
+  activeGenrePopoverSampleId,
   setHoverOverflowTags,
+  onTableScroll,
   columnOrder,
   visibleCols,
   colWidths,
   totalTableWidth,
   genreColorMap,
+  taxonomyIndex,
   waveformDisplay,
   favoriteShortcutLabel,
   onRowClick,
@@ -116,13 +122,18 @@ export const SampleTableRowsPane: React.FC<SampleTableRowsPaneProps> = ({
         if (headerRef.current) {
           headerRef.current.scrollLeft = e.currentTarget.scrollLeft;
         }
-        if (hoverOverflowTags) setHoverOverflowTags(null);
+        if (onTableScroll) {
+          onTableScroll();
+        } else {
+          setHoverOverflowTags((prev) => (prev ? null : prev));
+        }
       }}
       className="flex-1 overflow-auto relative outline-none"
       tabIndex={0}
-      role="listbox"
+      role="grid"
       aria-label="Samples"
       aria-multiselectable="true"
+      aria-rowcount={samples.length}
     >
       <div
         style={{
@@ -184,7 +195,6 @@ export const SampleTableRowsPane: React.FC<SampleTableRowsPaneProps> = ({
               key={sample.id}
               sample={sample}
               rowIndex={virtualRow.index}
-              totalSamples={samples.length}
               startOffsetPx={virtualRow.start}
               totalTableWidth={totalTableWidth}
               isSimilarityMode={isSimilarityMode}
@@ -199,15 +209,17 @@ export const SampleTableRowsPane: React.FC<SampleTableRowsPaneProps> = ({
               pendingAiTags={pendingAiTags}
               isPrimarySelected={isPrimarySelected}
               isRowSelected={isRowSelected}
-              isTagPopoverOpen={rowTagPopover?.sampleId === sample.id}
-              isGenrePopoverOpen={rowGenrePopover?.sampleId === sample.id}
+              isTagPopoverOpen={activeTagPopoverSampleId === sample.id}
+              isGenrePopoverOpen={activeGenrePopoverSampleId === sample.id}
               columnOrder={columnOrder}
               visibleCols={visibleCols}
               colWidths={colWidths}
               selectedCollectionId={selectedCollectionId}
+              isSmartCollectionActive={isSmartCollectionActive}
               selectedGenre={selectedGenre}
               selectedTagSet={selectedTagSet}
               genreColorMap={genreColorMap}
+              taxonomyIndex={taxonomyIndex}
               waveformDisplay={waveformDisplay}
               favoriteShortcutLabel={favoriteShortcutLabel}
               onRowClick={onRowClick}
@@ -222,4 +234,4 @@ export const SampleTableRowsPane: React.FC<SampleTableRowsPaneProps> = ({
       </div>
     </div>
   );
-};
+});

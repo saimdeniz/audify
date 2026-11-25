@@ -1,5 +1,5 @@
-use super::default_rules::deterministic_color_for_name;
 use super::migrations::run_schema_migrations;
+use super::taxonomy::{prune_orphan_auto_tags, seed_system_facets};
 use rusqlite::{params, Connection};
 use std::time::Duration;
 
@@ -7,9 +7,18 @@ pub const SAMPLE_TAGS_FTS_TRIGGERS_SQL: &str = "
     CREATE TRIGGER IF NOT EXISTS trg_sample_tags_ai AFTER INSERT ON sample_tags BEGIN
         UPDATE samples_fts
         SET tags_text = COALESCE((
-            SELECT GROUP_CONCAT(t.name, ' ') || ' ' || REPLACE(REPLACE(GROUP_CONCAT(t.name, ' '), 'ı', 'i'), 'İ', 'i')
+            SELECT GROUP_CONCAT(
+                anc.name || ' ' ||
+                REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(anc.aliases_json, ''), '[', ' '), ']', ' '), '\"', ' '), ',', ' '),
+                ' '
+            ) || ' ' || REPLACE(REPLACE(GROUP_CONCAT(
+                anc.name || ' ' ||
+                REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(anc.aliases_json, ''), '[', ' '), ']', ' '), '\"', ' '), ',', ' '),
+                ' '
+            ), 'ı', 'i'), 'İ', 'i')
             FROM sample_tags st
             INNER JOIN tags t ON t.id = st.tag_id
+            INNER JOIN tags anc ON anc.id = t.id OR (t.path != '/' AND INSTR(t.path, '/' || anc.id || '/') > 0)
             WHERE st.sample_id = new.sample_id
         ), '')
         WHERE rowid = new.sample_id;
@@ -18,9 +27,18 @@ pub const SAMPLE_TAGS_FTS_TRIGGERS_SQL: &str = "
     CREATE TRIGGER IF NOT EXISTS trg_sample_tags_ad AFTER DELETE ON sample_tags BEGIN
         UPDATE samples_fts
         SET tags_text = COALESCE((
-            SELECT GROUP_CONCAT(t.name, ' ') || ' ' || REPLACE(REPLACE(GROUP_CONCAT(t.name, ' '), 'ı', 'i'), 'İ', 'i')
+            SELECT GROUP_CONCAT(
+                anc.name || ' ' ||
+                REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(anc.aliases_json, ''), '[', ' '), ']', ' '), '\"', ' '), ',', ' '),
+                ' '
+            ) || ' ' || REPLACE(REPLACE(GROUP_CONCAT(
+                anc.name || ' ' ||
+                REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(anc.aliases_json, ''), '[', ' '), ']', ' '), '\"', ' '), ',', ' '),
+                ' '
+            ), 'ı', 'i'), 'İ', 'i')
             FROM sample_tags st
             INNER JOIN tags t ON t.id = st.tag_id
+            INNER JOIN tags anc ON anc.id = t.id OR (t.path != '/' AND INSTR(t.path, '/' || anc.id || '/') > 0)
             WHERE st.sample_id = old.sample_id
         ), '')
         WHERE rowid = old.sample_id;
@@ -63,15 +81,29 @@ pub(crate) const SAMPLES_FTS_SCHEMA_AND_TRIGGERS_SQL: &str = "
         WHERE rowid = old.id;
     END;
 
-    CREATE TRIGGER IF NOT EXISTS trg_tags_au AFTER UPDATE OF name ON tags BEGIN
+    CREATE TRIGGER IF NOT EXISTS trg_tags_au AFTER UPDATE OF name, path, aliases_json ON tags BEGIN
         UPDATE samples_fts
         SET tags_text = COALESCE((
-            SELECT GROUP_CONCAT(t.name, ' ') || ' ' || REPLACE(REPLACE(GROUP_CONCAT(t.name, ' '), 'ı', 'i'), 'İ', 'i')
+            SELECT GROUP_CONCAT(
+                anc.name || ' ' ||
+                REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(anc.aliases_json, ''), '[', ' '), ']', ' '), '\"', ' '), ',', ' '),
+                ' '
+            ) || ' ' || REPLACE(REPLACE(GROUP_CONCAT(
+                anc.name || ' ' ||
+                REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(anc.aliases_json, ''), '[', ' '), ']', ' '), '\"', ' '), ',', ' '),
+                ' '
+            ), 'ı', 'i'), 'İ', 'i')
             FROM sample_tags st
             INNER JOIN tags t ON t.id = st.tag_id
+            INNER JOIN tags anc ON anc.id = t.id OR (t.path != '/' AND INSTR(t.path, '/' || anc.id || '/') > 0)
             WHERE st.sample_id = samples_fts.rowid
         ), '')
-        WHERE rowid IN (SELECT sample_id FROM sample_tags WHERE tag_id = new.id);
+        WHERE rowid IN (
+            SELECT DISTINCT st.sample_id
+            FROM sample_tags st
+            INNER JOIN tags t ON t.id = st.tag_id
+            WHERE t.id = new.id OR (t.path != '/' AND INSTR(t.path, '/' || new.id || '/') > 0)
+        );
     END;
 ";
 
@@ -110,6 +142,7 @@ pub fn init_schema_on_conn(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "
         PRAGMA journal_mode = WAL;
+        PRAGMA journal_size_limit = 33554432;
         PRAGMA synchronous = NORMAL;
         PRAGMA temp_store = MEMORY;
         PRAGMA mmap_size = 67108864;
@@ -160,11 +193,29 @@ pub fn init_schema_on_conn(conn: &Connection) -> Result<(), String> {
             FOREIGN KEY (library_id) REFERENCES libraries(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS tag_facets (
+            id INTEGER PRIMARY KEY,
+            slug TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL UNIQUE,
+            color TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_system INTEGER NOT NULL DEFAULT 1,
+            domain TEXT NOT NULL DEFAULT 'tags',
+            allow_nesting INTEGER NOT NULL DEFAULT 0
+        );
+
         CREATE TABLE IF NOT EXISTS tags (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE,
             color TEXT NOT NULL DEFAULT '#f59e0b',
-            is_manual BOOLEAN NOT NULL DEFAULT 0
+            is_manual BOOLEAN NOT NULL DEFAULT 0,
+            facet_id INTEGER NOT NULL DEFAULT 1 REFERENCES tag_facets(id),
+            parent_id INTEGER DEFAULT NULL REFERENCES tags(id) ON DELETE SET NULL,
+            path TEXT NOT NULL DEFAULT '/',
+            aliases_json TEXT NOT NULL DEFAULT '[]',
+            is_system INTEGER NOT NULL DEFAULT 0,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            color_inherited INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS genres (
@@ -284,7 +335,16 @@ pub fn init_schema_on_conn(conn: &Connection) -> Result<(), String> {
 
     ensure_column(conn, "sample_tags", "is_manual", "BOOLEAN NOT NULL DEFAULT 0")?;
     ensure_column(conn, "sample_tags", "source", "TEXT NOT NULL DEFAULT 'auto'")?;
+    ensure_column(conn, "tag_facets", "domain", "TEXT NOT NULL DEFAULT 'tags'")?;
+    ensure_column(conn, "tag_facets", "allow_nesting", "INTEGER NOT NULL DEFAULT 0")?;
     ensure_column(conn, "tags", "is_manual", "BOOLEAN NOT NULL DEFAULT 0")?;
+    ensure_column(conn, "tags", "facet_id", "INTEGER NOT NULL DEFAULT 1")?;
+    ensure_column(conn, "tags", "parent_id", "INTEGER DEFAULT NULL")?;
+    ensure_column(conn, "tags", "path", "TEXT NOT NULL DEFAULT '/'")?;
+    ensure_column(conn, "tags", "aliases_json", "TEXT NOT NULL DEFAULT '[]'")?;
+    ensure_column(conn, "tags", "is_system", "INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(conn, "tags", "sort_order", "INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(conn, "tags", "color_inherited", "INTEGER NOT NULL DEFAULT 0")?;
     ensure_column(conn, "genres", "is_manual", "BOOLEAN NOT NULL DEFAULT 0")?;
     ensure_column(conn, "libraries", "is_global", "BOOLEAN NOT NULL DEFAULT 1")?;
     ensure_column(conn, "libraries", "is_read_only", "BOOLEAN NOT NULL DEFAULT 0")?;
@@ -323,10 +383,8 @@ pub fn init_schema_on_conn(conn: &Connection) -> Result<(), String> {
         "
         PRAGMA foreign_keys = ON;
 
-        CREATE INDEX IF NOT EXISTS idx_samples_library_id ON samples(library_id);
         CREATE INDEX IF NOT EXISTS idx_samples_is_loop ON samples(is_loop);
         CREATE INDEX IF NOT EXISTS idx_samples_trashed_lib ON samples(is_trashed, library_id);
-        CREATE INDEX IF NOT EXISTS idx_samples_file_path_nocase ON samples(file_path COLLATE NOCASE);
         CREATE INDEX IF NOT EXISTS idx_samples_genre ON samples(genre COLLATE NOCASE);
         CREATE INDEX IF NOT EXISTS idx_samples_bpm ON samples(bpm);
         CREATE INDEX IF NOT EXISTS idx_samples_camelot ON samples(camelot_key COLLATE NOCASE);
@@ -361,9 +419,13 @@ pub fn init_schema_on_conn(conn: &Connection) -> Result<(), String> {
             WHERE COALESCE(is_trashed, 0) = 0 AND genre != '';
         CREATE INDEX IF NOT EXISTS idx_sample_tags_tag_sample
             ON sample_tags(tag_id, sample_id);
+        CREATE INDEX IF NOT EXISTS idx_tags_path ON tags(path);
+        CREATE INDEX IF NOT EXISTS idx_tags_facet_parent ON tags(facet_id, parent_id);
         ",
     )
     .map_err(|e| format!("Failed to initialize database indexes: {}", e))?;
+
+    seed_system_facets(conn)?;
 
     conn.execute_batch(SAMPLES_FTS_SCHEMA_AND_TRIGGERS_SQL)
         .map_err(|e| format!("Failed to initialize FTS5 schema: {}", e))?;
@@ -415,29 +477,7 @@ pub fn init_schema_on_conn(conn: &Connection) -> Result<(), String> {
         .query_row("SELECT COUNT(*) FROM samples", [], |r| r.get(0))
         .unwrap_or(0);
     if sample_count == 0 {
-        let _ = conn.execute(
-            "DELETE FROM tags WHERE is_manual = 0 AND id NOT IN (SELECT DISTINCT tag_id FROM sample_tags)",
-            [],
-        );
-        let _ = conn.execute(
-            "DELETE FROM genres WHERE is_manual = 0 AND LOWER(name) NOT IN (SELECT DISTINCT LOWER(genre) FROM samples WHERE genre != '')",
-            [],
-        );
-    } else if let Ok(mut stmt) =
-        conn.prepare("SELECT id, name FROM genres WHERE color = '#8B5CF6' AND LOWER(name) != 'lo-fi'")
-    {
-        if let Ok(rows) =
-            stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
-        {
-            let to_update: Vec<(i64, String)> = rows.flatten().collect();
-            for (gid, gname) in to_update {
-                let col = deterministic_color_for_name(&gname);
-                let _ = conn.execute(
-                    "UPDATE genres SET color = ?1 WHERE id = ?2",
-                    params![col, gid],
-                );
-            }
-        }
+        let _ = prune_orphan_auto_tags(conn);
     }
     run_schema_migrations(conn)
 }

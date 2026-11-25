@@ -1,6 +1,7 @@
 use super::types::{AiModelStatus, ResolvedAiModelConfig, AI_EMBEDDING_DIM};
 use crate::security::{
-    ensure_inside, has_ntfs_ads_colon, is_unc_or_network_path, sanitize_err,
+    ensure_inside, has_ntfs_ads_colon, is_unc_or_network_path, reject_symlink_ancestors,
+    sanitize_err,
 };
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
@@ -76,20 +77,6 @@ fn is_regular_non_symlink_file(path: &Path) -> bool {
     fs::symlink_metadata(path)
         .map(|m| !m.file_type().is_symlink() && m.is_file())
         .unwrap_or(false)
-}
-
-fn reject_symlink_chain(path: &Path) -> Result<(), String> {
-    for anc in path.ancestors() {
-        if anc.as_os_str().is_empty() || anc.parent().is_none() {
-            break;
-        }
-        let meta = fs::symlink_metadata(anc)
-            .map_err(|_| "Source path or parent directory cannot be read".to_string())?;
-        if meta.file_type().is_symlink() {
-            return Err("Symlinks and junctions are blocked for security".to_string());
-        }
-    }
-    Ok(())
 }
 
 pub fn active_model_id_and_path(user_dir: &Path) -> (String, String, PathBuf, bool) {
@@ -303,7 +290,7 @@ fn validate_local_import_source(
         return Err("Invalid or unsupported source file path".to_string());
     }
     let path = PathBuf::from(trimmed);
-    reject_symlink_chain(&path)?;
+    reject_symlink_ancestors(&path)?;
     let sym = fs::symlink_metadata(&path)
         .map_err(|_| "Source file does not exist or cannot be read".to_string())?;
     if sym.file_type().is_symlink() || !sym.is_file() {
@@ -328,17 +315,47 @@ fn validate_local_import_source(
     Ok(canon)
 }
 
+pub(crate) fn replace_file_safely(
+    user_dir: &Path,
+    staged_tmp: &Path,
+    final_dest: &Path,
+    label: &str,
+) -> Result<(), String> {
+    let backup = final_dest.with_extension("bak.audify_swap");
+    let had_existing = fs::symlink_metadata(final_dest).is_ok();
+    if had_existing {
+        let _ = fs::remove_file(&backup);
+        fs::rename(final_dest, &backup)
+            .map_err(|e| sanitize_err(user_dir, &format!("Failed preparing {} swap: {}", label, e)))?;
+    }
+    match fs::rename(staged_tmp, final_dest) {
+        Ok(()) => {
+            if had_existing {
+                let _ = fs::remove_file(&backup);
+            }
+            Ok(())
+        }
+        Err(err) => {
+            if had_existing && fs::symlink_metadata(&backup).is_ok() {
+                let _ = fs::rename(&backup, final_dest);
+            }
+            let _ = fs::remove_file(staged_tmp);
+            Err(sanitize_err(
+                user_dir,
+                &format!("Failed installing {}: {}", label, err),
+            ))
+        }
+    }
+}
+
 pub fn import_local_ai_file(user_dir: &Path, source_path: &str, kind: &str) -> Result<(), String> {
     let (models_dir, bin_dir, tmp_dir) = ensure_models_dirs(user_dir)?;
     match kind {
         "onnx" => {
             let src = validate_local_import_source(source_path, "onnx", MAX_LOCAL_ONNX_BYTES)?;
             let hash = sha256_file_hex(&src).map_err(|e| sanitize_err(user_dir, &e))?;
-            let target_name = if hash.eq_ignore_ascii_case(DEFAULT_MODEL_SHA256) {
-                let custom = models_dir.join(CUSTOM_MODEL_FILE);
-                if fs::symlink_metadata(&custom).is_ok() {
-                    let _ = fs::remove_file(&custom);
-                }
+            let is_default = hash.eq_ignore_ascii_case(DEFAULT_MODEL_SHA256);
+            let target_name = if is_default {
                 DEFAULT_MODEL_FILE
             } else {
                 CUSTOM_MODEL_FILE
@@ -347,11 +364,13 @@ pub fn import_local_ai_file(user_dir: &Path, source_path: &str, kind: &str) -> R
             let final_out = models_dir.join(target_name);
             let _ = fs::remove_file(&tmp_out);
             fs::copy(&src, &tmp_out).map_err(|e| sanitize_err(user_dir, &e.to_string()))?;
-            if fs::symlink_metadata(&final_out).is_ok() {
-                let _ = fs::remove_file(&final_out);
+            replace_file_safely(user_dir, &tmp_out, &final_out, "AI model")?;
+            if is_default {
+                let custom = models_dir.join(CUSTOM_MODEL_FILE);
+                if fs::symlink_metadata(&custom).is_ok() {
+                    let _ = fs::remove_file(&custom);
+                }
             }
-            fs::rename(&tmp_out, &final_out)
-                .map_err(|e| sanitize_err(user_dir, &e.to_string()))?;
             Ok(())
         }
         "runtime_dll" => {
@@ -367,11 +386,7 @@ pub fn import_local_ai_file(user_dir: &Path, source_path: &str, kind: &str) -> R
             let final_out = bin_dir.join(ORT_DLL_NAME);
             let _ = fs::remove_file(&tmp_out);
             fs::copy(&src, &tmp_out).map_err(|e| sanitize_err(user_dir, &e.to_string()))?;
-            if fs::symlink_metadata(&final_out).is_ok() {
-                let _ = fs::remove_file(&final_out);
-            }
-            fs::rename(&tmp_out, &final_out)
-                .map_err(|e| sanitize_err(user_dir, &e.to_string()))?;
+            replace_file_safely(user_dir, &tmp_out, &final_out, ORT_DLL_NAME)?;
             Ok(())
         }
         _ => Err("Unsupported AI asset import type".to_string()),

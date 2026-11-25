@@ -2,8 +2,7 @@ use super::com_defs::*;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicU32, Ordering};
-use windows::core::{Interface, GUID, HRESULT};
-use windows::Win32::Foundation::BOOL;
+use windows::core::{Interface, BOOL, GUID, HRESULT};
 use windows::Win32::System::Ole::IDropSource;
 
 #[repr(C)]

@@ -68,7 +68,7 @@ describe("SidebarNavRail Trash theme styling", () => {
         railRef={createRef<HTMLDivElement>()}
         isMiniOverlay={false}
         showContentColumn={true}
-        activeTab="folders"
+        activeTab="trash"
         setActiveTab={vi.fn()}
         setIsOverlayOpen={vi.fn()}
         isDraggingInApp={false}
@@ -104,6 +104,7 @@ describe("SidebarNavRail Trash theme styling", () => {
     expect(activeTrashBtn.className).toContain("text-accent-fg");
     expect(activeTrashBtn.className).toContain("bg-accent-soft");
     expect(activeTrashBtn.className).not.toContain("text-danger");
+    expect(getByLabelText("Folders").className).not.toContain("bg-accent-soft");
 
     rerender(
       <SidebarNavRail
@@ -188,20 +189,20 @@ describe("SidebarNavRail Trash theme styling", () => {
     expect(dropFlashTrashBtn.className).not.toContain("danger");
   });
 
-  it("toggles Session Bin closed back to the previous primary tab on second click", () => {
-    const setActiveTab = vi.fn();
+  it("toggles Session Bin main table view directly on click and closes Mini Dock hover overlay", () => {
+    const setBinFilterActive = vi.fn();
     const setIsOverlayOpen = vi.fn();
 
     const makeProps = (
-      activeTab: "collections" | "bin",
+      binFilterActive: boolean,
       isMiniOverlay = false,
       showContentColumn = true
     ) => ({
       railRef: createRef<HTMLDivElement>(),
       isMiniOverlay,
       showContentColumn,
-      activeTab,
-      setActiveTab,
+      activeTab: "collections" as const,
+      setActiveTab: vi.fn(),
       setIsOverlayOpen,
       isDraggingInApp: false,
       isExternalFileDragActive: false,
@@ -216,9 +217,8 @@ describe("SidebarNavRail Trash theme styling", () => {
       selectedCollectionId: null,
       selectedTagIdsCount: 0,
       selectedGenre: null,
-      favoriteOnly: false,
-      validBinCount: 0,
-      binFilterActive: false,
+      validBinCount: 3,
+      binFilterActive,
       trashedCount: 0,
       trashFilterActive: false,
       scheduleOverlayClose: vi.fn(),
@@ -226,24 +226,25 @@ describe("SidebarNavRail Trash theme styling", () => {
       scheduleDragTabSwitch: vi.fn(),
       cancelDragTabSwitch: vi.fn(),
       updateDragHoverTarget: vi.fn(),
-      setFavoriteOnly: vi.fn(),
+      setBinFilterActive,
       setTrashFilterActive: vi.fn(),
       setSettingsOpen: vi.fn(),
     });
 
     const { getByLabelText, rerender } = render(
-      <SidebarNavRail {...makeProps("collections")} />
+      <SidebarNavRail {...makeProps(false)} />
     );
 
     fireEvent.click(getByLabelText("Session Bin"));
-    expect(setActiveTab).toHaveBeenLastCalledWith("bin");
+    expect(setBinFilterActive).toHaveBeenLastCalledWith(true);
 
-    rerender(<SidebarNavRail {...makeProps("bin")} />);
+    rerender(<SidebarNavRail {...makeProps(true)} />);
     fireEvent.click(getByLabelText("Session Bin"));
-    expect(setActiveTab).toHaveBeenLastCalledWith("collections");
+    expect(setBinFilterActive).toHaveBeenLastCalledWith(false);
 
-    rerender(<SidebarNavRail {...makeProps("bin", true, true)} />);
+    rerender(<SidebarNavRail {...makeProps(false, true, true)} />);
     fireEvent.click(getByLabelText("Session Bin"));
+    expect(setBinFilterActive).toHaveBeenLastCalledWith(true);
     expect(setIsOverlayOpen).toHaveBeenLastCalledWith(false);
   });
 });

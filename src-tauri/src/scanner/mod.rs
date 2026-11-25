@@ -25,6 +25,10 @@ use walkdir::WalkDir;
 pub const SUPPORTED_EXTENSIONS: &[&str] =
     &["wav", "mp3", "flac", "ogg", "aif", "aiff", "m4a", "opus", "aac"];
 
+/// Number of newly scanned files decoded & committed per SQLite batch so large initial
+/// archives keep peak RAM bounded and survive unexpected shutdowns mid-scan.
+pub const DEFAULT_SCAN_BATCH_SIZE: usize = 600;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanProgressPayload {
     pub library_path: String,
@@ -55,6 +59,7 @@ pub struct ScannedSample {
     pub camelot_key: String,
     pub peaks_json: String,
     pub auto_tags: Vec<String>,
+    pub genre_mood_tags: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -68,6 +73,13 @@ pub struct DirectoryScanOutput {
     pub scanned_samples: Vec<ScannedSample>,
     pub seen_paths: HashSet<String>,
     pub mtime_backfills: Vec<(String, i64)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DirectoryScanSummary {
+    pub seen_paths: HashSet<String>,
+    pub mtime_backfills: Vec<(String, i64)>,
+    pub total_scanned: usize,
 }
 
 /// Converts filesystem `Metadata::modified()` to Unix epoch milliseconds when available.
@@ -149,17 +161,23 @@ pub fn detect_is_loop(file_name: &str, file_path: &str, duration_ms: i64) -> boo
     false
 }
 
-pub fn scan_directory_with_progress<F>(
+#[allow(clippy::too_many_arguments)]
+pub fn scan_directory_in_batches<FP, FW, FB>(
     library_path: &str,
     scan_root: &Path,
     existing_files: &HashMap<String, ExistingFileMeta>,
     force_rebuild: bool,
     rules: &[AutoTagRule],
     categories: &HashMap<String, AutoTagCategoryConfig>,
-    on_progress: F,
-) -> DirectoryScanOutput
+    batch_size: usize,
+    on_progress: FP,
+    on_walk_complete: FW,
+    mut on_batch: FB,
+) -> Result<DirectoryScanSummary, String>
 where
-    F: Fn(ScanProgressPayload) + Sync,
+    FP: Fn(ScanProgressPayload) + Sync,
+    FW: FnOnce(&HashSet<String>) -> Result<(), String>,
+    FB: FnMut(Vec<ScannedSample>) -> Result<(), String>,
 {
     let mut audio_files: Vec<(PathBuf, String, i64, Option<i64>)> = Vec::new();
     let mut seen_paths: HashSet<String> = HashSet::new();
@@ -209,7 +227,7 @@ where
         if !force_rebuild {
             let lookup_key = path_lookup_key(&path_str);
             if let Some(old_meta) = existing_files.get(&lookup_key) {
-                if old_meta.file_size == file_size && file_size > 0 {
+                if old_meta.file_size == file_size {
                     match (old_meta.file_modified_at, file_modified_at) {
                         (Some(old_ms), Some(disk_ms)) if old_ms == disk_ms => continue,
                         (Some(_), None) | (None, None) => continue,
@@ -228,6 +246,8 @@ where
         audio_files.push((path.to_path_buf(), path_str, file_size, file_modified_at));
     }
 
+    on_walk_complete(&seen_paths)?;
+
     let total = audio_files.len();
     if total == 0 {
         on_progress(ScanProgressPayload {
@@ -237,93 +257,142 @@ where
             percentage: 100.0,
             current_file: String::new(),
         });
-        return DirectoryScanOutput {
-            scanned_samples: Vec::new(),
+        return Ok(DirectoryScanSummary {
             seen_paths,
             mtime_backfills,
-        };
+            total_scanned: 0,
+        });
     }
 
     let processed_counter = AtomicUsize::new(0);
+    let chunk_size = batch_size.max(1);
 
-    let scanned: Vec<ScannedSample> = audio_files
-        .par_iter()
-        .map(|(path, path_str, file_size, file_modified_at)| {
-            let file_name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let extension = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
+    for chunk in audio_files.chunks(chunk_size) {
+        let batch_samples: Vec<ScannedSample> = chunk
+            .par_iter()
+            .map(|(path, path_str, file_size, file_modified_at)| {
+                let file_name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let extension = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
 
-            let (duration_ms, sample_rate, channels, bit_depth, peaks_json) =
-                match decode_audio_and_peaks(path) {
-                    Some(res) => res,
-                    None => {
-                        let (d, sr, ch, bd) = fallback_lofty_props(path);
-                        (d, sr, ch, bd, "[]".to_string())
-                    }
-                };
+                let (duration_ms, sample_rate, channels, bit_depth, peaks_json) =
+                    match decode_audio_and_peaks(path) {
+                        Some(res) => res,
+                        None => {
+                            let (d, sr, ch, bd) = fallback_lofty_props(path);
+                            (d, sr, ch, bd, "[]".to_string())
+                        }
+                    };
 
-            let is_loop = detect_is_loop(&file_name, path_str, duration_ms);
-            let (meta, fast_bpm_key) = crate::audio::extract_embedded_meta_and_bpm_key(
-                Some(path),
-                &file_name,
-                path_str,
-            );
-            let auto_tags = match_auto_tags(
-                path_str,
-                &file_name,
-                duration_ms,
-                is_loop,
-                rules,
-                categories,
-            );
+                let is_loop = detect_is_loop(&file_name, path_str, duration_ms);
+                let (meta, fast_bpm_key) = crate::audio::extract_embedded_meta_and_bpm_key(
+                    Some(path),
+                    &file_name,
+                    path_str,
+                );
+                let auto_tags = match_auto_tags(
+                    path_str,
+                    &file_name,
+                    duration_ms,
+                    is_loop,
+                    rules,
+                    categories,
+                );
 
-            let done = processed_counter.fetch_add(1, Ordering::Relaxed) + 1;
-            if done == 1 || done == total || done.is_multiple_of(15) {
-                let pct = ((done as f64 / total as f64) * 100.0).clamp(0.0, 100.0);
-                on_progress(ScanProgressPayload {
-                    library_path: library_path.to_string(),
-                    processed: done,
-                    total,
-                    percentage: pct,
-                    current_file: file_name.clone(),
-                });
-            }
+                let done = processed_counter.fetch_add(1, Ordering::Relaxed) + 1;
+                if done == 1 || done == total || done.is_multiple_of(15) {
+                    let pct = ((done as f64 / total as f64) * 100.0).clamp(0.0, 100.0);
+                    on_progress(ScanProgressPayload {
+                        library_path: library_path.to_string(),
+                        processed: done,
+                        total,
+                        percentage: pct,
+                        current_file: file_name.clone(),
+                    });
+                }
 
-            ScannedSample {
-                file_path: path_str.clone(),
-                file_name,
-                extension,
-                duration_ms,
-                sample_rate,
-                channels,
-                bit_depth,
-                file_size: *file_size,
-                file_modified_at: *file_modified_at,
-                is_loop,
-                genre: meta.genre,
-                artist: meta.artist,
-                album: meta.album,
-                year: meta.year,
-                bpm: fast_bpm_key.bpm,
-                musical_key: fast_bpm_key.musical_key,
-                camelot_key: fast_bpm_key.camelot_key,
-                peaks_json,
-                auto_tags,
-            }
-        })
-        .collect();
+                ScannedSample {
+                    file_path: path_str.clone(),
+                    file_name,
+                    extension,
+                    duration_ms,
+                    sample_rate,
+                    channels,
+                    bit_depth,
+                    file_size: *file_size,
+                    file_modified_at: *file_modified_at,
+                    is_loop,
+                    genre: meta.genre,
+                    artist: meta.artist,
+                    album: meta.album,
+                    year: meta.year,
+                    bpm: fast_bpm_key.bpm,
+                    musical_key: fast_bpm_key.musical_key,
+                    camelot_key: fast_bpm_key.camelot_key,
+                    peaks_json,
+                    auto_tags,
+                    genre_mood_tags: meta.genre_mood_tags,
+                }
+            })
+            .collect();
+
+        if !batch_samples.is_empty() {
+            on_batch(batch_samples)?;
+        }
+    }
+
+    Ok(DirectoryScanSummary {
+        seen_paths,
+        mtime_backfills,
+        total_scanned: total,
+    })
+}
+
+pub fn scan_directory_with_progress<F>(
+    library_path: &str,
+    scan_root: &Path,
+    existing_files: &HashMap<String, ExistingFileMeta>,
+    force_rebuild: bool,
+    rules: &[AutoTagRule],
+    categories: &HashMap<String, AutoTagCategoryConfig>,
+    on_progress: F,
+) -> DirectoryScanOutput
+where
+    F: Fn(ScanProgressPayload) + Sync,
+{
+    let mut scanned = Vec::new();
+    let summary = scan_directory_in_batches(
+        library_path,
+        scan_root,
+        existing_files,
+        force_rebuild,
+        rules,
+        categories,
+        usize::MAX,
+        on_progress,
+        |_| Ok(()),
+        |batch| {
+            scanned.extend(batch);
+            Ok(())
+        },
+    )
+    .unwrap_or_else(|_| DirectoryScanSummary {
+        seen_paths: HashSet::new(),
+        mtime_backfills: Vec::new(),
+        total_scanned: 0,
+    });
 
     DirectoryScanOutput {
         scanned_samples: scanned,
-        seen_paths,
-        mtime_backfills,
+        seen_paths: summary.seen_paths,
+        mtime_backfills: summary.mtime_backfills,
     }
 }
 
@@ -396,6 +465,8 @@ mod tests {
                 rel_exclude_paths: Vec::new(),
                 min_duration_ms: None,
                 max_duration_ms: Some(2000),
+                facet_slug: None,
+                parent_tag_name: None,
             },
             AutoTagRule {
                 id: "r2".to_string(),
@@ -410,6 +481,8 @@ mod tests {
                 rel_exclude_paths: Vec::new(),
                 min_duration_ms: None,
                 max_duration_ms: None,
+                facet_slug: None,
+                parent_tag_name: None,
             },
             AutoTagRule {
                 id: "r3".to_string(),
@@ -424,6 +497,8 @@ mod tests {
                 rel_exclude_paths: Vec::new(),
                 min_duration_ms: None,
                 max_duration_ms: None,
+                facet_slug: None,
+                parent_tag_name: None,
             },
             AutoTagRule {
                 id: "r4".to_string(),
@@ -438,6 +513,8 @@ mod tests {
                 rel_exclude_paths: Vec::new(),
                 min_duration_ms: None,
                 max_duration_ms: None,
+                facet_slug: None,
+                parent_tag_name: None,
             },
         ];
         let cats = HashMap::new();
@@ -532,6 +609,8 @@ mod tests {
                 rel_exclude_paths: Vec::new(),
                 min_duration_ms: None,
                 max_duration_ms: None,
+                facet_slug: None,
+                parent_tag_name: None,
             },
             // Rule include_paths overrides category include_paths, while exclusions remain union
             AutoTagRule {
@@ -547,6 +626,8 @@ mod tests {
                 rel_exclude_paths: Vec::new(),
                 min_duration_ms: None,
                 max_duration_ms: None,
+                facet_slug: None,
+                parent_tag_name: None,
             },
         ];
 
@@ -739,5 +820,88 @@ mod tests {
         );
         assert!(!hits_mixed.contains(&"SubHalfSec".to_string()));
         assert!(hits_mixed.contains(&"KickDrum".to_string()));
+    }
+
+    #[test]
+    fn test_ucs_catid_avoids_english_false_positives_and_scope_respects_boundaries() {
+        // Common English filenames MUST NOT trigger UCS CatIDs
+        for false_pos in [
+            "Rainbow.wav",
+            "Rainbow_Loop.wav",
+            "Window_Break.wav",
+            "RAINBOW_Loop.wav",
+            "WINDOW_Break.wav",
+            "FOOTBALL_Crowd.wav",
+            "Amber_Pad.wav",
+            "Scissors_Cut.wav",
+            "Football_Crowd.wav",
+        ] {
+            assert_eq!(
+                extract_ucs_cat_id(false_pos),
+                None,
+                "Unexpected UCS match for {}",
+                false_pos
+            );
+        }
+
+        // Genuine UCS CatIDs still match
+        assert_eq!(extract_ucs_cat_id("AMB_Forest.wav"), Some("Ambience"));
+        assert_eq!(extract_ucs_cat_id("AMBBird_Park.wav"), Some("Ambience"));
+        assert_eq!(extract_ucs_cat_id("RAIN_Heavy.wav"), Some("Weather"));
+        assert_eq!(extract_ucs_cat_id("SCIFI_Laser.wav"), Some("Sci-Fi"));
+        assert_eq!(extract_ucs_cat_id("EXPL_BigBoom.wav"), Some("Explosion"));
+
+        // Category scope path filter MUST require directory segment boundaries
+        let settings = r##"{
+            "autoTagCategories": [{
+                "name": "SFX",
+                "include_paths": ["D:/Packs/SFX"],
+                "exclude_paths": ["Raw"]
+            }],
+            "autoTagRules": [{
+                "id": "r-hit",
+                "tag_name": "Hit",
+                "tag_color": "#EF4444",
+                "keywords": ["hit"],
+                "enabled": true,
+                "category": "SFX"
+            }]
+        }"##;
+        let (rules, cats) = parse_rules_from_settings(settings);
+
+        // `SFX` include must NOT match `SFX_Old`
+        assert!(match_auto_tags(
+            "D:/Packs/SFX_Old/Hit_01.wav",
+            "Hit_01.wav",
+            500,
+            false,
+            &rules,
+            &cats
+        )
+        .is_empty());
+
+        // `Raw` exclude must NOT match filename substring `strawberry_hit.wav`
+        assert_eq!(
+            match_auto_tags(
+                "D:/Packs/SFX/strawberry_hit.wav",
+                "strawberry_hit.wav",
+                500,
+                false,
+                &rules,
+                &cats
+            ),
+            vec!["Hit".to_string()]
+        );
+
+        // `Raw` exclude DOES match actual `Raw` folder
+        assert!(match_auto_tags(
+            "D:/Packs/SFX/Raw/Hit_01.wav",
+            "Hit_01.wav",
+            500,
+            false,
+            &rules,
+            &cats
+        )
+        .is_empty());
     }
 }

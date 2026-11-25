@@ -41,6 +41,7 @@ export function createSliceHistorySlice(ctx: StoreSliceContext) {
       isTrashView ? st.trashedSliceHistory : st.sliceHistory,
       {
         searchQuery: st.searchQuery,
+        folderFilter: st.folderFilter,
         sliceHideMissing: isTrashView ? false : st.sliceHideMissing,
         sliceFavoriteOnly: isTrashView ? false : st.sliceFavoriteOnly,
         slicePitchOnly: isTrashView ? false : st.slicePitchOnly,
@@ -93,6 +94,7 @@ export function createSliceHistorySlice(ctx: StoreSliceContext) {
 
       set({
         slicesFilterActive: false,
+        folderFilter: null,
         batchRenameSliceIds: null,
       });
       if (!applyInstantMemoryFilter({ preserveMultiSelect: false })) {

@@ -123,7 +123,8 @@ const AtmospherePresetsBar: React.FC = React.memo(() => {
 /**
  * Unified Surface & Atmosphere Controls (Style, Tint, Backdrop Blur, Visibility).
  */
-const SurfaceAtmosphereRows: React.FC = React.memo(() => {
+const SurfaceAtmosphereRows: React.FC<{ disabled?: boolean }> = React.memo(
+  ({ disabled = false }) => {
   const themeTintIntensity = useSampleStore((s) => s.themeTintIntensity);
   const setThemeTintIntensity = useSampleStore((s) => s.setThemeTintIntensity);
   const customBgBlur = useSampleStore((s) => s.customBgBlur);
@@ -132,7 +133,7 @@ const SurfaceAtmosphereRows: React.FC = React.memo(() => {
   const setCustomBgOpacity = useSampleStore((s) => s.setCustomBgOpacity);
 
   return (
-    <div className="divide-y divide-line">
+    <div className={`divide-y divide-line ${disabled ? "opacity-50 pointer-events-none" : ""}`}>
       {/* Row 1: Style Preset */}
       <div className="h-[38px] px-3 flex items-center justify-between gap-3">
         <span className="text-[12px] font-medium text-fg">Style</span>
@@ -149,6 +150,7 @@ const SurfaceAtmosphereRows: React.FC = React.memo(() => {
           {themeTintIntensity > 0 && (
             <button
               type="button"
+              disabled={disabled}
               onClick={() => setThemeTintIntensity(0)}
               className="w-[20px] h-[20px] flex items-center justify-center text-fg-2 hover:text-fg bg-surface-2 rounded-xs border border-line cursor-pointer"
               title="Reset surface tint to 0% (Neutral studio surface)"
@@ -161,6 +163,9 @@ const SurfaceAtmosphereRows: React.FC = React.memo(() => {
             min={0}
             max={1}
             step={0.01}
+            disabled={disabled}
+            aria-label="Theme tint intensity"
+            aria-valuetext={`${Math.round(themeTintIntensity * 100)}%`}
             value={themeTintIntensity}
             onChange={(e) => setThemeTintIntensity(parseFloat(e.target.value))}
             className="w-[140px]"
@@ -181,6 +186,7 @@ const SurfaceAtmosphereRows: React.FC = React.memo(() => {
           {customBgBlur > 0 && (
             <button
               type="button"
+              disabled={disabled}
               onClick={() => setCustomBgBlur(0)}
               className="w-[20px] h-[20px] flex items-center justify-center text-fg-2 hover:text-fg bg-surface-2 rounded-xs border border-line cursor-pointer"
               title="Reset backdrop blur to 0px (Crisp ASCII / Artwork)"
@@ -193,6 +199,9 @@ const SurfaceAtmosphereRows: React.FC = React.memo(() => {
             min={0}
             max={40}
             step={1}
+            disabled={disabled}
+            aria-label="Backdrop blur radius"
+            aria-valuetext={`${customBgBlur}px`}
             value={customBgBlur}
             onChange={(e) => setCustomBgBlur(parseInt(e.target.value, 10))}
             className="w-[140px]"
@@ -215,6 +224,9 @@ const SurfaceAtmosphereRows: React.FC = React.memo(() => {
             min={0}
             max={1}
             step={0.01}
+            disabled={disabled}
+            aria-label="Wallpaper visibility"
+            aria-valuetext={`${Math.round(customBgOpacity * 100)}%`}
             value={customBgOpacity}
             onChange={(e) => setCustomBgOpacity(parseFloat(e.target.value))}
             className="w-[140px]"
@@ -226,23 +238,34 @@ const SurfaceAtmosphereRows: React.FC = React.memo(() => {
       </div>
     </div>
   );
-});
+  }
+);
 
 export const AppearanceTab: React.FC = () => {
   const themeMode = useSampleStore((s) => s.themeMode);
   const accentColor = useSampleStore((s) => s.accentColor);
   const accentAuto = useSampleStore((s) => s.accentAuto);
   const enableMica = useSampleStore((s) => s.enableMica);
+  const sidebarCompactHover = useSampleStore((s) => s.sidebarCompactHover);
   const setThemeMode = useSampleStore((s) => s.setThemeMode);
   const setAccentColor = useSampleStore((s) => s.setAccentColor);
   const setAccentAuto = useSampleStore((s) => s.setAccentAuto);
   const setEnableMica = useSampleStore((s) => s.setEnableMica);
+  const setSidebarCompactHover = useSampleStore(
+    (s) => s.setSidebarCompactHover
+  );
+  const miniDockEdgePeek = useSampleStore((s) => s.miniDockEdgePeek);
+  const miniDockEdgeSide = useSampleStore((s) => s.miniDockEdgeSide);
+  const setMiniDockEdgePeek = useSampleStore((s) => s.setMiniDockEdgePeek);
+  const setMiniDockEdgeSide = useSampleStore((s) => s.setMiniDockEdgeSide);
+
+  const isContrast = themeMode === "contrast";
 
   return (
     <div className="space-y-3">
       {/* Unified Theme Mode & Accent Color Card */}
       <div className="bg-surface-1 border border-line rounded-md divide-y divide-line">
-        <div className="h-[38px] px-3 flex items-center justify-between gap-4">
+        <div className="min-h-[38px] px-3 py-1.5 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
           <div className="flex items-center space-x-2.5 min-w-0">
             <span className="text-[12px] font-medium text-fg shrink-0">
               Theme mode
@@ -329,6 +352,60 @@ export const AppearanceTab: React.FC = () => {
             />
           </div>
         </div>
+
+        <div
+          className="h-[38px] px-3 flex items-center justify-between gap-3"
+          title="When the main sidebar is in Compact Mode, reveal panels smoothly on hover over the icon rail instead of expanding the layout"
+        >
+          <span className="text-[12px] font-medium text-fg">
+            Compact sidebar hover
+          </span>
+          <ModernToggleSwitch
+            checked={sidebarCompactHover}
+            onChange={setSidebarCompactHover}
+            title="Enable hover-peek overlay when the main sidebar is collapsed"
+          />
+        </div>
+
+        <div
+          className="h-[38px] px-3 flex items-center justify-between gap-3"
+          title="Auto-hide Mini Dock into a slim theme-colored edge handle and reveal smoothly on hover"
+        >
+          <span className="text-[12px] font-medium text-fg">
+            Mini Dock edge-peek
+          </span>
+          <div className="flex items-center space-x-2 shrink-0">
+            <div className="flex items-center p-0.5 bg-surface-2 rounded-xs border border-line">
+              {(
+                [
+                  { id: "left", label: "Left" },
+                  { id: "right", label: "Right" },
+                ] as const
+              ).map((opt) => {
+                const active = miniDockEdgeSide === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setMiniDockEdgeSide(opt.id)}
+                    className={`h-[20px] px-2 rounded-xs text-[10.5px] transition-colors cursor-pointer ${
+                      active
+                        ? "bg-accent-soft border border-accent/60 text-accent-fg font-semibold"
+                        : "text-fg-2 hover:text-fg border border-transparent font-medium"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+            <ModernToggleSwitch
+              checked={miniDockEdgePeek}
+              onChange={setMiniDockEdgePeek}
+              title="Enable Windows Edge-Peek auto-hide in Mini Dock"
+            />
+          </div>
+        </div>
       </div>
 
       {/* 2-Column Middle Deck: Surface & Atmosphere Controls (Left) + Live Preview (Right) */}
@@ -340,12 +417,23 @@ export const AppearanceTab: React.FC = () => {
               <span>SURFACE &amp; ATMOSPHERE</span>
             </div>
             <ModernToggleSwitch
-              checked={enableMica}
+              checked={!isContrast && enableMica}
+              disabled={isContrast}
               onChange={setEnableMica}
-              title="Toggle Mica Translucent Glass (Backdrop blur & surface translucency)"
+              title={
+                isContrast
+                  ? "Disabled in High Contrast mode to keep opaque accessible surfaces"
+                  : "Toggle Mica Translucent Glass (Backdrop blur & surface translucency)"
+              }
             />
           </div>
-          <SurfaceAtmosphereRows />
+          {isContrast && (
+            <div className="px-3 py-1.5 bg-surface-2 border-b border-line text-[10.5px] text-fg-2">
+              High Contrast keeps solid opaque surfaces. Switch to Dark or Light
+              to customize Mica glass, tint, and wallpaper backdrops.
+            </div>
+          )}
+          <SurfaceAtmosphereRows disabled={isContrast} />
         </div>
 
         <div className="bg-surface-1 border border-line rounded-md flex flex-col overflow-hidden">
@@ -361,7 +449,12 @@ export const AppearanceTab: React.FC = () => {
       </div>
 
       {/* Bottom: Wallpapers Gallery */}
-      <WallpaperCanvasControl />
+      <div
+        className={isContrast ? "opacity-55 pointer-events-none select-none" : undefined}
+        aria-disabled={isContrast || undefined}
+      >
+        <WallpaperCanvasControl />
+      </div>
     </div>
   );
 };

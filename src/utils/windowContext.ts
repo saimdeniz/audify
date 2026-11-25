@@ -36,9 +36,18 @@ export type CrossWindowSyncKind =
 export interface CrossWindowSyncMessage {
   kind: CrossWindowSyncKind;
   patch?: Record<string, unknown>;
+  msgId?: string;
 }
 
 let syncChannel: BroadcastChannel | null = null;
+let syncMsgSeq = 0;
+
+function nextCrossWindowSyncMsgId(): string {
+  syncMsgSeq += 1;
+  return `${Date.now().toString(36)}-${syncMsgSeq}-${Math.random()
+    .toString(36)
+    .slice(2, 7)}`;
+}
 
 function getSyncChannel(): BroadcastChannel | null {
   if (typeof window === "undefined" || typeof BroadcastChannel === "undefined") {
@@ -58,17 +67,18 @@ export function postCrossWindowSync(
   kind: CrossWindowSyncKind,
   patch?: Record<string, unknown>
 ): void {
+  const msgId = nextCrossWindowSyncMsgId();
   try {
     const ch = getSyncChannel();
     if (ch) {
-      ch.postMessage({ kind, patch } satisfies CrossWindowSyncMessage);
+      ch.postMessage({ kind, patch, msgId } satisfies CrossWindowSyncMessage);
     }
   } catch {
     // ignore BroadcastChannel errors
   }
 
   if (kind === "catalog" || kind === "profile" || kind === "backgrounds") {
-    void Promise.resolve(invoke("broadcast_state_sync", { kind })).catch(
+    void Promise.resolve(invoke("broadcast_state_sync", { kind, msgId })).catch(
       () => {}
     );
   }

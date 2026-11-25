@@ -1,13 +1,20 @@
-import React, { useLayoutEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { Check, ChevronDown, Zap } from "lucide-react";
-import { Z_INDEX } from "../../constants/zIndex";
+import React, { useMemo } from "react";
+import { Zap } from "lucide-react";
 import {
   AutoTagCategoryConfig,
   AutoTagPreviewResult,
   AutoTagRule,
+  Tag,
+  TagFacet,
+  TaxonomyFacetSlug,
 } from "../../types";
+import {
+  getFacetsForDomain,
+  isFacetHierarchical,
+  resolveTagFacetSlug,
+} from "../../utils/taxonomyTree";
 import { ColorPickerPopover } from "../ColorPickerPopover";
+import { ThemedSelect, type ThemedSelectOption } from "../common/ThemedSelect";
 import { ModernToggleSwitch } from "./ModernToggleSwitch";
 import { ScopeLimitsEditor } from "./ScopeLimitsEditor";
 
@@ -155,6 +162,8 @@ export const TagRuleCategoryPanel: React.FC<TagRuleCategoryPanelProps> = ({
 };
 
 interface TagRuleEditorPanelProps {
+  tagFacets: readonly TagFacet[];
+  tags: Tag[];
   activeInspectedRule: AutoTagRule;
   activeRuleCategoryConfig: AutoTagCategoryConfig | null;
   allAvailableCategories: string[];
@@ -162,8 +171,8 @@ interface TagRuleEditorPanelProps {
   setInspectorRuleTagName: (v: string) => void;
   inspectorRuleKeywords: string;
   setInspectorRuleKeywords: (v: string) => void;
-  isRuleCategoryDropdownOpen: boolean;
-  setIsRuleCategoryDropdownOpen: (v: boolean) => void;
+  isRuleCategoryDropdownOpen?: boolean;
+  setIsRuleCategoryDropdownOpen?: (v: boolean) => void;
   isRuleOverridesOpen: boolean;
   setIsRuleOverridesOpen: (v: boolean) => void;
   inspectedRulePreview: AutoTagPreviewResult | null;
@@ -179,6 +188,8 @@ interface TagRuleEditorPanelProps {
  * Rule-level criteria, match test preview, and scope overrides form inside the inspector.
  */
 export const TagRuleEditorPanel: React.FC<TagRuleEditorPanelProps> = ({
+  tagFacets,
+  tags,
   activeInspectedRule,
   activeRuleCategoryConfig,
   allAvailableCategories,
@@ -186,8 +197,6 @@ export const TagRuleEditorPanel: React.FC<TagRuleEditorPanelProps> = ({
   setInspectorRuleTagName,
   inspectorRuleKeywords,
   setInspectorRuleKeywords,
-  isRuleCategoryDropdownOpen,
-  setIsRuleCategoryDropdownOpen,
   isRuleOverridesOpen,
   setIsRuleOverridesOpen,
   inspectedRulePreview,
@@ -198,27 +207,49 @@ export const TagRuleEditorPanel: React.FC<TagRuleEditorPanelProps> = ({
   const excludedKeywords = (activeInspectedRule.keywords || []).filter(
     (k) => k.startsWith("!") || k.startsWith("-")
   );
-  const categoryTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const [categoryMenuPos, setCategoryMenuPos] = useState({ top: 0, left: 0 });
 
-  useLayoutEffect(() => {
-    if (!isRuleCategoryDropdownOpen) return;
-    const update = () => {
-      const rect = categoryTriggerRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      setCategoryMenuPos({
-        top: Math.min(rect.bottom + 4, window.innerHeight - 220),
-        left: Math.max(8, Math.min(rect.left, window.innerWidth - 152)),
-      });
-    };
-    update();
-    window.addEventListener("resize", update);
-    window.addEventListener("scroll", update, true);
-    return () => {
-      window.removeEventListener("resize", update);
-      window.removeEventListener("scroll", update, true);
-    };
-  }, [isRuleCategoryDropdownOpen]);
+  const scopeGroupOptions = useMemo<ThemedSelectOption[]>(
+    () => allAvailableCategories.map((c) => ({ value: c, label: c })),
+    [allAvailableCategories]
+  );
+
+  const tagDomainFacets = useMemo(
+    () => getFacetsForDomain(tagFacets, "tags"),
+    [tagFacets]
+  );
+
+  const ruleFacet: TaxonomyFacetSlug =
+    activeInspectedRule.facet_slug || "category";
+  const ruleFacetHierarchical = isFacetHierarchical(ruleFacet, tagFacets);
+
+  const facetOptions = useMemo<ThemedSelectOption[]>(
+    () =>
+      tagDomainFacets.map((f) => ({
+        value: f.slug,
+        label: f.name,
+      })),
+    [tagDomainFacets]
+  );
+
+  const parentCategoryOptions = useMemo<ThemedSelectOption[]>(
+    () => [
+      { value: "", label: "(Root / Auto)" },
+      ...tags
+        .filter(
+          (t) =>
+            resolveTagFacetSlug(t, tagFacets) === ruleFacet &&
+            !t.parent_id &&
+            t.name.toLowerCase() !==
+              activeInspectedRule.tag_name.trim().toLowerCase()
+        )
+        .map((root) => ({
+          value: root.name,
+          label: root.name,
+          color: root.effective_color || root.color,
+        })),
+    ],
+    [tags, tagFacets, ruleFacet, activeInspectedRule.tag_name]
+  );
 
   return (
     <>
@@ -233,71 +264,18 @@ export const TagRuleEditorPanel: React.FC<TagRuleEditorPanelProps> = ({
           title="Toggle rule ON / OFF"
         />
 
-        <div className="relative shrink-0">
-          <button
-            ref={categoryTriggerRef}
-            type="button"
-            onClick={() =>
-              setIsRuleCategoryDropdownOpen(!isRuleCategoryDropdownOpen)
+        <div className="w-[126px] shrink-0">
+          <ThemedSelect
+            value={activeInspectedRule.category || "SFX"}
+            options={scopeGroupOptions}
+            ariaLabel="Rule Scope Group"
+            title="Folder Scope Group"
+            triggerClassName="h-[24px] px-2 text-[10px]"
+            minMenuWidth={140}
+            onChange={(c) =>
+              void updateAutoTagRule(activeInspectedRule.id, { category: c })
             }
-            className="h-[24px] px-2 bg-surface-2 hover:bg-surface-3 hover:border-accent border border-line rounded-xs font-mono text-[10px] text-fg flex items-center space-x-1.5 transition-colors cursor-pointer"
-            title="Rule Category"
-          >
-            <span className="font-semibold text-accent-fg">
-              {activeInspectedRule.category || "SFX"}
-            </span>
-            <ChevronDown className="w-2.5 h-2.5 text-fg-3 shrink-0" />
-          </button>
-
-          {isRuleCategoryDropdownOpen &&
-            createPortal(
-              <>
-                <div
-                  style={{ zIndex: Z_INDEX.contextMenu }}
-                  className="fixed inset-0"
-                  onClick={() => setIsRuleCategoryDropdownOpen(false)}
-                />
-                <div
-                  data-settings-dropdown-open="true"
-                  data-mica-overlay="true"
-                  style={{
-                    top: categoryMenuPos.top,
-                    left: categoryMenuPos.left,
-                    zIndex: Z_INDEX.floatingMenu,
-                  }}
-                  className="fixed w-36 max-h-[240px] overflow-y-auto bg-surface-2 border border-line rounded-md shadow-2xl py-1 font-mono text-[10px] backdrop-blur-md"
-                >
-                  {allAvailableCategories.map((c) => {
-                    const isCurrent =
-                      (activeInspectedRule.category || "SFX").toLowerCase() ===
-                      c.toLowerCase();
-                    return (
-                      <button
-                        key={c}
-                        type="button"
-                        onClick={() => {
-                          void updateAutoTagRule(activeInspectedRule.id, {
-                            category: c,
-                          });
-                          setIsRuleCategoryDropdownOpen(false);
-                        }}
-                        className={`w-full px-2.5 py-1 text-left flex items-center justify-between transition-colors cursor-pointer ${
-                          isCurrent
-                            ? "bg-accent-soft text-accent-fg font-bold"
-                            : "text-fg-2 hover:bg-surface-3 hover:text-fg"
-                        }`}
-                      >
-                        <span>{c}</span>
-                        {isCurrent && (
-                          <Check className="w-2.5 h-2.5 text-accent-fg shrink-0" />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </>,
-              document.body
-            )}
+          />
         </div>
 
         <div className="flex items-center space-x-1.5 bg-surface-soft border border-line px-1.5 h-[24px] rounded-xs ml-auto">
@@ -348,6 +326,47 @@ export const TagRuleEditorPanel: React.FC<TagRuleEditorPanelProps> = ({
           }}
           className="w-full h-[26px] bg-surface-2 border border-line focus:border-accent px-2 text-[11px] font-mono text-fg outline-none rounded-xs"
         />
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-1">
+          <label className="text-[10px] font-mono text-fg-3 uppercase tracking-wider block font-medium">
+            Target Facet
+          </label>
+          <ThemedSelect
+            value={ruleFacet}
+            options={facetOptions}
+            ariaLabel="Target Facet"
+            triggerClassName="h-[26px] text-[10.5px]"
+            onChange={(val) => {
+              const nextFacet = val as TaxonomyFacetSlug;
+              void updateAutoTagRule(activeInspectedRule.id, {
+                facet_slug: nextFacet,
+                parent_tag_name: isFacetHierarchical(nextFacet, tagFacets)
+                  ? activeInspectedRule.parent_tag_name
+                  : undefined,
+              });
+            }}
+          />
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-[10px] font-mono text-fg-3 uppercase tracking-wider block font-medium">
+            Parent Category
+          </label>
+          <ThemedSelect
+            disabled={!ruleFacetHierarchical}
+            value={activeInspectedRule.parent_tag_name || ""}
+            options={parentCategoryOptions}
+            ariaLabel="Parent Category"
+            triggerClassName="h-[26px] text-[10.5px]"
+            onChange={(val) =>
+              void updateAutoTagRule(activeInspectedRule.id, {
+                parent_tag_name: val || undefined,
+              })
+            }
+          />
+        </div>
       </div>
 
       <div className="space-y-1">
@@ -420,9 +439,15 @@ export const TagRuleEditorPanel: React.FC<TagRuleEditorPanelProps> = ({
                 {name}
               </div>
             ))}
-            {inspectedRulePreview.sample_names.length > 12 && (
+            {inspectedRulePreview.match_count >
+              Math.min(12, inspectedRulePreview.sample_names.length) && (
               <div className="text-[9px] text-fg-3 py-0.5 font-semibold">
-                +{inspectedRulePreview.sample_names.length - 12} more files
+                +
+                {(
+                  inspectedRulePreview.match_count -
+                  Math.min(12, inspectedRulePreview.sample_names.length)
+                ).toLocaleString()}{" "}
+                more files
               </div>
             )}
           </div>

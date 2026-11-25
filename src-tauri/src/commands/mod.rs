@@ -1,6 +1,8 @@
 pub mod ai;
+pub mod ai_external;
 pub mod ascii_magic;
 pub mod audio_ops;
+pub mod audio_playback;
 pub mod backups;
 pub mod duplicates;
 pub mod file_ops;
@@ -14,8 +16,10 @@ pub mod system;
 pub mod taxonomy;
 
 pub use ai::*;
+pub use ai_external::*;
 pub use ascii_magic::*;
 pub use audio_ops::*;
+pub use audio_playback::*;
 pub use backups::*;
 pub use duplicates::*;
 pub use file_ops::*;
@@ -36,7 +40,7 @@ pub(crate) fn with_read_conn<T, F>(state: &crate::db::AppState, op: F) -> Result
 where
     F: FnOnce(&Connection) -> Result<T, String>,
 {
-    if let Ok(read_conn) = crate::db::open_read_conn(&state.user_dir) {
+    if let Ok(read_conn) = state.acquire_read_conn() {
         op(&read_conn)
     } else {
         let conn = state.lock_db();
@@ -70,26 +74,31 @@ pub(crate) fn resolve_or_create_auto_tag(
         }
     }
 
-    let raw_col = rules
+    let matching_rule = rules
         .iter()
-        .find(|r| r.tag_name.trim().eq_ignore_ascii_case(trimmed))
-        .map(|r| r.tag_color.as_str())
-        .unwrap_or("");
-    let fallback_col = crate::db::deterministic_color_for_name(trimmed);
-    let col = crate::security::sanitize_hex_color_or_default(raw_col, fallback_col);
+        .find(|r| r.tag_name.trim().eq_ignore_ascii_case(trimmed));
+    let raw_col = matching_rule.map(|r| r.tag_color.as_str()).unwrap_or("");
+    let rule_facet = matching_rule.and_then(|r| r.facet_slug.as_deref());
+    let rule_parent = matching_rule.and_then(|r| r.parent_tag_name.as_deref());
+    let valid_rule_col = crate::security::validate_hex_color(raw_col).ok();
+    let canonical = crate::taxonomy_catalog::lookup_canonical_by_name(trimmed);
+    // For canonical sub-tags inheriting family color, let canonical hierarchy control color inheritance
+    // unless a custom non-canonical rule color was explicitly configured.
+    let color_override = if canonical.is_some_and(|spec| spec.color_inherited) {
+        None
+    } else {
+        valid_rule_col.as_deref()
+    };
 
-    // Preserve any existing manual/auto tag color on conflict or case collision.
-    let _ = tx.execute(
-        "INSERT OR IGNORE INTO tags (name, color, is_manual) VALUES (?1, ?2, 0)",
-        params![trimmed, col],
-    );
-    let tid: i64 = tx
-        .query_row(
-            "SELECT id FROM tags WHERE LOWER(name) = LOWER(?1) OR name = ?2 LIMIT 1",
-            params![&lower, trimmed],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
+    let tid = crate::db::ensure_taxonomy_tag(
+        tx,
+        trimmed,
+        rule_facet,
+        rule_parent,
+        color_override,
+        false,
+    )
+    .unwrap_or(0);
     if tid > 0 {
         tag_map.insert(lower, tid);
     }
@@ -108,21 +117,44 @@ pub(crate) fn normalize_path_str(p: &str) -> String {
     }
 }
 
+/// Char-by-char Unicode case-insensitive prefix matcher (safe when UTF-8 byte lengths
+/// differ under case-folding, e.g. Turkish `İ` vs `i\u{0307}` or `ß` vs `ss`).
+/// `prefix_lower` must already be lowercased.
+pub(crate) fn strip_unicode_prefix_ci<'a>(value: &'a str, prefix_lower: &str) -> Option<&'a str> {
+    let mut val_chars = value.char_indices();
+    let mut target_chars = prefix_lower.chars().peekable();
+    while let Some(expected_ch) = target_chars.peek().copied() {
+        let (_byte_idx, actual_ch) = val_chars.next()?;
+        let mut lower_iter = actual_ch.to_lowercase();
+        let first_lower = lower_iter.next()?;
+        if first_lower != expected_ch {
+            return None;
+        }
+        target_chars.next();
+        for extra_lower in lower_iter {
+            if target_chars.next() != Some(extra_lower) {
+                return None;
+            }
+        }
+    }
+    let rest_start = val_chars
+        .next()
+        .map(|(idx, _)| idx)
+        .unwrap_or(value.len());
+    value.get(rest_start..)
+}
+
 /// Returns the part of `file_path` that lies below `lib_path` (original casing, no leading slash).
 /// - Requires a folder boundary, so `C:/Sounds` does NOT match `C:/SoundsOld/x.wav`.
-/// - Uses checked slicing, so case-folding differences (e.g. Turkish `İ`) can never cause a
-///   char-boundary panic; a non-matching prefix simply yields `None`.
+/// - Uses char-by-char Unicode case-folding so Turkish `İ`/`ı` byte-length differences never
+///   cause false mismatches or char-boundary panics.
 pub(crate) fn strip_lib_prefix(file_path: &str, lib_path: &str) -> Option<String> {
     let norm_file = normalize_path_str(file_path);
     let norm_lib = normalize_path_str(lib_path);
     if norm_lib.is_empty() {
         return None;
     }
-    let head = norm_file.get(..norm_lib.len())?;
-    if head.to_lowercase() != norm_lib.to_lowercase() {
-        return None;
-    }
-    let rest = norm_file.get(norm_lib.len()..)?;
+    let rest = strip_unicode_prefix_ci(&norm_file, &norm_lib.to_lowercase())?;
     if !norm_lib.ends_with('/') && !rest.starts_with('/') {
         return None;
     }
@@ -244,29 +276,32 @@ pub(crate) fn query_sample_tags(
     conn: &Connection,
     sample_id: i64,
 ) -> Result<Vec<SampleTagBadge>, String> {
+    let all_tags = crate::commands::taxonomy::query_tags_with_conn(conn)?;
+    let by_id: HashMap<i64, &Tag> = all_tags.iter().map(|t| (t.id, t)).collect();
+
     let mut stmt = conn
         .prepare(
-            "SELECT t.id, t.name, t.color
+            "SELECT st.tag_id
              FROM sample_tags st
              INNER JOIN tags t ON t.id = st.tag_id
              WHERE st.sample_id = ?1
-             ORDER BY t.name COLLATE NOCASE ASC",
+             ORDER BY t.name COLLATE NOCASE ASC, t.id ASC",
         )
         .map_err(|e| format!("Query prepare error: {}", e))?;
 
     let rows = stmt
-        .query_map(params![sample_id], |row| {
-            Ok(SampleTagBadge {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                color: row.get(2)?,
-            })
-        })
+        .query_map(params![sample_id], |row| row.get::<_, i64>(0))
         .map_err(|e| format!("Query execution error: {}", e))?;
 
     let mut out = Vec::new();
-    for r in rows.flatten() {
-        out.push(r);
+    for tid in rows.flatten() {
+        if let Some(tag) = by_id.get(&tid) {
+            out.push(SampleTagBadge {
+                id: tag.id,
+                name: tag.name.clone(),
+                color: tag.effective_color.clone(),
+            });
+        }
     }
     Ok(out)
 }
@@ -353,6 +388,15 @@ mod audit_tests {
         let _ = strip_lib_prefix("C:/İstanbul/x.wav", "C:/istanbul");
         let _ = strip_lib_prefix("C:/istanbul/x.wav", "C:/İstanbul");
         let _ = strip_lib_prefix("İ", "İİİİİİ");
+        // Exact Unicode case-folding equivalence where UTF-8 byte lengths differ (`İ` 2B vs `i\u{0307}` 3B)
+        assert_eq!(
+            strip_lib_prefix("C:/i\u{0307}stanbul/sfx/hit.wav", "C:/İstanbul"),
+            Some("sfx/hit.wav".to_string())
+        );
+        assert_eq!(
+            strip_lib_prefix("C:/İstanbul/sfx/hit.wav", "C:/i\u{0307}stanbul"),
+            Some("sfx/hit.wav".to_string())
+        );
     }
 
     #[test]
@@ -592,11 +636,19 @@ mod audit_tests {
 
         // 5. export_settings_to_file refuses non-JSON destinations and existing non-JSON binary files
         let bad_dest = tmp.path().join("evil.exe");
-        assert!(export_settings_to_file(bad_dest.to_string_lossy().into(), "{}".into()).is_err());
+        assert!(tauri::async_runtime::block_on(export_settings_to_file(
+            bad_dest.to_string_lossy().into(),
+            "{}".into()
+        ))
+        .is_err());
 
         let fake_json = tmp.path().join("not_really_json.json");
         fs::write(&fake_json, b"MZ\x90\x00binary_executable_payload").unwrap();
-        assert!(export_settings_to_file(fake_json.to_string_lossy().into(), "{}".into()).is_err());
+        assert!(tauri::async_runtime::block_on(export_settings_to_file(
+            fake_json.to_string_lossy().into(),
+            "{}".into()
+        ))
+        .is_err());
     }
 
     #[test]

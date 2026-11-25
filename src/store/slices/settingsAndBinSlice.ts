@@ -1,6 +1,9 @@
 import { DEFAULT_SHORTCUTS } from "../../constants/shortcuts";
 import {
+  ExportAudioPreset,
+  ExportLoudnessMode,
   KeyboardShortcuts,
+  MiniDockEdgeSide,
   WaveformSensitivity,
   WaveformStyle,
 } from "../../types";
@@ -13,6 +16,7 @@ import { createLicenseActions } from "./licenseActions";
 
 export interface SettingsSliceTimers {
   flushPendingTint: () => void;
+  cancelPendingTint: () => void;
   clearToastTimers: () => void;
 }
 
@@ -34,8 +38,12 @@ export function createSettingsAndBinSlice(
   | "resumeCreditToast"
   | "addSamplesToBin"
   | "removeSampleFromBin"
+  | "removeSamplesFromBin"
   | "clearBin"
   | "setAutoBinOnNleDrag"
+  | "setSidebarCollapsed"
+  | "toggleSidebarCollapsed"
+  | "setSidebarCompactHover"
   | "setBinFilterActive"
   | "setCustomSliceExportPath"
   | "pickCustomSliceExportPath"
@@ -49,11 +57,16 @@ export function createSettingsAndBinSlice(
   | "setPlayheadLatencyMs"
   | "setAudioOutputDeviceId"
   | "setSliceMicroFade"
+  | "setExportAudioPreset"
+  | "setExportLoudnessMode"
+  | "setSkipLeadingSilence"
   | "setNormalizePreview"
   | "setAutoAnalyzeBpmKey"
   | "setEnableLiveFolderWatch"
   | "toggleMiniDock"
   | "setMiniDockPinned"
+  | "setMiniDockEdgePeek"
+  | "setMiniDockEdgeSide"
   | "setEnableMica"
   | "setThemeTintIntensity"
   | "setCustomBgImage"
@@ -73,7 +86,6 @@ export function createSettingsAndBinSlice(
   | "resetShortcuts"
   | "setStatusMessage"
   | "showStatusNotice"
-  | "clearStatusNotice"
 > {
   const { set, get, emitNotice } = ctx;
 
@@ -81,8 +93,9 @@ export function createSettingsAndBinSlice(
     timersOut.clearToastTimers = clearFn;
   });
   const binAndMiniDockActions = createBinAndMiniDockActions(ctx);
-  const appearanceActions = createAppearanceAndModalActions(ctx, (flushFn) => {
-    timersOut.flushPendingTint = flushFn;
+  const appearanceActions = createAppearanceAndModalActions(ctx, (t) => {
+    timersOut.flushPendingTint = t.flushPendingTint;
+    timersOut.cancelPendingTint = t.cancelPendingTint;
   });
 
   return {
@@ -127,6 +140,72 @@ export function createSettingsAndBinSlice(
           ? "Slice 3ms anti-click micro-fade enabled"
           : "Slice 3ms anti-click micro-fade disabled",
       });
+      void get().persistActiveProfileSettings();
+    },
+
+    setExportAudioPreset: (exportAudioPreset: ExportAudioPreset) => {
+      safeSetItem(AUDIFY_STORAGE_KEYS.exportAudioPreset, exportAudioPreset);
+      const label =
+        exportAudioPreset === "nle_48k_24"
+          ? "48 kHz / 24-bit Broadcast WAV (NLE)"
+          : exportAudioPreset === "wav_24"
+          ? "24-bit Lossless WAV (source sample rate)"
+          : "Keep Source (preserves 24-bit on hi-res files)";
+      set({
+        exportAudioPreset,
+        statusMessage: `Slice & pitch export format: ${label}`,
+      });
+      void get().persistActiveProfileSettings();
+    },
+
+    setExportLoudnessMode: (exportLoudnessMode: ExportLoudnessMode) => {
+      safeSetItem(AUDIFY_STORAGE_KEYS.exportLoudnessMode, exportLoudnessMode);
+      const label =
+        exportLoudnessMode === "peak_m1"
+          ? "Peak -1 dBTP"
+          : exportLoudnessMode === "lufs_m14"
+          ? "-14 LUFS (Streaming)"
+          : exportLoudnessMode === "lufs_m24"
+          ? "-24 LUFS (Broadcast)"
+          : "Off (original level)";
+      set({
+        exportLoudnessMode,
+        statusMessage: `Export loudness normalization: ${label}`,
+      });
+      void get().persistActiveProfileSettings();
+    },
+
+    setSkipLeadingSilence: (skipLeadingSilence: boolean) => {
+      safeSetItem(
+        AUDIFY_STORAGE_KEYS.skipLeadingSilence,
+        String(skipLeadingSilence)
+      );
+      set({
+        skipLeadingSilence,
+        statusMessage: skipLeadingSilence
+          ? "Skip leading silence on preview enabled"
+          : "Skip leading silence on preview disabled",
+      });
+      void get().persistActiveProfileSettings();
+    },
+
+    setMiniDockEdgePeek: (miniDockEdgePeek: boolean) => {
+      safeSetItem(
+        AUDIFY_STORAGE_KEYS.miniDockEdgePeek,
+        String(miniDockEdgePeek)
+      );
+      set({
+        miniDockEdgePeek,
+        statusMessage: miniDockEdgePeek
+          ? "Mini Dock Edge-Peek auto-hide enabled"
+          : "Mini Dock Edge-Peek auto-hide disabled",
+      });
+      void get().persistActiveProfileSettings();
+    },
+
+    setMiniDockEdgeSide: (miniDockEdgeSide: MiniDockEdgeSide) => {
+      safeSetItem(AUDIFY_STORAGE_KEYS.miniDockEdgeSide, miniDockEdgeSide);
+      set({ miniDockEdgeSide });
       void get().persistActiveProfileSettings();
     },
 
@@ -190,7 +269,6 @@ export function createSettingsAndBinSlice(
         targetNorm === "tab" ||
         targetNorm === "arrowup" ||
         targetNorm === "arrowdown" ||
-        /^[1-9]$/.test(targetNorm) ||
         targetNorm === "ctrl+," ||
         targetNorm === "ctrl+z" ||
         targetNorm === "ctrl+y" ||
@@ -238,9 +316,8 @@ export function createSettingsAndBinSlice(
 
     showStatusNotice: (
       message: string,
-      kind: "info" | "success" | "error" = "info"
-    ) => emitNotice(message, kind),
-
-    clearStatusNotice: () => set({ statusNotice: null }),
+      kind: "info" | "success" | "error" = "info",
+      action?: import("../storePayloads").StatusNoticeAction
+    ) => emitNotice(message, kind, action),
   };
 }

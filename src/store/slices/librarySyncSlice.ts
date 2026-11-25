@@ -1,14 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
-import { SampleItem } from "../../types";
+import { SampleItem, Tag, TagFacet } from "../../types";
 import {
   isSampleInLicenseGroup,
   normalizePathForMatch,
 } from "../../utils/format";
+import { internSamplePoolWithStatus } from "../../utils/sampleInterning";
 import { executeSmartSearch } from "../../utils/smartSearch";
 import {
   applyClientFacetFilters,
   reconcileSelectionAfterFilter,
 } from "../filterEngine";
+import { resetPlayheadClock } from "../playheadClock";
 import { isStandaloneSettingsWindow } from "../storageHelpers";
 import type { StoreSliceContext } from "../types";
 import { SAMPLE_QUERY_LIMIT, summarizeSamplePool } from "./catalogSyncSlice";
@@ -42,6 +44,8 @@ export function createLibrarySyncSlice(
         folderFilter,
         favoriteOnly,
         selectedTagIds,
+        excludedTagIds,
+        tagMatchMode,
         collections,
         selectedCollectionId,
         trashFilterActive,
@@ -75,22 +79,48 @@ export function createLibrarySyncSlice(
           : searchQuery.trim()
           ? searchQuery.trim()
           : null;
+        const useCompactTags = get().tags.length > 0;
         const resultRaw = await invoke<SampleItem[]>("query_samples", {
           searchQuery: sqlSearchQuery,
           folderFilter: trashFilterActive ? null : folderFilter,
           favoriteOnly: trashFilterActive ? false : favoriteOnly,
           tagIds: trashFilterActive ? [] : selectedTagIds,
+          excludedTagIds: trashFilterActive ? [] : excludedTagIds,
+          tagMatchMode: trashFilterActive ? "all" : tagMatchMode,
           collectionId:
             trashFilterActive || smartQuery !== "" ? null : selectedCollectionId,
           limit: SAMPLE_QUERY_LIMIT,
           offset: 0,
           includePeaks: false,
           trashedOnly: trashFilterActive,
+          ...(useCompactTags ? { compactTags: true } : {}),
         });
 
         // Discard stale responses from superseded queries or profile switches
         if (fetchSeq !== opts.getFetchSeq() || epoch !== getProfileEpoch()) {
           return;
+        }
+
+        const internRes = internSamplePoolWithStatus(resultRaw, get().tags);
+        if (internRes.hadMissingTagIds) {
+          const [freshTags, freshFacets] = await Promise.all([
+            invoke<Tag[]>("get_tags").catch(() => null),
+            invoke<TagFacet[]>("get_tag_facets").catch(() => null),
+          ]);
+          if (fetchSeq !== opts.getFetchSeq() || epoch !== getProfileEpoch()) {
+            return;
+          }
+          if ((freshTags && freshTags.length > 0) || (freshFacets && freshFacets.length > 0)) {
+            set({
+              ...(freshTags && freshTags.length > 0 ? { tags: freshTags } : {}),
+              ...(freshFacets && freshFacets.length > 0 ? { tagFacets: freshFacets } : {}),
+            });
+            if (freshTags && freshTags.length > 0) {
+              internSamplePoolWithStatus(resultRaw, freshTags, {
+                onlyUnresolvedTagIds: true,
+              });
+            }
+          }
         }
 
         // Re-read current facet/sort/filter state at resolution time
@@ -112,7 +142,10 @@ export function createLibrarySyncSlice(
           : null;
         const licenseFiltered = activeLicenseGroup
           ? folderStageRaw.filter((s) =>
-              isSampleInLicenseGroup(s.file_path, activeLicenseGroup)
+              isSampleInLicenseGroup(
+                s.folder_path || s.file_path,
+                activeLicenseGroup
+              )
             )
           : folderStageRaw;
         const binIdSet = live.binFilterActive ? new Set(live.binSampleIds) : null;
@@ -149,7 +182,9 @@ export function createLibrarySyncSlice(
           : null;
         const genreFiltered = activeGenreLower
           ? duplicateFiltered.filter(
-              (s) => (s.genre || "").toLowerCase() === activeGenreLower
+              (s) =>
+                (s.genre || "").toLowerCase() === activeGenreLower ||
+                s.tags.some((t) => t.name.toLowerCase() === activeGenreLower)
             )
           : duplicateFiltered;
 
@@ -196,6 +231,7 @@ export function createLibrarySyncSlice(
           !favoriteOnly &&
           !live.recentOnly &&
           selectedTagIds.length === 0 &&
+          excludedTagIds.length === 0 &&
           live.selectedGenre === null &&
           selectedCollectionId === null &&
           live.selectedLicenseGroupId === null &&
@@ -203,10 +239,22 @@ export function createLibrarySyncSlice(
           !live.trashFilterActive &&
           !live.duplicatesFilterActive;
 
-        const poolSummary = isUnfilteredQuery ? summarizeSamplePool(resultRaw) : null;
+        const poolSummary = isUnfilteredQuery
+          ? summarizeSamplePool(
+              resultRaw,
+              new Set<number>([...live.recentSampleIds, ...live.binSampleIds])
+            )
+          : null;
         const trashPoolPatch = live.trashFilterActive
           ? { trashedProfileSamples: resultRaw }
           : {};
+
+        const selectionChanged =
+          (reconciled.nextSelected?.id ?? null) !==
+          (live.selectedSample?.id ?? null);
+        if (selectionChanged) {
+          resetPlayheadClock(0);
+        }
 
         set({
           ...(poolSummary
@@ -222,9 +270,12 @@ export function createLibrarySyncSlice(
           selectedSample: reconciled.nextSelected,
           selectedSampleIds: reconciled.nextSelectedIds,
           lastSelectedIndex: reconciled.nextSelectedIndex,
+          ...(selectionChanged ? { sliceRange: null, currentTimeSec: 0 } : {}),
           durationSec: reconciled.nextSelected
             ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
-            : live.durationSec,
+            : selectionChanged
+              ? 0
+              : live.durationSec,
         });
       } catch (err) {
         console.error("Failed to query samples:", err);

@@ -157,6 +157,9 @@ export function buildFlatFolderRows({
     const displayCount = activeSubsetCounts
       ? activeSubsetCounts[lib.id] || 0
       : lib.sample_count;
+    if (activeSubsetCounts && displayCount === 0 && tree.length === 0) {
+      continue;
+    }
     const libLower = normalizeTreeKey(lib.path);
     const isLibRootSelected = normActiveLower === libLower;
     const isSubfolderSelected = Boolean(

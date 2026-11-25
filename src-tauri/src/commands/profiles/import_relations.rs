@@ -146,11 +146,34 @@ pub(super) fn restore_imported_profile_relations(
         .map(&resolve_sample_id)
         .collect();
 
-    let mut tag_ids_by_name: HashMap<String, i64> = HashMap::new();
-    if let Ok(mut t_stmt) = tx.prepare("SELECT id, name FROM tags") {
-        if let Ok(t_rows) = t_stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))) {
-            for (tid, tname) in t_rows.flatten() {
-                tag_ids_by_name.insert(tname, tid);
+    let mut genre_domain_facet_ids: HashSet<i64> = HashSet::from([
+        crate::taxonomy_catalog::FACET_GENRE_ID,
+        crate::taxonomy_catalog::FACET_MOOD_ID,
+    ]);
+    if let Ok(mut f_stmt) = tx.prepare("SELECT id, COALESCE(domain, 'tags') FROM tag_facets") {
+        if let Ok(f_rows) =
+            f_stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+        {
+            for (fid, dom) in f_rows.flatten() {
+                if dom.eq_ignore_ascii_case("genres") {
+                    genre_domain_facet_ids.insert(fid);
+                } else {
+                    genre_domain_facet_ids.remove(&fid);
+                }
+            }
+        }
+    }
+
+    let mut tag_ids_by_lower_name: HashMap<String, (i64, bool)> = HashMap::new();
+    if let Ok(mut t_stmt) = tx.prepare("SELECT id, name, COALESCE(facet_id, 1) FROM tags") {
+        if let Ok(t_rows) = t_stmt.query_map([], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+        }) {
+            for (tid, tname, fid) in t_rows.flatten() {
+                tag_ids_by_lower_name.insert(
+                    tname.trim().to_lowercase(),
+                    (tid, genre_domain_facet_ids.contains(&fid)),
+                );
             }
         }
     }
@@ -296,6 +319,7 @@ pub(super) fn restore_imported_profile_relations(
         }
     }
 
+    let mut genre_touched_samples: Vec<i64> = Vec::new();
     if !pkg.manual_tag_ref_indices.is_empty() {
         let mut ins_manual = tx
             .prepare(
@@ -305,12 +329,17 @@ pub(super) fn restore_imported_profile_relations(
             )
             .map_err(|e| format!("Failed preparing tag insert: {}", e))?;
         for (tag_name, indices) in &pkg.manual_tag_ref_indices {
-            if let Some(&tag_id) = tag_ids_by_name.get(tag_name) {
+            if let Some(&(tag_id, is_gm)) =
+                tag_ids_by_lower_name.get(&tag_name.trim().to_lowercase())
+            {
                 for &idx in indices {
                     if let Some(Some(sample_id)) = resolved_ref_ids.get(idx) {
                         ins_manual
                             .execute(params![sample_id, tag_id])
                             .map_err(|e| format!("Failed restoring tag link: {}", e))?;
+                        if is_gm {
+                            genre_touched_samples.push(*sample_id);
+                        }
                     }
                 }
             }
@@ -328,12 +357,17 @@ pub(super) fn restore_imported_profile_relations(
             )
             .map_err(|e| format!("Failed preparing AI tag insert: {}", e))?;
         for (tag_name, indices) in &pkg.ai_approved_tag_ref_indices {
-            if let Some(&tag_id) = tag_ids_by_name.get(tag_name) {
+            if let Some(&(tag_id, is_gm)) =
+                tag_ids_by_lower_name.get(&tag_name.trim().to_lowercase())
+            {
                 for &idx in indices {
                     if let Some(Some(sample_id)) = resolved_ref_ids.get(idx) {
                         ins_ai
                             .execute(params![sample_id, tag_id])
                             .map_err(|e| format!("Failed restoring AI tag link: {}", e))?;
+                        if is_gm {
+                            genre_touched_samples.push(*sample_id);
+                        }
                     }
                 }
             }
@@ -342,40 +376,50 @@ pub(super) fn restore_imported_profile_relations(
 
     if !pkg.manual_tag_samples.is_empty() {
         for (tag_name, s_refs) in &pkg.manual_tag_samples {
-            for s_ref in s_refs {
-                if let Some(sample_id) = resolve_sample_id(s_ref) {
-                    tx.execute(
-                        "INSERT INTO sample_tags (sample_id, tag_id, is_manual, source)
-                         SELECT ?1, t.id, 1, 'manual'
-                         FROM tags t
-                         WHERE t.name = ?2
-                         ON CONFLICT(sample_id, tag_id) DO UPDATE SET is_manual = 1, source = 'manual'",
-                        params![sample_id, tag_name],
-                    )
-                    .map_err(|e| format!("Failed restoring tag link: {}", e))?;
+            if let Some(&(tag_id, is_gm)) =
+                tag_ids_by_lower_name.get(&tag_name.trim().to_lowercase())
+            {
+                for s_ref in s_refs {
+                    if let Some(sample_id) = resolve_sample_id(s_ref) {
+                        tx.execute(
+                            "INSERT INTO sample_tags (sample_id, tag_id, is_manual, source)
+                             VALUES (?1, ?2, 1, 'manual')
+                             ON CONFLICT(sample_id, tag_id) DO UPDATE SET is_manual = 1, source = 'manual'",
+                            params![sample_id, tag_id],
+                        )
+                        .map_err(|e| format!("Failed restoring tag link: {}", e))?;
+                        if is_gm {
+                            genre_touched_samples.push(sample_id);
+                        }
+                    }
                 }
             }
         }
     } else if !pkg.manual_tag_assignments.is_empty() {
         for (tag_name, file_paths) in &pkg.manual_tag_assignments {
-            for fp in file_paths {
-                let s_ref = ResilientSampleRef {
-                    file_path: fp.clone(),
-                    rel_path: None,
-                    file_name: None,
-                    file_size: None,
-                    duration_ms: None,
-                };
-                if let Some(sample_id) = resolve_sample_id(&s_ref) {
-                    tx.execute(
-                        "INSERT INTO sample_tags (sample_id, tag_id, is_manual, source)
-                         SELECT ?1, t.id, 1, 'manual'
-                         FROM tags t
-                         WHERE t.name = ?2
-                         ON CONFLICT(sample_id, tag_id) DO UPDATE SET is_manual = 1, source = 'manual'",
-                        params![sample_id, tag_name],
-                    )
-                    .map_err(|e| format!("Failed restoring tag link: {}", e))?;
+            if let Some(&(tag_id, is_gm)) =
+                tag_ids_by_lower_name.get(&tag_name.trim().to_lowercase())
+            {
+                for fp in file_paths {
+                    let s_ref = ResilientSampleRef {
+                        file_path: fp.clone(),
+                        rel_path: None,
+                        file_name: None,
+                        file_size: None,
+                        duration_ms: None,
+                    };
+                    if let Some(sample_id) = resolve_sample_id(&s_ref) {
+                        tx.execute(
+                            "INSERT INTO sample_tags (sample_id, tag_id, is_manual, source)
+                             VALUES (?1, ?2, 1, 'manual')
+                             ON CONFLICT(sample_id, tag_id) DO UPDATE SET is_manual = 1, source = 'manual'",
+                            params![sample_id, tag_id],
+                        )
+                        .map_err(|e| format!("Failed restoring tag link: {}", e))?;
+                        if is_gm {
+                            genre_touched_samples.push(sample_id);
+                        }
+                    }
                 }
             }
         }
@@ -394,14 +438,19 @@ pub(super) fn restore_imported_profile_relations(
             });
         if let Some(sample_id) = resolve_sample_id(&s_ref) {
             for tag_name in &entry.tag_names {
-                tx.execute(
-                    "INSERT OR IGNORE INTO sample_tags (sample_id, tag_id, is_manual)
-                     SELECT ?1, t.id, 0
-                     FROM tags t
-                     WHERE t.name = ?2",
-                    params![sample_id, tag_name],
-                )
-                .map_err(|e| format!("Failed restoring sample tag: {}", e))?;
+                if let Some(&(tag_id, is_gm)) =
+                    tag_ids_by_lower_name.get(&tag_name.trim().to_lowercase())
+                {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO sample_tags (sample_id, tag_id, is_manual)
+                         VALUES (?1, ?2, 0)",
+                        params![sample_id, tag_id],
+                    )
+                    .map_err(|e| format!("Failed restoring sample tag: {}", e))?;
+                    if is_gm {
+                        genre_touched_samples.push(sample_id);
+                    }
+                }
             }
         }
     }
@@ -412,20 +461,37 @@ pub(super) fn restore_imported_profile_relations(
             if clean_g.is_empty() || clean_g.chars().count() > 64 {
                 continue;
             }
-            let color = deterministic_color_for_name(clean_g);
-            tx.execute(
-                "INSERT INTO genres (name, color, is_manual) VALUES (?1, ?2, 1)
-                 ON CONFLICT(name) DO UPDATE SET is_manual = 1",
-                params![clean_g, color],
-            )
-            .map_err(|e| format!("Failed restoring genre '{}': {}", clean_g, e))?;
+            let (facet_slug, resolved_name) =
+                match crate::taxonomy_catalog::sanitize_id3_genre_or_mood_typo(clean_g) {
+                    Some((f, canon)) => (f, canon.to_string()),
+                    None => (
+                        if crate::taxonomy_catalog::is_canonical_mood_name(clean_g) {
+                            "mood"
+                        } else {
+                            "genre"
+                        },
+                        clean_g.to_string(),
+                    ),
+                };
+            let color = deterministic_color_for_name(&resolved_name);
+            let tag_id = crate::db::ensure_taxonomy_tag(
+                tx,
+                &resolved_name,
+                Some(facet_slug),
+                None,
+                Some(color),
+                true,
+            )?;
             for &idx in indices {
                 if let Some(Some(sample_id)) = resolved_ref_ids.get(idx) {
                     tx.execute(
-                        "UPDATE samples SET genre = ?1, genre_is_manual = 1 WHERE id = ?2",
-                        params![clean_g, sample_id],
+                        "INSERT INTO sample_tags (sample_id, tag_id, is_manual, source)
+                         VALUES (?1, ?2, 1, 'manual')
+                         ON CONFLICT(sample_id, tag_id) DO UPDATE SET is_manual = 1, source = 'manual'",
+                        params![sample_id, tag_id],
                     )
-                    .map_err(|e| format!("Failed restoring sample genre: {}", e))?;
+                    .map_err(|e| format!("Failed restoring sample genre tag: {}", e))?;
+                    genre_touched_samples.push(*sample_id);
                 }
             }
         }
@@ -436,22 +502,42 @@ pub(super) fn restore_imported_profile_relations(
         if clean_g.is_empty() || clean_g.chars().count() > 64 {
             continue;
         }
-        let color = deterministic_color_for_name(clean_g);
-        tx.execute(
-            "INSERT INTO genres (name, color, is_manual) VALUES (?1, ?2, 1)
-             ON CONFLICT(name) DO UPDATE SET is_manual = 1",
-            params![clean_g, color],
-        )
-        .map_err(|e| format!("Failed restoring genre '{}': {}", clean_g, e))?;
+        let (facet_slug, resolved_name) =
+            match crate::taxonomy_catalog::sanitize_id3_genre_or_mood_typo(clean_g) {
+                Some((f, canon)) => (f, canon.to_string()),
+                None => (
+                    if crate::taxonomy_catalog::is_canonical_mood_name(clean_g) {
+                        "mood"
+                    } else {
+                        "genre"
+                    },
+                    clean_g.to_string(),
+                ),
+            };
+        let color = deterministic_color_for_name(&resolved_name);
+        let tag_id = crate::db::ensure_taxonomy_tag(
+            tx,
+            &resolved_name,
+            Some(facet_slug),
+            None,
+            Some(color),
+            true,
+        )?;
         for s_ref in s_refs {
             if let Some(sample_id) = resolve_sample_id(s_ref) {
                 tx.execute(
-                    "UPDATE samples SET genre = ?1, genre_is_manual = 1 WHERE id = ?2",
-                    params![clean_g, sample_id],
+                    "INSERT INTO sample_tags (sample_id, tag_id, is_manual, source)
+                     VALUES (?1, ?2, 1, 'manual')
+                     ON CONFLICT(sample_id, tag_id) DO UPDATE SET is_manual = 1, source = 'manual'",
+                    params![sample_id, tag_id],
                 )
-                .map_err(|e| format!("Failed restoring sample genre: {}", e))?;
+                .map_err(|e| format!("Failed restoring sample genre tag: {}", e))?;
+                genre_touched_samples.push(sample_id);
             }
         }
+    }
+    if !genre_touched_samples.is_empty() {
+        crate::db::sync_primary_genre_for_samples(tx, &genre_touched_samples)?;
     }
 
     for entry in &pkg.manual_loop_ref_indices {

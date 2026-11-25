@@ -54,7 +54,10 @@ pub struct SampleItem {
     pub musical_key: String,
     pub camelot_key: String,
     pub peaks_json: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<SampleTagBadge>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tag_ids: Vec<i64>,
     pub created_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_modified_at: Option<i64>,
@@ -78,11 +81,56 @@ pub struct BpmKeyProgressPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchJobProgressPayload {
+    pub stage_label: String,
+    pub processed: usize,
+    pub total: usize,
+    pub percentage: f64,
+    pub current_item: String,
+    pub matched_count: usize,
+    pub done: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SampleBpmKeyPatch {
     pub sample_id: i64,
     pub bpm: Option<f64>,
     pub musical_key: String,
     pub camelot_key: String,
+}
+
+fn default_facet_id() -> i64 {
+    1
+}
+
+fn default_facet_slug() -> String {
+    "category".to_string()
+}
+
+fn default_genre_facet_slug() -> String {
+    "genre".to_string()
+}
+
+fn default_tag_path() -> String {
+    "/".to_string()
+}
+
+fn default_facet_domain() -> String {
+    "tags".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TagFacet {
+    pub id: i64,
+    pub slug: String,
+    pub name: String,
+    pub color: String,
+    pub sort_order: i64,
+    pub is_system: bool,
+    #[serde(default = "default_facet_domain")]
+    pub domain: String,
+    #[serde(default)]
+    pub allow_nesting: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +139,26 @@ pub struct Tag {
     pub name: String,
     pub color: String,
     pub sample_count: i64,
+    #[serde(default = "default_facet_id")]
+    pub facet_id: i64,
+    #[serde(default = "default_facet_slug")]
+    pub facet_slug: String,
+    #[serde(default)]
+    pub parent_id: Option<i64>,
+    #[serde(default = "default_tag_path")]
+    pub path: String,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub effective_color: String,
+    #[serde(default)]
+    pub color_inherited: bool,
+    #[serde(default)]
+    pub is_system: bool,
+    #[serde(default)]
+    pub sort_order: i64,
+    #[serde(default)]
+    pub rollup_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,6 +167,8 @@ pub struct Genre {
     pub name: String,
     pub color: String,
     pub sample_count: i64,
+    #[serde(default = "default_genre_facet_slug")]
+    pub facet_slug: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,10 +260,33 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExportedFacetEntry {
+    pub slug: String,
+    pub name: String,
+    pub color: String,
+    #[serde(default = "default_facet_domain")]
+    pub domain: String,
+    #[serde(default)]
+    pub allow_nesting: bool,
+    #[serde(default)]
+    pub sort_order: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExportedTagEntry {
     pub name: String,
     pub color: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facet_slug: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub color_inherited: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_system: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -327,6 +420,8 @@ pub struct ProfileExportPackage {
     pub settings: serde_json::Value,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub libraries: Vec<ExportedLibraryEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub facets: Vec<ExportedFacetEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<ExportedTagEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

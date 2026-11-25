@@ -1,13 +1,12 @@
 use crate::commands::FullSnapshotManifest;
 use crate::security::{
     ensure_inside, has_ntfs_ads_colon, is_dos_device_name, is_safe_existing_bg_image,
-    is_unc_or_network_path, normalize_clean_path, MAX_CUSTOM_BG_BYTES,
+    is_unc_or_network_path, normalize_clean_path, ALLOWED_BG_MEDIA_EXTS, MAX_CUSTOM_BG_VIDEO_BYTES,
 };
 use rusqlite::{params, Connection};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-pub(super) const ALLOWED_IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp"];
 pub(super) const MAX_SNAPSHOT_SLICES_COUNT: usize = 5000;
 pub(super) const MAX_SNAPSHOT_SLICE_FILE_BYTES: u64 = 128 * 1024 * 1024;
 pub(super) const MAX_SNAPSHOT_TOTAL_SLICES_BYTES: u64 = 512 * 1024 * 1024;
@@ -52,7 +51,7 @@ fn is_safe_relative_parts(rel: &str, max_parts: usize, allowed_exts: &[&str]) ->
 
 pub(super) fn is_safe_snapshot_image_entry(name: &str) -> Option<PathBuf> {
     let rel = name.strip_prefix("images/")?;
-    is_safe_relative_parts(rel, 5, ALLOWED_IMAGE_EXTS)
+    is_safe_relative_parts(rel, 5, ALLOWED_BG_MEDIA_EXTS)
 }
 
 pub(super) fn is_safe_snapshot_slice_entry(name: &str) -> Option<PathBuf> {
@@ -318,7 +317,7 @@ fn find_image_recursive(
         let Ok(safe) = ensure_inside(root, &path) else {
             continue;
         };
-        if meta.is_file() && meta.len() <= MAX_CUSTOM_BG_BYTES {
+        if meta.is_file() && meta.len() <= MAX_CUSTOM_BG_VIDEO_BYTES {
             if let Some(rel_sfx) = rel_suffix_lower {
                 if let Ok(rel) = safe.strip_prefix(root) {
                     if rel.to_string_lossy().replace('\\', "/").to_lowercase() == rel_sfx {
@@ -490,7 +489,10 @@ pub(super) fn relink_restored_slice_paths(conn: &Connection, user_dir: &Path) {
             if !trimmed.is_empty()
                 && !is_unc_or_network_path(trimmed)
                 && !has_ntfs_ads_colon(trimmed)
-                && Path::new(trimmed).is_file()
+                && slice_trash_dir.is_dir()
+                && ensure_inside(&slice_trash_dir, Path::new(trimmed))
+                    .map(|p| p.is_file())
+                    .unwrap_or(false)
             {
                 continue;
             }

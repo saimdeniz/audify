@@ -10,14 +10,21 @@ type CreditToast = NonNullable<StoreSnapshot["creditToast"]>;
 export const StatusNoticeToast: React.FC<{
   notice: StatusNotice;
   onDismiss: () => void;
-}> = ({ notice, onDismiss }) => (
+  onPause?: () => void;
+  onResume?: () => void;
+  stacked?: boolean;
+}> = ({ notice, onDismiss, onPause, onResume, stacked = false }) => (
   <div
     key={notice.seq}
     role={notice.kind === "error" ? "alert" : "status"}
     aria-live={notice.kind === "error" ? "assertive" : "polite"}
-    style={{ zIndex: Z_INDEX.statusToast }}
+    onMouseEnter={onPause}
+    onMouseLeave={onResume}
+    style={stacked ? undefined : { zIndex: Z_INDEX.statusToast }}
     data-mica-overlay="true"
-    className={`fixed bottom-5 right-5 max-w-[min(420px,92vw)] rounded-md bg-surface-2 backdrop-blur-md border px-3 py-2 shadow-2xl flex items-center space-x-2.5 ${
+    className={`${
+      stacked ? "pointer-events-auto" : "fixed bottom-5 right-5"
+    } max-w-[min(420px,92vw)] rounded-md bg-surface-2 audify-overlay-surface border px-3 py-2 shadow-2xl flex items-center space-x-2.5 ${
       notice.kind === "error"
         ? "border-danger text-fg"
         : notice.kind === "success"
@@ -35,6 +42,18 @@ export const StatusNoticeToast: React.FC<{
     <span className="text-[11.5px] font-mono leading-snug break-words flex-1">
       {notice.message}
     </span>
+    {notice.actionLabel && notice.onAction && (
+      <button
+        type="button"
+        onClick={() => {
+          notice.onAction?.();
+          onDismiss();
+        }}
+        className="h-[22px] px-2 rounded-xs bg-accent-soft border border-accent/60 text-accent-fg hover:bg-accent hover:text-accent-on text-[10.5px] font-semibold transition-colors shrink-0 whitespace-nowrap"
+      >
+        {notice.actionLabel}
+      </button>
+    )}
     <button
       type="button"
       onClick={onDismiss}
@@ -51,15 +70,19 @@ export const CreditToastBanner: React.FC<{
   onDismiss: () => void;
   onPause: () => void;
   onResume: () => void;
-}> = ({ toast, onDismiss, onPause, onResume }) => (
+  stacked?: boolean;
+}> = ({ toast, onDismiss, onPause, onResume, stacked = false }) => (
   <div
     key={toast.seq}
     role="status"
     aria-live="polite"
     onMouseEnter={onPause}
     onMouseLeave={onResume}
-    style={{ zIndex: Z_INDEX.creditToast }}
-    className={`fixed bottom-8 right-4 w-[396px] max-w-[92vw] rounded-md bg-surface-2 border p-3 shadow-2xl space-y-2 ${
+    style={stacked ? undefined : { zIndex: Z_INDEX.creditToast }}
+    data-mica-overlay="true"
+    className={`${
+      stacked ? "pointer-events-auto" : "fixed bottom-8 right-4"
+    } w-[396px] max-w-[92vw] rounded-md bg-surface-2 border p-3 shadow-2xl space-y-2 ${
       toast.isWarning ? "border-accent" : "border-ok"
     }`}
   >

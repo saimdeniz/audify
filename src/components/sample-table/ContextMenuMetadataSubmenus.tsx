@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { Check, Search, X } from "lucide-react";
+import { X } from "lucide-react";
 import { CAMELOT_KEYS } from "../../constants/camelotKeys";
 import { useSampleStore } from "../../store/useSampleStore";
 import { SampleItem } from "../../types";
+import { TaxonomyPicker } from "../taxonomy/TaxonomyPicker";
 import { ContextMenuState } from "./tableLayout";
 
 interface SubmenuBaseProps {
@@ -10,6 +11,7 @@ interface SubmenuBaseProps {
   targetIds: number[];
   isMultiContext: boolean;
   activeContextSample: SampleItem;
+  targetSamplesList?: SampleItem[];
   setContextMenu: React.Dispatch<React.SetStateAction<ContextMenuState | null>>;
 }
 
@@ -18,216 +20,50 @@ export const ContextMenuTagSubmenu: React.FC<SubmenuBaseProps> = ({
   targetIds,
   isMultiContext,
   activeContextSample,
+  targetSamplesList,
   setContextMenu,
-}) => {
-  const tags = useSampleStore((s) => s.tags);
-  const assignTag = useSampleStore((s) => s.assignTag);
-  const unassignTag = useSampleStore((s) => s.unassignTag);
-  const assignTagBatch = useSampleStore((s) => s.assignTagBatch);
-  const clearSampleTags = useSampleStore((s) => s.clearSampleTags);
-  const [tagMenuSearch, setTagMenuSearch] = useState("");
-
-  return (
-    <div
-      className={`absolute ${submenuPositionClass} w-[236px] bg-surface-2 border border-line-strong rounded-md p-2 text-fg shadow-2xl z-40 space-y-1.5`}
-    >
-      <div className="flex items-center space-x-1">
-        <div className="relative flex-1 flex items-center">
-          <Search className="w-3 h-3 text-fg-3 absolute left-2 pointer-events-none" />
-          <input
-            type="text"
-            value={tagMenuSearch}
-            onChange={(e) => setTagMenuSearch(e.target.value)}
-            placeholder="Filter tags..."
-            autoFocus
-            className="w-full h-[22px] bg-surface-3 border border-line focus:border-accent pl-6 pr-5 text-[11px] text-fg placeholder:text-fg-3 outline-none rounded-xs"
-          />
-          {tagMenuSearch && (
-            <button
-              type="button"
-              onClick={() => setTagMenuSearch("")}
-              className="absolute right-1.5 text-fg-3 hover:text-fg"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          )}
-        </div>
-        {(isMultiContext || activeContextSample.tags.length > 0) && (
-          <button
-            type="button"
-            onClick={async () => {
-              await clearSampleTags(
-                isMultiContext ? targetIds : [activeContextSample.id]
-              );
-              setContextMenu(null);
-            }}
-            className="w-[22px] h-[22px] rounded-xs bg-surface-3 hover:bg-accent-soft border border-line hover:border-accent text-fg-3 hover:text-accent-fg flex items-center justify-center shrink-0 transition-colors"
-            title={
-              isMultiContext
-                ? "Clear all tags on selected samples"
-                : "Clear assigned tags"
-            }
-          >
-            <X className="w-3 h-3" />
-          </button>
-        )}
-      </div>
-
-      <div className="grid grid-cols-2 gap-1 max-h-[210px] overflow-y-auto pr-0.5">
-        {tags
-          .filter((t) =>
-            t.name.toLowerCase().includes(tagMenuSearch.trim().toLowerCase())
-          )
-          .map((t) => {
-            const assigned =
-              !isMultiContext &&
-              activeContextSample.tags.some((b) => b.id === t.id);
-            return (
-              <button
-                key={t.id}
-                type="button"
-                onClick={async () => {
-                  if (isMultiContext) {
-                    await assignTagBatch(targetIds, t.id);
-                    setContextMenu(null);
-                  } else if (assigned) {
-                    await unassignTag(activeContextSample.id, t.id);
-                  } else {
-                    await assignTag(activeContextSample.id, t.id);
-                  }
-                }}
-                className={`h-[24px] px-2 rounded-xs border flex items-center justify-between text-[11px] min-w-0 transition-colors ${
-                  assigned
-                    ? "bg-accent-soft border-accent text-accent-fg font-medium"
-                    : "bg-surface-3 border-line text-fg-2 hover:text-fg hover:border-line-hover"
-                }`}
-              >
-                <span className="flex items-center space-x-1.5 min-w-0 flex-1">
-                  <span
-                    className="w-2 h-2 rounded-[2px] shrink-0"
-                    style={{ backgroundColor: t.color }}
-                  />
-                  <span className="truncate">{t.name}</span>
-                </span>
-                {assigned && (
-                  <Check className="w-3 h-3 text-accent-fg shrink-0 ml-1" />
-                )}
-              </button>
-            );
-          })}
-      </div>
-    </div>
-  );
-};
+}) => (
+  <div
+    className={`absolute ${submenuPositionClass} w-[256px] bg-surface-2 border border-line-strong rounded-md p-2 text-fg shadow-2xl z-40`}
+  >
+    <TaxonomyPicker
+      mode="tags"
+      compact
+      sampleIds={isMultiContext ? targetIds : [activeContextSample.id]}
+      samples={
+        isMultiContext && targetSamplesList && targetSamplesList.length > 0
+          ? targetSamplesList
+          : [activeContextSample]
+      }
+      onClose={() => setContextMenu(null)}
+    />
+  </div>
+);
 
 export const ContextMenuGenreSubmenu: React.FC<SubmenuBaseProps> = ({
   submenuPositionClass,
   targetIds,
   isMultiContext,
   activeContextSample,
+  targetSamplesList,
   setContextMenu,
-}) => {
-  const genres = useSampleStore((s) => s.genres);
-  const assignGenre = useSampleStore((s) => s.assignGenre);
-  const assignGenreBatch = useSampleStore((s) => s.assignGenreBatch);
-  const [genreMenuSearch, setGenreMenuSearch] = useState("");
-
-  return (
-    <div
-      className={`absolute ${submenuPositionClass} w-[236px] bg-surface-2 border border-line-strong rounded-md p-2 text-fg shadow-2xl z-40 space-y-1.5`}
-    >
-      <div className="flex items-center space-x-1">
-        <div className="relative flex-1 flex items-center">
-          <Search className="w-3 h-3 text-fg-3 absolute left-2 pointer-events-none" />
-          <input
-            type="text"
-            value={genreMenuSearch}
-            onChange={(e) => setGenreMenuSearch(e.target.value)}
-            placeholder="Filter genres..."
-            autoFocus
-            className="w-full h-[22px] bg-surface-3 border border-line focus:border-accent pl-6 pr-5 text-[11px] text-fg placeholder:text-fg-3 outline-none rounded-xs"
-          />
-          {genreMenuSearch && (
-            <button
-              type="button"
-              onClick={() => setGenreMenuSearch("")}
-              className="absolute right-1.5 text-fg-3 hover:text-fg"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          )}
-        </div>
-        {(isMultiContext || activeContextSample.genre) && (
-          <button
-            type="button"
-            onClick={async () => {
-              if (isMultiContext) {
-                await assignGenreBatch(targetIds, "");
-              } else {
-                await assignGenre(activeContextSample.id, "");
-              }
-              setContextMenu(null);
-            }}
-            className="w-[22px] h-[22px] rounded-xs bg-surface-3 hover:bg-accent-soft border border-line hover:border-accent text-fg-3 hover:text-accent-fg flex items-center justify-center shrink-0 transition-colors"
-            title={
-              isMultiContext
-                ? "Clear genre on selected samples"
-                : "Clear assigned genre"
-            }
-          >
-            <X className="w-3 h-3" />
-          </button>
-        )}
-      </div>
-
-      <div className="grid grid-cols-2 gap-1 max-h-[210px] overflow-y-auto pr-0.5">
-        {genres
-          .filter((g) =>
-            g.name.toLowerCase().includes(genreMenuSearch.trim().toLowerCase())
-          )
-          .map((g) => {
-            const assigned =
-              !isMultiContext &&
-              (activeContextSample.genre || "").toLowerCase() ===
-                g.name.toLowerCase();
-            return (
-              <button
-                key={g.id}
-                type="button"
-                onClick={async () => {
-                  if (isMultiContext) {
-                    await assignGenreBatch(targetIds, g.name);
-                  } else {
-                    await assignGenre(
-                      activeContextSample.id,
-                      assigned ? "" : g.name
-                    );
-                  }
-                  setContextMenu(null);
-                }}
-                className={`h-[24px] px-2 rounded-xs border flex items-center justify-between text-[11px] min-w-0 transition-colors ${
-                  assigned
-                    ? "bg-accent-soft border-accent text-accent-fg font-medium"
-                    : "bg-surface-3 border-line text-fg-2 hover:text-fg hover:border-line-hover"
-                }`}
-              >
-                <span className="flex items-center space-x-1.5 min-w-0 flex-1">
-                  <span
-                    className="w-2 h-2 rounded-[2px] shrink-0"
-                    style={{ backgroundColor: g.color }}
-                  />
-                  <span className="truncate">{g.name}</span>
-                </span>
-                {assigned && (
-                  <Check className="w-3 h-3 text-accent-fg shrink-0 ml-1" />
-                )}
-              </button>
-            );
-          })}
-      </div>
-    </div>
-  );
-};
+}) => (
+  <div
+    className={`absolute ${submenuPositionClass} w-[256px] bg-surface-2 border border-line-strong rounded-md p-2 text-fg shadow-2xl z-40`}
+  >
+    <TaxonomyPicker
+      mode="genres"
+      compact
+      sampleIds={isMultiContext ? targetIds : [activeContextSample.id]}
+      samples={
+        isMultiContext && targetSamplesList && targetSamplesList.length > 0
+          ? targetSamplesList
+          : [activeContextSample]
+      }
+      onClose={() => setContextMenu(null)}
+    />
+  </div>
+);
 
 export const ContextMenuBpmKeySubmenu: React.FC<SubmenuBaseProps> = ({
   submenuPositionClass,

@@ -252,7 +252,7 @@ export const LicenseTemplateEditorSection: React.FC<
                   right: quoteMenuPos.right,
                   zIndex: Z_INDEX.floatingMenu,
                 }}
-                className="fixed w-36 bg-surface-2 border border-line rounded-md shadow-2xl py-1 font-mono text-[10px] backdrop-blur-md"
+                className="fixed w-36 bg-surface-2 border border-line rounded-md shadow-2xl py-1 font-mono text-[10px] audify-overlay-surface"
               >
                 {QUOTE_MODE_OPTIONS.map((opt) => {
                   const isCurrent =

@@ -6,7 +6,8 @@ use crate::commands::file_ops::{
 use crate::db::AppState;
 use crate::security::{
     display_leaf, has_ntfs_ads_colon, is_dos_device_name, is_unc_or_network_path,
-    normalize_clean_path, strip_verbatim_prefix, validate_safe_audio_stem,
+    normalize_clean_path, reject_symlink_ancestors, strip_verbatim_prefix,
+    validate_safe_audio_stem,
 };
 use rusqlite::{params, Connection};
 use std::collections::HashSet;
@@ -106,7 +107,7 @@ pub(crate) fn create_physical_subfolder_with_conn(
 }
 
 #[tauri::command]
-pub fn create_physical_subfolder(
+pub async fn create_physical_subfolder(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     library_id: i64,
@@ -114,9 +115,19 @@ pub fn create_physical_subfolder(
     new_folder_name: String,
 ) -> Result<String, String> {
     crate::library_watcher::suppress_watcher_if_managed(&app, 2500);
-    let conn = state.lock_db();
-    create_physical_subfolder_with_conn(&conn, library_id, &parent_folder_path, &new_folder_name)
-        .map_err(|e| crate::security::sanitize_err(&state.user_dir, &e))
+    let state_owned = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = state_owned.lock_db();
+        create_physical_subfolder_with_conn(
+            &conn,
+            library_id,
+            &parent_folder_path,
+            &new_folder_name,
+        )
+        .map_err(|e| crate::security::sanitize_err(&state_owned.user_dir, &e))
+    })
+    .await
+    .map_err(|e| format!("Create subfolder task failed: {}", e))?
 }
 
 pub(crate) fn rename_physical_subfolder_with_conn(
@@ -155,7 +166,7 @@ pub(crate) fn rename_physical_subfolder_with_conn(
         });
     }
 
-    let is_case_only = norm_new_folder.eq_ignore_ascii_case(&norm_old_folder);
+    let is_case_only = norm_new_folder.to_lowercase() == norm_old_folder.to_lowercase();
     if !is_case_only && target_pb.exists() {
         return Err(format!(
             "A folder named '{}' already exists in this parent folder",
@@ -375,32 +386,39 @@ pub(super) fn ensure_writable_library_folder_for_relocate(
         ));
     }
 
-    if !target_pb.exists() {
+    reject_symlink_ancestors(&target_pb)?;
+    if fs::symlink_metadata(&target_pb).is_err() {
         let mut cursor: Option<&Path> = Some(&target_pb);
         while let Some(dir) = cursor {
-            if dir.exists() {
-                let sym = fs::symlink_metadata(dir)
-                    .map_err(|_| "Failed to inspect target parent directory".to_string())?;
-                if sym.file_type().is_symlink() || !sym.file_type().is_dir() {
-                    return Err("Target parent path is not a valid physical folder".to_string());
+            match fs::symlink_metadata(dir) {
+                Ok(sym) => {
+                    if sym.file_type().is_symlink() || !sym.file_type().is_dir() {
+                        return Err(
+                            "Target parent path is not a valid physical folder".to_string()
+                        );
+                    }
+                    let canon_ancestor = dir
+                        .canonicalize()
+                        .map_err(|_| "Failed to verify target parent directory".to_string())?;
+                    if !is_dir_inside_library_root(&canon_ancestor, &lib_path) {
+                        return Err(format!(
+                            "Target folder '{}' is outside library '{}'",
+                            display_leaf(&target_pb),
+                            lib_name
+                        ));
+                    }
+                    fs::create_dir_all(&target_pb).map_err(|_| {
+                        format!(
+                            "Failed to create target directory {}",
+                            display_leaf(&target_pb)
+                        )
+                    })?;
+                    break;
                 }
-                let canon_ancestor = dir
-                    .canonicalize()
-                    .map_err(|_| "Failed to verify target parent directory".to_string())?;
-                if !is_dir_inside_library_root(&canon_ancestor, &lib_path) {
-                    return Err(format!(
-                        "Target folder '{}' is outside library '{}'",
-                        display_leaf(&target_pb),
-                        lib_name
-                    ));
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => {
+                    return Err("Failed to inspect target parent directory".to_string());
                 }
-                fs::create_dir_all(&target_pb).map_err(|_| {
-                    format!(
-                        "Failed to create target directory {}",
-                        display_leaf(&target_pb)
-                    )
-                })?;
-                break;
             }
             if let Some(name) = dir.file_name().and_then(|n| n.to_str()) {
                 if name.starts_with('.') || name.starts_with('$') || is_dos_device_name(name) {
@@ -409,7 +427,7 @@ pub(super) fn ensure_writable_library_folder_for_relocate(
             }
             cursor = dir.parent();
         }
-        if !target_pb.exists() {
+        if fs::symlink_metadata(&target_pb).is_err() {
             return Err("Target library root directory could not be resolved on disk".to_string());
         }
     }
@@ -418,7 +436,7 @@ pub(super) fn ensure_writable_library_folder_for_relocate(
 }
 
 #[tauri::command]
-pub fn rename_physical_subfolder(
+pub async fn rename_physical_subfolder(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     ai_state: State<'_, AiTaggerState>,
@@ -427,10 +445,14 @@ pub fn rename_physical_subfolder(
     new_folder_name: String,
 ) -> Result<SubfolderRenameSummary, String> {
     crate::library_watcher::suppress_watcher_if_managed(&app, 2500);
-    let mut conn = state.lock_db();
-    let res =
+    let state_owned = state.inner().clone();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = state_owned.lock_db();
         rename_physical_subfolder_with_conn(&mut conn, library_id, &folder_path, &new_folder_name)
-            .map_err(|e| crate::security::sanitize_err(&state.user_dir, &e))?;
+            .map_err(|e| crate::security::sanitize_err(&state_owned.user_dir, &e))
+    })
+    .await
+    .map_err(|e| format!("Rename subfolder task failed: {}", e))??;
     if res.updated_sample_count > 0 {
         ai_state.invalidate_vector_cache();
     }

@@ -105,6 +105,7 @@ export interface SubmenuTriggerItemProps {
   onOpen: () => void;
   icon: React.ReactNode;
   label: React.ReactNode;
+  rightSlot?: React.ReactNode;
   children?: React.ReactNode;
 }
 
@@ -117,6 +118,7 @@ export const SubmenuTriggerItem: React.FC<SubmenuTriggerItemProps> = ({
   onOpen,
   icon,
   label,
+  rightSlot,
   children,
 }) => (
   <div
@@ -139,7 +141,10 @@ export const SubmenuTriggerItem: React.FC<SubmenuTriggerItemProps> = ({
       {icon}
       <span className="truncate">{label}</span>
     </span>
-    <ChevronRight className="w-3.5 h-3.5 text-fg-2 shrink-0" />
+    <span className="flex items-center gap-1.5 shrink-0 ml-1">
+      {rightSlot}
+      <ChevronRight className="w-3.5 h-3.5 text-fg-2 shrink-0" />
+    </span>
     {isOpen && children}
   </div>
 );

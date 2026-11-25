@@ -102,10 +102,15 @@ pub(crate) fn is_relevant_fs_event_path(path: &Path, kind: &EventKind) -> bool {
     let Some(name_os) = path.file_name() else {
         return false;
     };
-    let name = name_os.to_string_lossy();
-    if name.starts_with('.') {
-        return false;
+    // Ignore hidden files and anything inside hidden directories like `.audify_trash` or `.git`
+    for comp in path.components() {
+        if let std::path::Component::Normal(part) = comp {
+            if part.to_string_lossy().starts_with('.') {
+                return false;
+            }
+        }
     }
+    let name = name_os.to_string_lossy();
     let name_lower = name.to_lowercase();
     if matches!(
         name_lower.as_str(),

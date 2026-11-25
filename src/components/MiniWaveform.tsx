@@ -1,8 +1,9 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { getPlayheadSec, subscribePlayhead } from "../store/playheadClock";
 import { useSampleStore } from "../store/useSampleStore";
 import { ThemeMode, WaveformSensitivity, WaveformStyle } from "../types";
+import { useDevicePixelRatio } from "../utils/devicePixelRatio";
 import {
   getCanvasThemePalette,
   parsePeaks,
@@ -17,14 +18,6 @@ export interface WaveformDisplayConfig {
   waveformSensitivity: WaveformSensitivity;
   waveformStyle: WaveformStyle;
 }
-
-const UNSUBSCRIBED_DISPLAY_SENTINEL: WaveformDisplayConfig = {
-  accentColor: "",
-  themeMode: "dark",
-  enableMica: false,
-  waveformSensitivity: "logarithmic",
-  waveformStyle: "solid_baseline",
-};
 
 interface MiniWaveformProps {
   sampleId: number;
@@ -41,7 +34,26 @@ interface MiniWaveformProps {
   onScrubRatio?: (ratio: number) => void;
 }
 
-export const MiniWaveform: React.FC<MiniWaveformProps> = React.memo(
+interface MiniWaveformRendererProps extends Omit<MiniWaveformProps, "displayConfig"> {
+  displayConfig: WaveformDisplayConfig;
+}
+
+const MiniWaveformConnected: React.FC<Omit<MiniWaveformProps, "displayConfig">> = (
+  props
+) => {
+  const storeDisplayConfig = useSampleStore(
+    useShallow((s): WaveformDisplayConfig => ({
+      accentColor: s.accentColor,
+      themeMode: s.themeMode,
+      enableMica: s.enableMica,
+      waveformSensitivity: s.waveformSensitivity,
+      waveformStyle: s.waveformStyle,
+    }))
+  );
+  return <MiniWaveformRenderer {...props} displayConfig={storeDisplayConfig} />;
+};
+
+const MiniWaveformRenderer: React.FC<MiniWaveformRendererProps> = React.memo(
   ({
     sampleId,
     peaksJson: inlinePeaksJson,
@@ -50,35 +62,23 @@ export const MiniWaveform: React.FC<MiniWaveformProps> = React.memo(
     durationSec = 0,
     progressRatio = 0,
     width: propWidth,
-    displayConfig: propDisplayConfig,
+    displayConfig,
     onScrubRatio,
   }) => {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);
     const [measuredWidth, setMeasuredWidth] = useState<number>(184);
+    const liveDpr = useDevicePixelRatio();
 
     const peaksJson = usePeaksJson(sampleId, inlinePeaksJson);
-    const storeDisplayConfig = useSampleStore(
-      useShallow((s): WaveformDisplayConfig =>
-        propDisplayConfig
-          ? UNSUBSCRIBED_DISPLAY_SENTINEL
-          : {
-              accentColor: s.accentColor,
-              themeMode: s.themeMode,
-              enableMica: s.enableMica,
-              waveformSensitivity: s.waveformSensitivity,
-              waveformStyle: s.waveformStyle,
-            }
-      )
-    );
     const {
       accentColor,
       themeMode,
       enableMica,
       waveformSensitivity,
       waveformStyle,
-    } = propDisplayConfig ?? storeDisplayConfig;
+    } = displayConfig;
 
     useEffect(() => {
       if (propWidth !== undefined) return;
@@ -106,12 +106,28 @@ export const MiniWaveform: React.FC<MiniWaveformProps> = React.memo(
 
     const effectiveWidth = Math.max(48, propWidth ?? measuredWidth);
 
+    // Precompute sensitivity-scaled bar amplitudes once per (peaksJson, width, sensitivity)
+    // so 60–144 Hz playhead redraws perform zero Math.pow() / peak-sampling work.
+    const barPeaks = useMemo(() => {
+      const peaks = parsePeaks(peaksJson);
+      const out = new Float32Array(effectiveWidth);
+      for (let x = 0; x < effectiveWidth; x++) {
+        out[x] = samplePeakRange(
+          peaks,
+          x / effectiveWidth,
+          (x + 1) / effectiveWidth,
+          waveformSensitivity
+        );
+      }
+      return out;
+    }, [peaksJson, effectiveWidth, waveformSensitivity]);
+
     const drawMini = useCallback(
       (livePlayheadSec?: number) => {
         const canvas = canvasRef.current;
         if (!canvas) return;
 
-        const dpr = window.devicePixelRatio || 1;
+        const dpr = liveDpr || window.devicePixelRatio || 1;
         const width = effectiveWidth;
         const height = 22;
 
@@ -132,15 +148,13 @@ export const MiniWaveform: React.FC<MiniWaveformProps> = React.memo(
         const palette = getCanvasThemePalette(
           `${themeMode}:${enableMica}:${accentColor}`
         );
-        const peaks = parsePeaks(peaksJson);
         const isSolidBaseline = waveformStyle !== "symmetric";
         const baselineY = height - 1;
         const maxWaveHeight = height - 2;
         const midY = Math.floor(height * 0.5);
         const maxHalfHeight = height * 0.5 * 0.85;
 
-        const unplayedSelectedColor = palette.fg2;
-        const passiveColor = palette.fg3;
+        const unplayedColor = isSelected ? palette.fg2 : palette.fg3;
 
         const activeRatio =
           isActiveTrack && durationSec > 0
@@ -150,39 +164,53 @@ export const MiniWaveform: React.FC<MiniWaveformProps> = React.memo(
               )
             : progressRatio;
 
-        for (let x = 0; x < width; x++) {
-          const r0 = x / width;
-          const r1 = (x + 1) / width;
-          const peakVal = samplePeakRange(peaks, r0, r1, waveformSensitivity);
+        const showPlayed = (isActiveTrack || isSelected) && activeRatio > 0;
+        const playedLimitX = showPlayed
+          ? Math.min(width, Math.floor(activeRatio * width) + 1)
+          : 0;
 
-          let color = passiveColor;
-          const isPlayed = (isActiveTrack || isSelected) && r0 <= activeRatio && activeRatio > 0;
-          if (isPlayed) {
-            color = accentColor;
-          } else if (isSelected) {
-            color = unplayedSelectedColor;
+        if (playedLimitX > 0) {
+          ctx.fillStyle = palette.accentColor;
+          for (let x = 0; x < playedLimitX; x++) {
+            const peakVal = barPeaks[x];
+            if (isSolidBaseline) {
+              const barHeight = Math.max(1, Math.round(peakVal * maxWaveHeight));
+              ctx.fillRect(x, baselineY - barHeight, 1, barHeight);
+            } else {
+              const halfAmp = Math.max(0.4, peakVal * maxHalfHeight);
+              ctx.fillRect(
+                x,
+                midY - halfAmp,
+                1,
+                Math.max(1, Math.round(halfAmp * 2))
+              );
+            }
           }
+        }
 
-          ctx.fillStyle = color;
-
-          if (isSolidBaseline) {
-            const barHeight = Math.max(1, Math.round(peakVal * maxWaveHeight));
-            ctx.fillRect(x, baselineY - barHeight, 1, barHeight);
-          } else {
-            const halfAmp = Math.max(0.4, peakVal * maxHalfHeight);
-            ctx.fillRect(
-              x,
-              midY - halfAmp,
-              1,
-              Math.max(1, Math.round(halfAmp * 2))
-            );
+        if (playedLimitX < width) {
+          ctx.fillStyle = unplayedColor;
+          for (let x = playedLimitX; x < width; x++) {
+            const peakVal = barPeaks[x];
+            if (isSolidBaseline) {
+              const barHeight = Math.max(1, Math.round(peakVal * maxWaveHeight));
+              ctx.fillRect(x, baselineY - barHeight, 1, barHeight);
+            } else {
+              const halfAmp = Math.max(0.4, peakVal * maxHalfHeight);
+              ctx.fillRect(
+                x,
+                midY - halfAmp,
+                1,
+                Math.max(1, Math.round(halfAmp * 2))
+              );
+            }
           }
         }
 
         ctx.restore();
       },
       [
-        peaksJson,
+        barPeaks,
         isSelected,
         isActiveTrack,
         durationSec,
@@ -190,9 +218,9 @@ export const MiniWaveform: React.FC<MiniWaveformProps> = React.memo(
         accentColor,
         themeMode,
         enableMica,
-        waveformSensitivity,
         waveformStyle,
         effectiveWidth,
+        liveDpr,
       ]
     );
 
@@ -264,3 +292,15 @@ export const MiniWaveform: React.FC<MiniWaveformProps> = React.memo(
     );
   }
 );
+
+export const MiniWaveform: React.FC<MiniWaveformProps> = React.memo((props) => {
+  if (props.displayConfig) {
+    return (
+      <MiniWaveformRenderer
+        {...props}
+        displayConfig={props.displayConfig}
+      />
+    );
+  }
+  return <MiniWaveformConnected {...props} />;
+});

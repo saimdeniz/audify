@@ -7,7 +7,7 @@ use super::{
 use crate::db::{get_active_profile_id, AppState};
 use crate::security::{
     display_leaf, has_ntfs_ads_colon, is_unc_or_network_path, move_files_to_os_recycle_bin,
-    sanitize_err, strip_verbatim_prefix,
+    reject_symlink_ancestors, sanitize_err, strip_verbatim_prefix,
 };
 use rusqlite::{params_from_iter, Connection};
 use std::fs;
@@ -26,6 +26,7 @@ fn verify_quarantined_slice_file_with_canon(
         return Err("Refusing unsafe slice quarantine path".to_string());
     }
     let pb = PathBuf::from(trimmed);
+    reject_symlink_ancestors(&pb)?;
     let Ok(sym) = fs::symlink_metadata(&pb) else {
         return Ok(None);
     };
@@ -268,15 +269,35 @@ pub(crate) fn empty_trashed_slices_with_conn(
 }
 
 #[tauri::command]
-pub fn get_slice_trash_status(state: State<'_, AppState>) -> Result<SliceTrashSummary, String> {
-    with_read_conn(&state, |conn| query_slice_trash_status_with_conn(conn, &state.user_dir))
-        .map_err(|e| sanitize_err(&state.user_dir, &e))
+pub async fn get_slice_trash_status(
+    state: State<'_, AppState>,
+) -> Result<SliceTrashSummary, String> {
+    let state_owned = state.inner().clone();
+    let user_dir_err = state.user_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_read_conn(&state_owned, |conn| {
+            query_slice_trash_status_with_conn(conn, &state_owned.user_dir)
+        })
+        .map_err(|e| sanitize_err(&state_owned.user_dir, &e))
+    })
+    .await
+    .map_err(|e| sanitize_err(&user_dir_err, &format!("Slice trash status task failed: {}", e)))?
 }
 
 #[tauri::command]
-pub fn list_trashed_slices(state: State<'_, AppState>) -> Result<Vec<SliceHistoryRecord>, String> {
-    with_read_conn(&state, |conn| list_trashed_slices_with_conn(conn, &state.user_dir))
-        .map_err(|e| sanitize_err(&state.user_dir, &e))
+pub async fn list_trashed_slices(
+    state: State<'_, AppState>,
+) -> Result<Vec<SliceHistoryRecord>, String> {
+    let state_owned = state.inner().clone();
+    let user_dir_err = state.user_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_read_conn(&state_owned, |conn| {
+            list_trashed_slices_with_conn(conn, &state_owned.user_dir)
+        })
+        .map_err(|e| sanitize_err(&state_owned.user_dir, &e))
+    })
+    .await
+    .map_err(|e| sanitize_err(&user_dir_err, &format!("List trashed slices task failed: {}", e)))?
 }
 
 #[tauri::command]

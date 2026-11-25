@@ -54,17 +54,29 @@ fn decode_mono_for_dsp(path: &Path, max_seconds: f64) -> Option<(Vec<f32>, u32, 
     let mut total_orig_frames: u64 = 0;
     let mut out_sr: u32 = 22050;
     let mut stride_phase: usize = 0;
+    let mut stride_accum: f32 = 0.0;
 
     loop {
         let packet = match format.next_packet() {
             Ok(p) => p,
-            Err(SymphoniaError::IoError(_)) | Err(SymphoniaError::ResetRequired) => break,
-            Err(_) => break,
+            Err(SymphoniaError::ResetRequired) => {
+                decoder.reset();
+                continue;
+            }
+            Err(SymphoniaError::IoError(_)) | Err(_) => break,
         };
         if packet.track_id() != track_id {
             continue;
         }
-        if let Ok(decoded) = decoder.decode(&packet) {
+        let decoded = match decoder.decode(&packet) {
+            Ok(d) => d,
+            Err(SymphoniaError::ResetRequired) => {
+                decoder.reset();
+                continue;
+            }
+            Err(_) => continue,
+        };
+        {
             let frames = decoded.frames();
             if frames == 0 {
                 continue;
@@ -96,20 +108,25 @@ fn decode_mono_for_dsp(path: &Path, max_seconds: f64) -> Option<(Vec<f32>, u32, 
             let samples = buf.samples();
 
             let max_out_samples = (max_seconds * (out_sr as f64)).ceil() as usize;
+            let inv_ch = 1.0 / (ch as f32);
+            let inv_stride = 1.0 / (stride as f32);
             for f in 0..frames {
-                if stride_phase == 0 && mono.len() < max_out_samples {
-                    let base = f * ch;
-                    let mut sum = 0.0_f32;
-                    for c in 0..ch {
-                        let v = samples[base + c];
-                        if v.is_finite() {
-                            sum += v.clamp(-2.0, 2.0);
-                        }
+                let base = f * ch;
+                let mut sum = 0.0_f32;
+                for c in 0..ch {
+                    let v = samples[base + c];
+                    if v.is_finite() {
+                        sum += v.clamp(-2.0, 2.0);
                     }
-                    mono.push(sum / (ch as f32));
                 }
+                // Boxcar anti-aliasing average across `stride` frames prevents HF foldback
+                stride_accum += sum * inv_ch;
                 stride_phase += 1;
                 if stride_phase >= stride {
+                    if mono.len() < max_out_samples {
+                        mono.push(stride_accum * inv_stride);
+                    }
+                    stride_accum = 0.0;
                     stride_phase = 0;
                 }
             }
@@ -209,6 +226,13 @@ mod tests {
         let r4 = extract_fast_bpm_and_key(None, "Pad_Atmosphere_F#m.wav");
         assert_eq!(r4.musical_key, "F#m");
         assert_eq!(r4.camelot_key, "11A");
+
+        // All-caps acronyms (`EBM`, `DBM`, `ABM`, `BBM`) MUST NOT be parsed as flat-minor keys,
+        // while real flat-minor tokens (`Ebm`, `Bbm`) still parse cleanly.
+        assert_eq!(extract_fast_bpm_and_key(None, "EBM_Industrial_Loop.wav").musical_key, "");
+        assert_eq!(extract_fast_bpm_and_key(None, "DBM_Meter_Beep.wav").musical_key, "");
+        assert_eq!(extract_fast_bpm_and_key(None, "Synth_Bass_Ebm.wav").musical_key, "Ebm");
+        assert_eq!(extract_fast_bpm_and_key(None, "Warm_Pad_Bbm.wav").musical_key, "Bbm");
     }
 
     #[test]
@@ -259,5 +283,14 @@ mod tests {
         }
         assert_eq!(estimate_key_from_mono(&noise, sr), None);
         assert_eq!(estimate_bpm_from_mono(&noise, sr), None);
+
+        // 4. NaN / Inf corrupted PCM frames MUST never bypass confidence gates
+        let mut nan_signal = vec![f32::NAN; len];
+        assert_eq!(estimate_key_from_mono(&nan_signal, sr), None);
+        assert_eq!(estimate_bpm_from_mono(&nan_signal, sr), None);
+        nan_signal[0] = f32::INFINITY;
+        nan_signal[100] = f32::NEG_INFINITY;
+        assert_eq!(estimate_key_from_mono(&nan_signal, sr), None);
+        assert_eq!(estimate_bpm_from_mono(&nan_signal, sr), None);
     }
 }

@@ -16,6 +16,7 @@ export interface AsciiWallpaperCanvasProps {
   accentHex: string;
   themeMode: ThemeMode;
   isPlaying?: boolean;
+  blurPx?: number;
   className?: string;
 }
 
@@ -33,6 +34,7 @@ export const AsciiWallpaperCanvas: React.FC<AsciiWallpaperCanvasProps> =
       accentHex,
       themeMode,
       isPlaying,
+      blurPx = 0,
       className = "",
     }) => {
       const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -42,6 +44,7 @@ export const AsciiWallpaperCanvas: React.FC<AsciiWallpaperCanvasProps> =
         dpr: 1,
       });
       const drawCurrentRef = useRef<((nowMs: number) => void) | null>(null);
+      const syncSizeRef = useRef<(() => boolean) | null>(null);
       const ensureLoopRef = useRef<(() => void) | null>(null);
       const redrawRafIdRef = useRef<number | null>(null);
 
@@ -53,6 +56,7 @@ export const AsciiWallpaperCanvas: React.FC<AsciiWallpaperCanvasProps> =
         });
       };
 
+      const blurTier = blurPx >= 8 ? 2 : blurPx >= 3 ? 1 : 0;
       const propsRef = useRef({
         wallpaperKind,
         asciiPreset,
@@ -60,6 +64,7 @@ export const AsciiWallpaperCanvas: React.FC<AsciiWallpaperCanvasProps> =
         accentHex,
         themeMode,
         isPlaying,
+        blurTier,
       });
       propsRef.current = {
         wallpaperKind,
@@ -68,6 +73,7 @@ export const AsciiWallpaperCanvas: React.FC<AsciiWallpaperCanvasProps> =
         accentHex,
         themeMode,
         isPlaying,
+        blurTier,
       };
 
       // Lazy-load the category chunk whenever the active preset changes
@@ -107,8 +113,15 @@ export const AsciiWallpaperCanvas: React.FC<AsciiWallpaperCanvasProps> =
           const width = Math.max(1, Math.floor(cssWidth));
           const height = Math.max(1, Math.floor(cssHeight));
           const rawDpr = window.devicePixelRatio || 1;
-          const dpr =
+          const baseDpr =
             width > 640 ? Math.min(1.25, rawDpr) : Math.min(2, rawDpr);
+          const tier = propsRef.current.blurTier;
+          const dpr =
+            tier === 2
+              ? Math.min(0.5, baseDpr)
+              : tier === 1
+                ? Math.min(0.75, baseDpr)
+                : baseDpr;
           if (
             sizeRef.current.width === width &&
             sizeRef.current.height === height &&
@@ -120,6 +133,11 @@ export const AsciiWallpaperCanvas: React.FC<AsciiWallpaperCanvasProps> =
           canvas.width = Math.max(1, Math.floor(width * dpr));
           canvas.height = Math.max(1, Math.floor(height * dpr));
           return true;
+        };
+
+        syncSizeRef.current = () => {
+          const r = canvas.getBoundingClientRect();
+          return syncCanvasSize(r.width, r.height);
         };
 
         const renderFrameAt = (nowMs: number) => {
@@ -230,6 +248,7 @@ export const AsciiWallpaperCanvas: React.FC<AsciiWallpaperCanvasProps> =
 
         return () => {
           drawCurrentRef.current = null;
+          syncSizeRef.current = null;
           ensureLoopRef.current = null;
           if (redrawRafIdRef.current !== null) {
             cancelAnimationFrame(redrawRafIdRef.current);
@@ -251,6 +270,7 @@ export const AsciiWallpaperCanvas: React.FC<AsciiWallpaperCanvasProps> =
 
       // Coalesce static redraws and restart the RAF loop when resuming from Pause
       useEffect(() => {
+        syncSizeRef.current?.();
         scheduleImmediateRedraw();
         if (motionSpeed > 0) {
           ensureLoopRef.current?.();
@@ -262,6 +282,7 @@ export const AsciiWallpaperCanvas: React.FC<AsciiWallpaperCanvasProps> =
         accentHex,
         themeMode,
         isPlaying,
+        blurTier,
       ]);
 
       return (
