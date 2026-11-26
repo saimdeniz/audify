@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useLayoutEffect, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { DuplicateSampleMeta } from "../../store/slices/duplicateSlice";
 import { useSampleStore } from "../../store/useSampleStore";
@@ -7,6 +7,11 @@ import type {
   SampleItem,
   SimilaritySession,
 } from "../../types";
+import {
+  getSharedListScrollAnchor,
+  recordSharedListScrollAnchor,
+  resolveRestoredScrollTarget,
+} from "../../utils/listScrollAnchor";
 import type { WaveformDisplayConfig } from "../MiniWaveform";
 import type { TaxonomyIndex } from "../../utils/taxonomyTree";
 import { SampleTableRow } from "./SampleTableRow";
@@ -100,6 +105,35 @@ export const SampleTableRowsPane: React.FC<SampleTableRowsPaneProps> =
     overscan: 8,
   });
 
+  // Restore scroll position (or focus active playing track) seamlessly on mount (e.g. exiting Mini Dock)
+  const hasRestoredScrollRef = useRef(false);
+  const userScrolledAfterMountRef = useRef(false);
+  useLayoutEffect(() => {
+    if (hasRestoredScrollRef.current || samples.length === 0) return;
+    hasRestoredScrollRef.current = true;
+    const { isPlaying: livePlaying, selectedSample: liveSelected } =
+      useSampleStore.getState();
+    const target = resolveRestoredScrollTarget({
+      samples,
+      selectedSampleId: liveSelected?.id ?? null,
+      isPlaying: livePlaying,
+      anchor: getSharedListScrollAnchor(),
+    });
+    if (!target) return;
+    rowVirtualizer.scrollToIndex(target.index, { align: target.align });
+    let rafId: number | null = null;
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      rafId = window.requestAnimationFrame(() => {
+        if (!userScrolledAfterMountRef.current) {
+          rowVirtualizer.scrollToIndex(target.index, { align: target.align });
+        }
+      });
+    }
+    return () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
+    };
+  }, [samples, rowVirtualizer]);
+
   // Scroll virtualizer only when the primary selected sample ID actually changes
   const prevSelectedIdRef = useRef<number | null>(selectedSample?.id ?? null);
   useEffect(() => {
@@ -121,6 +155,20 @@ export const SampleTableRowsPane: React.FC<SampleTableRowsPaneProps> =
       onScroll={(e) => {
         if (headerRef.current) {
           headerRef.current.scrollLeft = e.currentTarget.scrollLeft;
+        }
+        if (hasRestoredScrollRef.current) {
+          userScrolledAfterMountRef.current = true;
+          const curSamples = useSampleStore.getState().samples;
+          if (curSamples.length > 0) {
+            const topIdx = Math.max(
+              0,
+              Math.min(
+                curSamples.length - 1,
+                Math.floor(e.currentTarget.scrollTop / 34)
+              )
+            );
+            recordSharedListScrollAnchor(curSamples[topIdx]?.id ?? null, topIdx);
+          }
         }
         if (onTableScroll) {
           onTableScroll();

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { Profile, SampleItem } from "../types";
 import { clearCatalogSortCaches } from "../utils/catalogFilterCore";
+import { resetSharedListScrollAnchor } from "../utils/listScrollAnchor";
 import { computeSmartCollectionCounts } from "../utils/smartCollectionCounts";
 import { clearSmartSearchCache, executeSmartSearch } from "../utils/smartSearch";
 import {
@@ -236,6 +237,7 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
     clearSmartSearchCache();
     clearCatalogSortCaches();
     resetPlayheadClock(0);
+    resetSharedListScrollAnchor();
     const prevSim = get().similaritySession;
     set({
       allProfileSamples: [],
