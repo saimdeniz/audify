@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { BookmarkPlus, GripVertical, Scissors, X } from "lucide-react";
 import { DEFAULT_SHORTCUTS } from "../../constants/shortcuts";
 import { getPlayheadSec, subscribePlayhead } from "../../store/playheadClock";
@@ -48,12 +48,66 @@ const WaveformTimecodeReadout: React.FC<{ effectiveDuration: number }> =
     );
   });
 
+function formatZoomLabel(zoom: number): string {
+  return zoom >= 10 ? `${Math.round(zoom)}x` : `${zoom.toFixed(1)}x`;
+}
+
+const WaveformZoomBadge: React.FC<{
+  zoomLevel?: number;
+  getZoom?: () => number;
+  subscribeZoom?: (listener: (zoom: number) => void) => () => void;
+  onResetZoom?: () => void;
+}> = React.memo(({ zoomLevel = 1, getZoom, subscribeZoom, onResetZoom }) => {
+  const initialZoom = getZoom ? getZoom() : zoomLevel;
+  const [visible, setVisible] = useState<boolean>(initialZoom > 1.03);
+  const labelRef = useRef<HTMLSpanElement | null>(null);
+  const latestZoomRef = useRef<number>(initialZoom);
+
+  useEffect(() => {
+    const applyZoom = (z: number) => {
+      latestZoomRef.current = z;
+      const nextVisible = z > 1.03;
+      setVisible((prev) => (prev === nextVisible ? prev : nextVisible));
+      if (labelRef.current && nextVisible) {
+        labelRef.current.textContent = formatZoomLabel(z);
+      }
+    };
+    if (subscribeZoom) {
+      applyZoom(getZoom ? getZoom() : zoomLevel);
+      return subscribeZoom(applyZoom);
+    }
+    applyZoom(zoomLevel);
+  }, [subscribeZoom, getZoom, zoomLevel]);
+
+  useEffect(() => {
+    if (visible && labelRef.current) {
+      labelRef.current.textContent = formatZoomLabel(latestZoomRef.current);
+    }
+  }, [visible]);
+
+  if (!visible || !onResetZoom) return null;
+  return (
+    <button
+      type="button"
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onResetZoom}
+      title="Waveform horizontal zoom (Wheel to zoom, Middle-drag to pan). Click to reset to 1x."
+      className="h-[18px] px-1.5 rounded-xs bg-accent-soft hover:bg-accent hover:text-accent-on border border-accent text-accent-fg font-mono text-[9.5px] font-semibold inline-flex items-center gap-1 shrink-0 transition-colors cursor-pointer"
+    >
+      <span ref={labelRef}>{formatZoomLabel(latestZoomRef.current)}</span>
+      <X className="w-2.5 h-2.5 shrink-0" />
+    </button>
+  );
+});
+
 interface WaveformDeckHeaderProps {
   selectedSample: SampleItem | null;
   isMiniDock: boolean;
   effectiveDuration: number;
   sliceRange: SliceRange | null;
   zoomLevel?: number;
+  getZoom?: () => number;
+  subscribeZoom?: (listener: (zoom: number) => void) => () => void;
   onResetZoom?: () => void;
   pitchSemitones?: number;
   onResetPitch?: () => void;
@@ -71,6 +125,8 @@ export const WaveformDeckHeader: React.FC<WaveformDeckHeaderProps> = React.memo(
     effectiveDuration,
     sliceRange,
     zoomLevel = 1,
+    getZoom,
+    subscribeZoom,
     onResetZoom,
     pitchSemitones = 0,
     onResetPitch,
@@ -203,18 +259,12 @@ export const WaveformDeckHeader: React.FC<WaveformDeckHeaderProps> = React.memo(
             isMiniDock ? "gap-1.5" : "space-x-2.5"
           }`}
         >
-          {zoomLevel > 1.03 && onResetZoom && (
-            <button
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={onResetZoom}
-              title="Waveform horizontal zoom (Wheel to zoom, Middle-drag to pan). Click to reset to 1x."
-              className="h-[18px] px-1.5 rounded-xs bg-accent-soft hover:bg-accent hover:text-accent-on border border-accent text-accent-fg font-mono text-[9.5px] font-semibold inline-flex items-center gap-1 shrink-0 transition-colors cursor-pointer"
-            >
-              <span>{zoomLevel >= 10 ? `${Math.round(zoomLevel)}x` : `${zoomLevel.toFixed(1)}x`}</span>
-              <X className="w-2.5 h-2.5 shrink-0" />
-            </button>
-          )}
+          <WaveformZoomBadge
+            zoomLevel={zoomLevel}
+            getZoom={getZoom}
+            subscribeZoom={subscribeZoom}
+            onResetZoom={onResetZoom}
+          />
           {isPitched && onResetPitch && (
             <button
               type="button"

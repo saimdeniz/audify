@@ -240,6 +240,8 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
     set({
       allProfileSamples: [],
       trashedProfileSamples: [],
+      artistStats: [],
+      licenseGroupMatchCounts: {},
       favoritesCount: 0,
       knownSampleIds: EMPTY_SAMPLE_ID_SET,
       selectedSample: null,

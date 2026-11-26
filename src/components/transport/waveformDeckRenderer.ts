@@ -5,11 +5,17 @@ import {
   WaveformSensitivity,
   WaveformStyle,
 } from "../../types";
+import { getCanvasThemePalette, parsePeaks } from "../../utils/format";
 import {
-  getCanvasThemePalette,
-  parsePeaks,
-  samplePeakRange,
-} from "../../utils/format";
+  buildWaveformEnvelope,
+  disposeWaveLayerCache,
+  drawCompositeWaveLayers,
+  drawDirectWaveform,
+  updateOrReuseWaveLayerCache,
+  WaveColors,
+  WaveGeometry,
+  WaveLayerCache,
+} from "./waveformDeckLayers";
 import {
   DEFAULT_WAVEFORM_VIEWPORT,
   trackRatioToScreenRatio,
@@ -17,17 +23,8 @@ import {
 } from "./waveformViewport";
 
 export const HIRES_CROSSFADE_MS = 110;
-export type { WaveformViewport };
-
-export interface WaveLayerCache {
-  key: string;
-  sampleId: number | null;
-  isHiRes: boolean;
-  styleSizeKey: string;
-  base: HTMLCanvasElement;
-  slice: HTMLCanvasElement;
-  played: HTMLCanvasElement;
-}
+export { disposeWaveLayerCache };
+export type { WaveLayerCache, WaveformViewport };
 
 export interface WaveCrossfadeState {
   from: WaveLayerCache;
@@ -52,6 +49,10 @@ export interface RenderWaveformDeckOptions {
   logicalHeight: number;
   dpr?: number;
   crossfade?: WaveCrossfadeState | null;
+  /** When true (during active wheel zoom / pan drag), draws directly without allocating offscreen layers. */
+  interactive?: boolean;
+  /** When true (prevCache is pinned by an active crossfade), allocates fresh layers instead of mutating prevCache. */
+  preservePrevCache?: boolean;
 }
 
 export function buildWaveLayerStyleKey(opts: {
@@ -84,107 +85,11 @@ export function buildWaveLayerStyleKey(opts: {
   ].join("|");
 }
 
-function drawClippedLayer(
-  ctx: CanvasRenderingContext2D,
-  img: HTMLCanvasElement,
-  clipX: number,
-  clipW: number,
-  width: number,
-  height: number
-) {
-  if (clipW <= 0) return;
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(clipX, 0, clipW, height);
-  ctx.clip();
-  ctx.drawImage(img, 0, 0, width, height);
-  ctx.restore();
-}
-
-function drawCompositeWaveLayers(
-  ctx: CanvasRenderingContext2D,
-  layers: WaveLayerCache,
-  width: number,
-  height: number,
-  sliceStartRatio: number | null,
-  sliceEndRatio: number | null,
-  playedX: number,
-  alpha: number
-) {
-  if (alpha <= 0.001) return;
-  ctx.save();
-  ctx.globalAlpha = alpha;
-
-  const hasSlice =
-    sliceStartRatio !== null &&
-    sliceEndRatio !== null &&
-    sliceEndRatio > sliceStartRatio;
-  const clampedPlayed = Math.max(0, Math.min(width, playedX));
-
-  if (clampedPlayed > 0) {
-    drawClippedLayer(ctx, layers.played, 0, clampedPlayed, width, height);
-  }
-
-  if (clampedPlayed < width) {
-    if (hasSlice) {
-      const sx = Math.max(clampedPlayed, Math.floor(sliceStartRatio * width));
-      const ex = Math.min(width, Math.ceil(sliceEndRatio * width));
-      if (ex > sx) {
-        if (sx > clampedPlayed) {
-          drawClippedLayer(
-            ctx,
-            layers.base,
-            clampedPlayed,
-            sx - clampedPlayed,
-            width,
-            height
-          );
-        }
-        drawClippedLayer(ctx, layers.slice, sx, ex - sx, width, height);
-        if (ex < width) {
-          drawClippedLayer(ctx, layers.base, ex, width - ex, width, height);
-        }
-      } else {
-        drawClippedLayer(
-          ctx,
-          layers.base,
-          clampedPlayed,
-          width - clampedPlayed,
-          width,
-          height
-        );
-      }
-    } else if (clampedPlayed === 0) {
-      ctx.drawImage(layers.base, 0, 0, width, height);
-    } else {
-      drawClippedLayer(
-        ctx,
-        layers.base,
-        clampedPlayed,
-        width - clampedPlayed,
-        width,
-        height
-      );
-    }
-  }
-
-  ctx.restore();
-}
-
 /**
- * Draws the interactive hi-res waveform deck onto `canvas`, reusing cached
- * offscreen envelope layers when only the playhead or hover cursor moves.
+ * Draws the interactive hi-res waveform deck onto `canvas`, using a zero-allocation
+ * direct-draw fast path during active zoom/pan and persistent reusable offscreen layers
+ * when idle or tracking the 60 Hz playhead.
  */
-export function disposeWaveLayerCache(cache: WaveLayerCache | null): void {
-  if (!cache) return;
-  cache.base.width = 0;
-  cache.base.height = 0;
-  cache.slice.width = 0;
-  cache.slice.height = 0;
-  cache.played.width = 0;
-  cache.played.height = 0;
-}
-
 export function renderWaveformDeck(
   canvas: HTMLCanvasElement,
   prevCache: WaveLayerCache | null,
@@ -291,6 +196,10 @@ export function renderWaveformDeck(
     rawSliceStartScreen !== null && rawSliceEndScreen !== null
       ? Math.max(0, Math.min(1, rawSliceEndScreen))
       : null;
+  const hasVisibleSlice =
+    visSliceStartRatio !== null &&
+    visSliceEndRatio !== null &&
+    visSliceEndRatio > visSliceStartRatio;
 
   // 2. In/Out Slice Region
   if (
@@ -343,138 +252,124 @@ export function renderWaveformDeck(
     }
   }
 
-  // 3. Cached Offscreen Envelope Layers
-  const baselineY = height - 4;
-  const maxWaveHeight = Math.min(72, Math.round(usableHeight * 0.84));
-  const maxHalfHeight = Math.max(10, usableHeight * 0.5 * 0.9);
-  const unplayedBarColor = palette.fg2;
-  const sliceBarColor = palette.fg;
+  // 3. Waveform Envelope (Direct Fast Path while Zooming/Panning, Cached Layers when Idle)
+  const geom: WaveGeometry = {
+    width,
+    height,
+    targetW,
+    targetH,
+    dpr,
+    isSolidBaseline,
+    baselineY: height - 4,
+    maxWaveHeight: Math.min(72, Math.round(usableHeight * 0.84)),
+    midY,
+    maxHalfHeight: Math.max(10, usableHeight * 0.5 * 0.9),
+  };
+  const colors: WaveColors = {
+    base: palette.fg2,
+    slice: palette.fg,
+    played: palette.accentColor,
+  };
+  const playedX = Math.floor(playheadScreenRatio * width);
+  let nextLayers = prevCache;
 
-  const styleSizeKey = buildWaveLayerStyleKey(opts);
-  const layerKey = [
-    opts.sampleId,
-    opts.hiResPeaks ? `hi${opts.hiResPeaks.length}` : opts.peaksJson.length,
-    styleSizeKey,
-    unplayedBarColor,
-    sliceBarColor,
-  ].join("|");
+  if (opts.interactive) {
+    const env = buildWaveformEnvelope(
+      peaks,
+      viewStart,
+      viewSpan,
+      width,
+      opts.waveformSensitivity
+    );
+    drawDirectWaveform(
+      ctx,
+      env,
+      geom,
+      colors,
+      visSliceStartRatio,
+      visSliceEndRatio,
+      playedX
+    );
+  } else {
+    const styleSizeKey = buildWaveLayerStyleKey(opts);
+    const layerKey = [
+      opts.sampleId,
+      opts.hiResPeaks ? `hi${opts.hiResPeaks.length}` : opts.peaksJson.length,
+      styleSizeKey,
+      colors.base,
+      colors.slice,
+    ].join("|");
 
-  let layers = prevCache;
-  if (!layers || layers.key !== layerKey) {
-    const raw = new Float32Array(width);
-    for (let x = 0; x < width; x++) {
-      raw[x] = samplePeakRange(
-        peaks,
-        viewStart + (x / width) * viewSpan,
-        viewStart + ((x + 1) / width) * viewSpan,
-        opts.waveformSensitivity
-      );
-    }
-    const env = new Float32Array(width);
-    for (let x = 0; x < width; x++) {
-      const a = raw[Math.max(0, x - 1)];
-      const c = raw[Math.min(width - 1, x + 1)];
-      env[x] = Math.max(raw[x] * 0.9, a * 0.2 + raw[x] * 0.6 + c * 0.2);
-    }
-
-    const buildLayer = (color: string): HTMLCanvasElement => {
-      const layer = document.createElement("canvas");
-      layer.width = targetW;
-      layer.height = targetH;
-      const lctx = layer.getContext("2d");
-      if (!lctx) return layer;
-      lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      lctx.fillStyle = color;
-
-      if (isSolidBaseline) {
-        lctx.beginPath();
-        lctx.moveTo(0, baselineY);
-        for (let x = 0; x < width; x++) {
-          lctx.lineTo(x + 0.5, baselineY - Math.max(1, env[x] * maxWaveHeight));
-        }
-        lctx.lineTo(width, baselineY);
-        lctx.closePath();
-        lctx.fill();
-      } else {
-        lctx.beginPath();
-        lctx.moveTo(0, midY);
-        for (let x = 0; x < width; x++) {
-          lctx.lineTo(x + 0.5, midY - Math.max(0.5, env[x] * maxHalfHeight));
-        }
-        lctx.lineTo(width, midY);
-        for (let x = width - 1; x >= 0; x--) {
-          lctx.lineTo(x + 0.5, midY + Math.max(0.5, env[x] * maxHalfHeight));
-        }
-        lctx.closePath();
-        lctx.fill();
-      }
-      return layer;
-    };
-
-    layers = {
-      key: layerKey,
+    const layers = updateOrReuseWaveLayerCache({
+      prevCache,
+      preservePrevCache: Boolean(opts.preservePrevCache),
+      layerKey,
       sampleId: opts.sampleId,
       isHiRes: opts.hiResPeaks !== null,
       styleSizeKey,
-      base: buildLayer(unplayedBarColor),
-      slice: buildLayer(sliceBarColor),
-      played: buildLayer(palette.accentColor),
-    };
-  }
+      hasSlice: hasVisibleSlice,
+      peaks,
+      viewStart,
+      viewSpan,
+      sensitivity: opts.waveformSensitivity,
+      geom,
+      colors,
+    });
+    nextLayers = layers;
 
-  const playedX = Math.floor(playheadScreenRatio * width);
-  const crossfade = opts.crossfade;
-  if (
-    crossfade &&
-    crossfade.from !== layers &&
-    crossfade.progress > 0 &&
-    crossfade.progress < 1
-  ) {
-    const t = crossfade.progress;
-    const alphaFrom = 1 - t * t;
-    const alphaTo = Math.sqrt(t);
-    drawCompositeWaveLayers(
-      ctx,
-      crossfade.from,
-      width,
-      height,
-      visSliceStartRatio,
-      visSliceEndRatio,
-      playedX,
-      alphaFrom
-    );
-    drawCompositeWaveLayers(
-      ctx,
-      layers,
-      width,
-      height,
-      visSliceStartRatio,
-      visSliceEndRatio,
-      playedX,
-      alphaTo
-    );
-  } else if (crossfade && crossfade.from !== layers && crossfade.progress <= 0) {
-    drawCompositeWaveLayers(
-      ctx,
-      crossfade.from,
-      width,
-      height,
-      visSliceStartRatio,
-      visSliceEndRatio,
-      playedX,
-      1
-    );
-  } else {
-    drawCompositeWaveLayers(
-      ctx,
-      layers,
-      width,
-      height,
-      visSliceStartRatio,
-      visSliceEndRatio,
-      playedX,
-      1
-    );
+    const crossfade = opts.crossfade;
+    if (
+      crossfade &&
+      crossfade.from !== layers &&
+      crossfade.progress > 0 &&
+      crossfade.progress < 1
+    ) {
+      const t = crossfade.progress;
+      const alphaFrom = 1 - t * t;
+      const alphaTo = Math.sqrt(t);
+      drawCompositeWaveLayers(
+        ctx,
+        crossfade.from,
+        width,
+        height,
+        visSliceStartRatio,
+        visSliceEndRatio,
+        playedX,
+        alphaFrom
+      );
+      drawCompositeWaveLayers(
+        ctx,
+        layers,
+        width,
+        height,
+        visSliceStartRatio,
+        visSliceEndRatio,
+        playedX,
+        alphaTo
+      );
+    } else if (crossfade && crossfade.from !== layers && crossfade.progress <= 0) {
+      drawCompositeWaveLayers(
+        ctx,
+        crossfade.from,
+        width,
+        height,
+        visSliceStartRatio,
+        visSliceEndRatio,
+        playedX,
+        1
+      );
+    } else {
+      drawCompositeWaveLayers(
+        ctx,
+        layers,
+        width,
+        height,
+        visSliceStartRatio,
+        visSliceEndRatio,
+        playedX,
+        1
+      );
+    }
   }
 
   // 4. Playhead Line & Cap
@@ -539,5 +434,5 @@ export function renderWaveformDeck(
   }
 
   ctx.restore();
-  return layers;
+  return nextLayers;
 }

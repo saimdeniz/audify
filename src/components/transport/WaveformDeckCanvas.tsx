@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef } from "react";
 import { subscribePlayhead } from "../../store/playheadClock";
 import { useSampleStore } from "../../store/useSampleStore";
 import { useDevicePixelRatio } from "../../utils/devicePixelRatio";
@@ -68,24 +68,94 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
   });
   const waveLayersRef = useRef<WaveLayerCache | null>(null);
   const hoverRatioRef = useRef<number | null>(null);
-  const [viewport, setViewportState] = useState<WaveformViewport>(
-    DEFAULT_WAVEFORM_VIEWPORT
-  );
   const viewportRef = useRef<WaveformViewport>(DEFAULT_WAVEFORM_VIEWPORT);
+  const zoomListenersRef = useRef<Set<(zoom: number) => void>>(new Set());
+  const drawRafIdRef = useRef<number | null>(null);
+  const isInteractingRef = useRef<boolean>(false);
+  const interactSettleTimerRef = useRef<number | null>(null);
+  const drawWaveformRef = useRef<() => void>(() => {});
 
-  const setViewport = useCallback((next: WaveformViewport) => {
-    viewportRef.current = next;
-    setViewportState(next);
+  const cancelPendingDraw = useCallback(() => {
+    if (drawRafIdRef.current !== null && typeof window !== "undefined") {
+      window.cancelAnimationFrame(drawRafIdRef.current);
+      drawRafIdRef.current = null;
+    }
   }, []);
 
+  const cancelInteractSettle = useCallback(() => {
+    if (interactSettleTimerRef.current !== null && typeof window !== "undefined") {
+      window.clearTimeout(interactSettleTimerRef.current);
+      interactSettleTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleDraw = useCallback(() => {
+    if (
+      typeof window !== "undefined" &&
+      typeof window.requestAnimationFrame === "function"
+    ) {
+      if (drawRafIdRef.current !== null) return;
+      drawRafIdRef.current = window.requestAnimationFrame(() => {
+        drawRafIdRef.current = null;
+        drawWaveformRef.current();
+      });
+      return;
+    }
+    drawWaveformRef.current();
+  }, []);
+
+  const notifyZoom = useCallback((zoom: number) => {
+    zoomListenersRef.current.forEach((listener) => listener(zoom));
+  }, []);
+
+  const getZoom = useCallback(() => viewportRef.current.zoom, []);
+
+  const subscribeZoom = useCallback((listener: (zoom: number) => void) => {
+    zoomListenersRef.current.add(listener);
+    return () => {
+      zoomListenersRef.current.delete(listener);
+    };
+  }, []);
+
+  const setViewport = useCallback(
+    (next: WaveformViewport, interactive = false) => {
+      const prevZoom = viewportRef.current.zoom;
+      viewportRef.current = next;
+      if (next.zoom !== prevZoom) {
+        notifyZoom(next.zoom);
+      }
+      if (interactive) {
+        isInteractingRef.current = true;
+        cancelInteractSettle();
+        if (typeof window !== "undefined") {
+          interactSettleTimerRef.current = window.setTimeout(() => {
+            interactSettleTimerRef.current = null;
+            isInteractingRef.current = false;
+            scheduleDraw();
+          }, 120);
+        }
+      } else {
+        cancelInteractSettle();
+        isInteractingRef.current = false;
+      }
+      scheduleDraw();
+    },
+    [notifyZoom, cancelInteractSettle, scheduleDraw]
+  );
+
   const handleResetZoom = useCallback(() => {
-    setViewport(DEFAULT_WAVEFORM_VIEWPORT);
+    setViewport(DEFAULT_WAVEFORM_VIEWPORT, false);
   }, [setViewport]);
 
   useEffect(() => {
+    cancelInteractSettle();
+    isInteractingRef.current = false;
+    const prevZoom = viewportRef.current.zoom;
     viewportRef.current = DEFAULT_WAVEFORM_VIEWPORT;
-    setViewportState(DEFAULT_WAVEFORM_VIEWPORT);
-  }, [selectedSample?.id]);
+    if (prevZoom !== 1) {
+      notifyZoom(1);
+    }
+  }, [selectedSample?.id, cancelInteractSettle, notifyZoom]);
   const prefersReducedMotionRef = useRef<boolean>(false);
   const crossfadeRef = useRef<{
     sampleId: number;
@@ -160,11 +230,13 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
 
   useEffect(() => {
     return () => {
+      cancelPendingDraw();
+      cancelInteractSettle();
       cancelCrossfade();
       disposeWaveLayerCache(waveLayersRef.current);
       waveLayersRef.current = null;
     };
-  }, [cancelCrossfade]);
+  }, [cancelPendingDraw, cancelInteractSettle, cancelCrossfade]);
 
   const handleCanvasDoubleClick = useCallback(() => {
     if (sliceRange) {
@@ -174,7 +246,6 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
     }
   }, [sliceRange, setSliceRange, handleResetZoom]);
 
-  const drawWaveformRef = useRef<() => void>(() => {});
   const {
     hoverZone,
     dragMode,
@@ -192,7 +263,7 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
     viewportRef,
     setViewport,
     hoverRatioRef,
-    drawWaveformRef,
+    scheduleDraw,
   });
 
   // Pre-export WAV slice in background whenever a valid sliceRange is idle
@@ -263,6 +334,7 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
 
     const currentSampleId = selectedSample?.id ?? null;
     const currentViewport = viewportRef.current;
+    const isInteractive = isInteractingRef.current;
     const currentStyleSizeKey = buildWaveLayerStyleKey({
       logicalWidth: canvasSizeRef.current.width,
       logicalHeight: canvasSizeRef.current.height,
@@ -277,7 +349,8 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
 
     if (
       crossfadeRef.current &&
-      (crossfadeRef.current.sampleId !== currentSampleId ||
+      (isInteractive ||
+        crossfadeRef.current.sampleId !== currentSampleId ||
         crossfadeRef.current.styleSizeKey !== currentStyleSizeKey ||
         hiResPeaks === null)
     ) {
@@ -287,6 +360,7 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
     const prevLayers = waveLayersRef.current;
     const prefersReducedMotion = prefersReducedMotionRef.current;
     if (
+      !isInteractive &&
       !prefersReducedMotion &&
       typeof window !== "undefined" &&
       typeof window.requestAnimationFrame === "function" &&
@@ -329,6 +403,9 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
       }
     }
 
+    const preservePrevCache =
+      prevLayers !== null && crossfadeRef.current?.from === prevLayers;
+
     const nextLayers = renderWaveformDeck(canvas, prevLayers, {
       sampleId: currentSampleId,
       peaksJson: selectedPeaksJson,
@@ -347,6 +424,8 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
       logicalHeight: canvasSizeRef.current.height,
       dpr: liveDpr,
       crossfade: crossfadeParam,
+      interactive: isInteractive,
+      preservePrevCache,
     });
     if (
       prevLayers &&
@@ -376,7 +455,7 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
 
   useEffect(() => {
     drawWaveform();
-  }, [drawWaveform, viewport]);
+  }, [drawWaveform]);
 
   useEffect(() => {
     return subscribePlayhead(() => {
@@ -410,6 +489,9 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
     ro.observe(container);
     const onVisibilityChange = () => {
       if (document.visibilityState === "hidden") {
+        cancelPendingDraw();
+        cancelInteractSettle();
+        isInteractingRef.current = false;
         cancelCrossfade();
         if (waveLayersRef.current) {
           disposeWaveLayerCache(waveLayersRef.current);
@@ -432,7 +514,7 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
       window.removeEventListener("resize", syncRect);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [cancelCrossfade]);
+  }, [cancelPendingDraw, cancelInteractSettle, cancelCrossfade]);
 
   const canvasCursorClass =
     dragMode === "panning"
@@ -456,7 +538,8 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
         isMiniDock={isMiniDock}
         effectiveDuration={effectiveDuration}
         sliceRange={sliceRange}
-        zoomLevel={viewport.zoom}
+        getZoom={getZoom}
+        subscribeZoom={subscribeZoom}
         onResetZoom={handleResetZoom}
         pitchSemitones={pitchSemitones}
         onResetPitch={handleResetPitch}

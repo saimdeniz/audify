@@ -200,6 +200,27 @@ pub(super) fn sanitize_nested_metadata(map: &mut Map<String, Value>) {
                     g_obj.remove("icon");
                 }
             }
+            if let Some(artists_val) = g_obj.get("artists").cloned() {
+                if let Some(arr) = artists_val.as_array() {
+                    let mut seen = std::collections::HashSet::new();
+                    let mut cleaned = Vec::new();
+                    for item in arr {
+                        if cleaned.len() >= 200 {
+                            break;
+                        }
+                        if let Some(raw) = item.as_str() {
+                            let clean = sanitize_clean_text(raw, 160, false);
+                            let key = clean.to_lowercase();
+                            if !clean.is_empty() && seen.insert(key) {
+                                cleaned.push(Value::String(clean));
+                            }
+                        }
+                    }
+                    g_obj.insert("artists".to_string(), Value::Array(cleaned));
+                } else {
+                    g_obj.remove("artists");
+                }
+            }
             true
         });
     }

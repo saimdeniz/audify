@@ -5,6 +5,7 @@ import {
   AiSimilarityScope,
   AiTagSuggestionItem,
   AiTaggingMode,
+  ArtistStat,
   AsciiMagicFit,
   AsciiMagicLook,
   AsciiPresetId,
@@ -78,6 +79,8 @@ export interface SampleStoreDataState {
   collections: Collection[];
   smartCollectionCounts: Record<number, number>;
   folderStats: FolderStat[];
+  artistStats: ArtistStat[];
+  licenseGroupMatchCounts: Record<string, number>;
 
   // Filter state
   searchQuery: string;

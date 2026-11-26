@@ -284,7 +284,8 @@ export function doesSampleMatchInitialView(
     filter.licenseGroup &&
     !isSampleInLicenseGroup(
       sample.folder_path || sample.file_path,
-      filter.licenseGroup
+      filter.licenseGroup,
+      sample.artist
     )
   ) {
     return false;
@@ -407,7 +408,8 @@ export function filterBaseSamplesInMemory(
       if (
         !isSampleInLicenseGroup(
           s.folder_path || s.file_path,
-          activeLicenseGroup
+          activeLicenseGroup,
+          s.artist
         )
       ) {
         return false;

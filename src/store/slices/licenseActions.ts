@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { LicenseGroup, SampleItem } from "../../types";
 import { copyTextToClipboard, resolveTargetSamples } from "../../utils/clipboard";
 import { generateBatchAttributionCredits } from "../../utils/format";
+import { invokeCommand } from "../../utils/tauriCommands";
 import {
   AUDIFY_STORAGE_KEYS,
   persistNavigationFilters,
@@ -16,9 +17,10 @@ export function createLicenseActions(
   ctx: StoreSliceContext,
   registerClearToastTimer: (fn: () => void) => void
 ) {
-  const { set, get, applyInstantMemoryFilter, emitNotice } = ctx;
+  const { set, get, applyInstantMemoryFilter, emitNotice, getProfileEpoch } = ctx;
   const metadataTitleCache = new Map<string, string>();
   let toastTimer: ReturnType<typeof setTimeout> | null = null;
+  let licenseCountsSeq = 0;
 
   const clearToastTimer = () => {
     if (toastTimer !== null) {
@@ -78,6 +80,7 @@ export function createLicenseActions(
         name: uniqueName,
         color: groupData.color || "#F59E0B",
         folders: groupData.folders || [],
+        artists: groupData.artists || [],
         template: groupData.template.trim() || '"{title}" by {artist}',
         quoteMode: groupData.quoteMode || "auto",
       };
@@ -88,6 +91,7 @@ export function createLicenseActions(
         statusMessage: `Created license group "${created.name}"`,
       });
       await get().persistActiveProfileSettings(true);
+      void get().refreshLicenseGroupCounts();
       return created;
     },
 
@@ -119,6 +123,13 @@ export function createLicenseActions(
           void get().fetchSamples({ preserveMultiSelect: true });
         }
       }
+      if (
+        patch.folders !== undefined ||
+        patch.rel_folders !== undefined ||
+        patch.artists !== undefined
+      ) {
+        void get().refreshLicenseGroupCounts();
+      }
       await get().persistActiveProfileSettings();
     },
 
@@ -149,6 +160,7 @@ export function createLicenseActions(
           void get().fetchSamples({ preserveMultiSelect: false });
         }
       }
+      void get().refreshLicenseGroupCounts();
       await get().persistActiveProfileSettings(true);
     },
 
@@ -185,6 +197,38 @@ export function createLicenseActions(
       });
       if (!applyInstantMemoryFilter({ preserveMultiSelect: false })) {
         void get().fetchSamples({ preserveMultiSelect: false });
+      }
+    },
+
+    refreshLicenseGroupCounts: async () => {
+      const groups = get().licenseGroups;
+      const hasArtistLinked = groups.some((g) => (g.artists?.length ?? 0) > 0);
+      if (!hasArtistLinked) {
+        if (Object.keys(get().licenseGroupMatchCounts).length > 0) {
+          set({ licenseGroupMatchCounts: {} });
+        }
+        return;
+      }
+      const reqSeq = ++licenseCountsSeq;
+      const epoch = getProfileEpoch();
+      try {
+        const counts = await invokeCommand("count_license_group_matches", {
+          groups: groups.map((g) => ({
+            id: g.id,
+            folders: g.folders,
+            rel_folders: g.rel_folders ?? [],
+            artists: g.artists ?? [],
+          })),
+        });
+        if (reqSeq !== licenseCountsSeq || epoch !== getProfileEpoch()) {
+          return;
+        }
+        set({
+          licenseGroupMatchCounts:
+            counts && typeof counts === "object" ? counts : {},
+        });
+      } catch (err) {
+        console.error("Failed to compute license group match counts:", err);
       }
     },
 
@@ -253,7 +297,7 @@ export function createLicenseActions(
           creditToast: {
             title: "No license rule matched selected track(s)",
             subtitle:
-              "Link this artist folder in Settings > Licenses to generate attribution credits.",
+              "Link this artist folder or artist name in Settings > Licenses to generate attribution credits.",
             isWarning: true,
             seq: nextSeq,
           },

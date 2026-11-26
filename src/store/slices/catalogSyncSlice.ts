@@ -59,6 +59,7 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
   let initializedOnce = false;
   let sidebarSeq = 0;
   let folderStatsSeq = 0;
+  let artistStatsSeq = 0;
   let reloadProfileSeq = 0;
 
   return {
@@ -208,7 +209,8 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
           ? initialSamplesRaw.filter((s) =>
               isSampleInLicenseGroup(
                 s.folder_path || s.file_path,
-                activeLicGroup
+                activeLicGroup,
+                s.artist
               )
             )
           : initialSamplesRaw;
@@ -410,6 +412,7 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
     fetchFolderStats: async () => {
       const reqSeq = ++folderStatsSeq;
       const epoch = getProfileEpoch();
+      void get().fetchArtistStats();
       try {
         const folderStats = await invoke<FolderStat[]>("get_folder_tree_stats");
         if (reqSeq !== folderStatsSeq || epoch !== getProfileEpoch()) {
@@ -419,6 +422,23 @@ export function createCatalogSyncSlice(ctx: StoreSliceContext) {
         set({ folderStats });
       } catch (err) {
         console.error("Failed to fetch folder stats:", err);
+      }
+    },
+
+    fetchArtistStats: async () => {
+      const reqSeq = ++artistStatsSeq;
+      const epoch = getProfileEpoch();
+      try {
+        const artistStats = await invokeCommand("get_artist_stats", {});
+        if (reqSeq !== artistStatsSeq || epoch !== getProfileEpoch()) {
+          return;
+        }
+        set({ artistStats: Array.isArray(artistStats) ? artistStats : [] });
+        if (get().licenseGroups.some((g) => (g.artists?.length ?? 0) > 0)) {
+          void get().refreshLicenseGroupCounts();
+        }
+      } catch (err) {
+        console.error("Failed to fetch artist stats:", err);
       }
     },
 

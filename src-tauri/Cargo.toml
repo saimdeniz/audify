@@ -1,6 +1,6 @@
 [package]
 name = "audify"
-version = "1.0.2"
+version = "1.0.3"
 description = "Pro-Audio Sample & SFX Manager for NLE/DAW Workflows"
 authors = ["Audify Contributors"]
 edition = "2021"

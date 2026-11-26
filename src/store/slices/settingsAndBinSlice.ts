@@ -31,6 +31,7 @@ export function createSettingsAndBinSlice(
   | "deleteLicenseGroup"
   | "pickFolderForLicenseGroup"
   | "setLicenseGroupFilter"
+  | "refreshLicenseGroupCounts"
   | "copyAttributionForSamples"
   | "copySamplePaths"
   | "clearCreditToast"

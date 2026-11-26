@@ -45,6 +45,8 @@ export function createInitialStoreState(): SampleStoreDataState {
     collections: [],
     smartCollectionCounts: {},
     folderStats: loadSavedFolderStats(),
+    artistStats: [],
+    licenseGroupMatchCounts: {},
 
     searchQuery: "",
     smartSearchSynonyms: boot.smartSearchSynonyms,

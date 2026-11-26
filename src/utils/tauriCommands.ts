@@ -4,6 +4,7 @@ import type {
   AiModelStatus,
   AiTaggingMode,
   AiTagSuggestionItem,
+  ArtistStat,
   AutoTagImpactPreview,
   BatchRenameEntryInput,
   BatchRenameRecord,
@@ -177,13 +178,29 @@ export interface AudifyCommandMap {
     args: { entries: BatchRenameEntryInput[] };
     result: BatchRenameRecord[];
   };
+  get_artist_stats: {
+    args: Record<string, never>;
+    result: ArtistStat[];
+  };
   preview_license_group_samples: {
     args: {
       folders: string[];
       relFolders?: string[];
+      artists?: string[];
       limit?: number;
     };
     result: string[];
+  };
+  count_license_group_matches: {
+    args: {
+      groups: Array<{
+        id: string;
+        folders: string[];
+        rel_folders?: string[];
+        artists?: string[];
+      }>;
+    };
+    result: Record<string, number>;
   };
   get_ai_model_status: {
     args: Record<string, never>;

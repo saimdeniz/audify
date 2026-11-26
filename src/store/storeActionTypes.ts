@@ -66,6 +66,7 @@ export interface SampleCatalogAndFileActions {
   ) => Promise<void>;
   rebuildAllLibraries: () => Promise<void>;
   fetchFolderStats: () => Promise<void>;
+  fetchArtistStats: () => Promise<void>;
   syncAllLibrariesBackground: () => Promise<void>;
 
   setEnableAdvancedFileOps: (enabled: boolean) => void;
@@ -221,6 +222,7 @@ export interface SampleProfileAndLicenseActions {
     groupId: string | null,
     subFolder?: string | null
   ) => void;
+  refreshLicenseGroupCounts: () => Promise<void>;
   copyAttributionForSamples: (targetSamples?: SampleItem[]) => Promise<void>;
   copySamplePaths: (targetSamples?: SampleItem[]) => Promise<void>;
   clearCreditToast: () => void;
