@@ -13,7 +13,6 @@ import {
 import type { StoreGet, StoreSet } from "../types";
 import {
   applySampleRenameState,
-  journalEntryToHistoryItem,
   pushBoundedHistory,
   replayFileOpHistoryItem,
 } from "./fileOpsHistoryHelpers";
@@ -176,32 +175,8 @@ export function createFileOpsSingleActions(deps: FileOpsSingleDeps) {
         }
       }
 
-      // Iterate through all undoable journal entries so one unconvertible/deleted record
-      // never blocks older valid entries behind it.
-      for (const fallbackEntry of get().fileOpJournal) {
-        if (!fallbackEntry.can_undo) continue;
-        const fallbackItem = journalEntryToHistoryItem(fallbackEntry, get);
-        if (!fallbackItem) continue;
-        isReplayingHistory = true;
-        try {
-          if (
-            await replayFileOpHistoryItem(fallbackItem, "undo", {
-              set,
-              get,
-              emitNotice,
-              getProfileEpoch,
-              releaseMatchingAudioHandle,
-              popFromSourceStack: false,
-            })
-          ) {
-            return true;
-          }
-        } finally {
-          isReplayingHistory = false;
-        }
-        return false;
-      }
-
+      // Global Ctrl+Z is strictly session-scoped so historical SQLite journal entries
+      // from previous app sessions never silently mutate files weeks later.
       emitNotice("Nothing to undo", "info");
       return false;
     },

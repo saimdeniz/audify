@@ -214,10 +214,43 @@ fn run_watcher_loop(
     let mut in_flight_roots: HashSet<PathBuf> = HashSet::new();
 
     loop {
-        match rx.recv_timeout(POLL_INTERVAL) {
-            Ok(msg) => {
+        let can_block_idle = pending_by_root.is_empty()
+            && (!enabled || !has_unattached_roots.load(Ordering::Relaxed))
+            && suppress_until.is_none()
+            && suppress_until_by_root.is_empty();
+
+        let first_msg = if can_block_idle {
+            // Zero-CPU blocking wait when no pending FS events or retry timers exist
+            match rx.recv() {
+                Ok(msg) => Some(msg),
+                Err(_) => break,
+            }
+        } else {
+            match rx.recv_timeout(POLL_INTERVAL) {
+                Ok(msg) => Some(msg),
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        };
+
+        if let Some(msg) = first_msg {
+            process_watcher_msg(
+                msg,
+                &mut watcher,
+                &mut active_watches,
+                &mut roots_desc,
+                &mut last_desired_cfg,
+                &has_unattached_roots,
+                &mut enabled,
+                &mut manual_scan_depth,
+                &mut suppress_until,
+                &mut suppress_until_by_root,
+                &mut pending_by_root,
+                &mut in_flight_roots,
+            );
+            while let Ok(next_msg) = rx.try_recv() {
                 process_watcher_msg(
-                    msg,
+                    next_msg,
                     &mut watcher,
                     &mut active_watches,
                     &mut roots_desc,
@@ -230,25 +263,7 @@ fn run_watcher_loop(
                     &mut pending_by_root,
                     &mut in_flight_roots,
                 );
-                while let Ok(next_msg) = rx.try_recv() {
-                    process_watcher_msg(
-                        next_msg,
-                        &mut watcher,
-                        &mut active_watches,
-                        &mut roots_desc,
-                        &mut last_desired_cfg,
-                        &has_unattached_roots,
-                        &mut enabled,
-                        &mut manual_scan_depth,
-                        &mut suppress_until,
-                        &mut suppress_until_by_root,
-                        &mut pending_by_root,
-                        &mut in_flight_roots,
-                    );
-                }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
 
         let now = Instant::now();

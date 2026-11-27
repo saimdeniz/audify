@@ -9,7 +9,7 @@ interface EmptyTrashConfirmModalProps {
   isOpen: boolean;
   trashedCount: number;
   trashedTotalBytes: number;
-  itemNoun?: "file" | "slice";
+  itemNoun?: "file" | "slice" | "layer";
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -55,7 +55,7 @@ export const EmptyTrashConfirmModal: React.FC<EmptyTrashConfirmModalProps> = ({
     >
       <div
         ref={dialogRef}
-        role="dialog"
+        role="alertdialog"
         aria-modal="true"
         aria-label="Empty Recycle Bin"
         tabIndex={-1}
@@ -95,6 +95,7 @@ export const EmptyTrashConfirmModal: React.FC<EmptyTrashConfirmModalProps> = ({
         <div className="px-3 py-2 border-t border-line bg-surface-header flex items-center justify-end gap-1.5">
           <button
             type="button"
+            autoFocus
             onClick={onCancel}
             className="h-[25px] px-2.5 rounded-xs bg-surface-2 hover:bg-surface-3 border border-line text-[11px] font-medium text-fg-2 hover:text-fg transition-colors cursor-pointer"
           >
@@ -102,7 +103,6 @@ export const EmptyTrashConfirmModal: React.FC<EmptyTrashConfirmModalProps> = ({
           </button>
           <button
             type="button"
-            autoFocus
             onClick={onConfirm}
             className="h-[25px] px-2.5 rounded-xs bg-danger/15 hover:bg-danger hover:text-danger-on border border-danger/50 text-[11px] font-semibold text-danger inline-flex items-center gap-1.5 transition-colors cursor-pointer"
           >

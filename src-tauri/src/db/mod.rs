@@ -1,6 +1,7 @@
 pub mod default_rules;
 mod migration_v17;
 mod migration_v19;
+mod migration_v20;
 mod migrations;
 mod schema;
 pub mod taxonomy;

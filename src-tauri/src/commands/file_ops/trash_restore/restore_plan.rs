@@ -5,11 +5,15 @@ use crate::commands::file_ops::{
 use crate::db::get_active_profile_id;
 use crate::security::{
     display_leaf, has_ntfs_ads_colon, is_unc_or_network_path, sanitize_err,
-    strip_verbatim_prefix,
+    strip_verbatim_prefix, truncate_filename_stem_utf16,
 };
 use rusqlite::{params, params_from_iter, Connection};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+static RESTORE_COLLISION_NONCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 pub(super) struct RestoreRow {
@@ -40,17 +44,29 @@ pub(super) fn resolve_non_colliding_restore_path(original_path: &Path) -> PathBu
         .unwrap_or("");
 
     for idx in 1..1000 {
-        let candidate_name = if ext.is_empty() {
-            format!("{} (Restored {})", stem, idx)
+        let suffix = if ext.is_empty() {
+            format!(" (Restored {})", idx)
         } else {
-            format!("{} (Restored {}).{}", stem, idx, ext)
+            format!(" (Restored {}).{}", idx, ext)
         };
-        let cand_pb = parent.join(candidate_name);
+        let safe_stem = truncate_filename_stem_utf16(stem, suffix.encode_utf16().count());
+        let cand_pb = parent.join(format!("{}{}", safe_stem, suffix));
         if fs::symlink_metadata(&cand_pb).is_err() {
             return cand_pb;
         }
     }
-    original_path.to_path_buf()
+    let ts_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let nonce = RESTORE_COLLISION_NONCE.fetch_add(1, Ordering::Relaxed);
+    let suffix = if ext.is_empty() {
+        format!(" (Restored {:x}_{})", ts_ms & 0xFFFF_FFFF, nonce)
+    } else {
+        format!(" (Restored {:x}_{}).{}", ts_ms & 0xFFFF_FFFF, nonce, ext)
+    };
+    let safe_stem = truncate_filename_stem_utf16(stem, suffix.encode_utf16().count());
+    parent.join(format!("{}{}", safe_stem, suffix))
 }
 
 pub(super) fn validate_and_create_restore_parent(

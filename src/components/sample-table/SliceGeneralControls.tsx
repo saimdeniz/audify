@@ -36,10 +36,11 @@ export const SliceGeneralControls: React.FC<SliceGeneralControlsProps> = ({
 
   return (
     <div
-      className={`border-t border-line-subtle flex items-center flex-wrap w-full ${
-        compact ? "pt-1 gap-1" : "pt-1.5 gap-1.5"
+      className={`border-t border-line flex flex-1 flex-wrap items-start justify-between w-full ${
+        compact ? "pt-1.5 mt-0.5 gap-1" : "pt-2 mt-0.5 gap-1.5"
       }`}
     >
+      <div className={`flex items-center flex-wrap ${compact ? "gap-1" : "gap-1.5"}`}>
       <button
         type="button"
         onClick={() => setSliceHideMissing(!sliceHideMissing)}
@@ -50,14 +51,18 @@ export const SliceGeneralControls: React.FC<SliceGeneralControlsProps> = ({
             ? "bg-accent-soft border-accent text-accent-fg"
             : "bg-surface-3 border-line text-fg-2 hover:text-fg hover:border-line-strong"
         }`}
-        title="Hide slice entries whose exported WAV file was removed from disk"
+        title={
+          sliceHideMissing
+            ? "Missing slices hidden (click to show missing entries)"
+            : "Hide slice entries whose exported WAV file was removed from disk"
+        }
       >
         {sliceHideMissing ? (
           <EyeOff className="w-3 h-3 shrink-0" />
         ) : (
           <Eye className="w-3 h-3 shrink-0" />
         )}
-        <span>{sliceHideMissing ? "Showing Existing" : "Hide Missing"}</span>
+        <span>Hide Missing</span>
       </button>
 
       <button
@@ -84,8 +89,9 @@ export const SliceGeneralControls: React.FC<SliceGeneralControlsProps> = ({
         <Trash2 className="w-3 h-3 shrink-0" />
         <span>Clear Missing ({missingCount})</span>
       </button>
+      </div>
 
-      <div className="ml-auto flex items-center gap-1.5 font-mono text-[10px] shrink-0">
+      <div className="ml-auto self-end flex items-center gap-1.5 font-mono text-[10px] shrink-0">
         <span className="text-fg-3 truncate">
           {compact
             ? `${readyCount} ready · ${missingCount} missing`

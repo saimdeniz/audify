@@ -37,19 +37,27 @@ function HeaderSubTabSwitcher<T extends string>({
   value,
   onChange,
   options,
+  ariaLabel,
 }: {
   value: T;
   onChange: (next: T) => void;
   options: readonly [SubTabOption<T>, SubTabOption<T>];
+  ariaLabel: string;
 }) {
   return (
-    <div className="w-[184px] h-[24px] flex items-center bg-surface-2 p-0.5 rounded-xs border border-line shrink-0 justify-self-center">
+    <div
+      role="tablist"
+      aria-label={ariaLabel}
+      className="w-[184px] h-[24px] flex items-center bg-surface-2 p-0.5 rounded-xs border border-line shrink-0 justify-self-center"
+    >
       {options.map(({ id, label, count, Icon }) => {
         const active = value === id;
         return (
           <button
             key={id}
             type="button"
+            role="tab"
+            aria-selected={active}
             onClick={() => onChange(id)}
             className={`flex-1 h-[20px] justify-center font-mono text-[10px] rounded-xs flex items-center space-x-1 transition-all ${
               active
@@ -59,7 +67,7 @@ function HeaderSubTabSwitcher<T extends string>({
           >
             <Icon className="w-3 h-3 shrink-0" />
             <span>{label}</span>
-            <span className="text-[9px] opacity-80">{count}</span>
+            <span className="text-[9.5px] opacity-80">{count}</span>
           </button>
         );
       })}
@@ -125,6 +133,9 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
   const licenseGroupsCount = useSampleStore((s) => s.licenseGroups.length);
   const enableLicensesSystem = useSampleStore((s) => s.enableLicensesSystem);
   const trashedCount = useSampleStore((s) => s.trashedCount);
+  const trashedSliceCount = useSampleStore((s) => s.trashedSliceCount);
+  const trashedLayerCount = useSampleStore((s) => s.trashedLayerCount);
+  const totalTrashedCount = trashedCount + trashedSliceCount + trashedLayerCount;
   const aiReady = useSampleStore((s) => Boolean(s.aiModelStatus?.ready));
 
   const rebuildAllLibraries = useSampleStore((s) => s.rebuildAllLibraries);
@@ -254,9 +265,9 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
             {totalIndexedInLibraries.toLocaleString()} samples
           </span>
         )}
-        {settingsTab === "advanced" && trashedCount > 0 && (
+        {settingsTab === "advanced" && totalTrashedCount > 0 && (
           <span className="text-[10px] font-mono text-accent-fg bg-accent-soft px-1.5 py-0.5 rounded-xs border border-accent/40 shrink-0">
-            {trashedCount} in Trash
+            {totalTrashedCount} in Trash
           </span>
         )}
       </div>
@@ -264,6 +275,7 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
       {/* Center (Fixed-position grid track on Collections & Tags & Rules — never overlaps right controls) */}
       {settingsTab === "collections" && (
         <HeaderSubTabSwitcher
+          ariaLabel="Collections view"
           value={collectionsSubTab}
           onChange={setCollectionsSubTab}
           options={[
@@ -280,6 +292,7 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
 
       {settingsTab === "tags" && (
         <HeaderSubTabSwitcher
+          ariaLabel="Tags and rules view"
           value={tagsSubTab}
           onChange={setTagsSubTab}
           options={[
@@ -421,7 +434,7 @@ export const SettingsSectionHeader: React.FC<SettingsSectionHeaderProps> = ({
                   : "Apply rules"}
               </span>
               {autoTagRulesDirty && !isApplyingAutoTags && (
-                <span className="w-1.5 h-1.5 rounded-[2px] bg-warn shrink-0" />
+                <span className="w-1.5 h-1.5 rounded-[2px] bg-accent-on shrink-0" />
               )}
             </button>
             <button

@@ -215,7 +215,7 @@ export const ScopeLimitsEditor: React.FC<ScopeLimitsEditorProps> = ({
                       </span>
                     ))}
                   </div>
-                  <div className="text-[8.5px] font-mono text-fg-3">
+                  <div className="text-[9.5px] font-mono text-fg-3">
                     Inherited from {categoryName}. Add a folder above to override.
                   </div>
                 </div>
@@ -252,7 +252,7 @@ export const ScopeLimitsEditor: React.FC<ScopeLimitsEditorProps> = ({
                     className="inline-flex items-center gap-1 bg-surface-soft border border-danger/20 text-fg-2 font-mono text-[9px] px-1.5 py-0.5 rounded-xs"
                     title={`Inherited exclude from category "${categoryName}": ${p}`}
                   >
-                    <span className="text-[8px] text-danger font-semibold">
+                    <span className="text-[9.5px] text-danger font-semibold">
                       {categoryName}:
                     </span>
                     <span className="truncate max-w-[120px]">

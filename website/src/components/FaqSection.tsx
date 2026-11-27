@@ -62,7 +62,7 @@ const FaqColumn: React.FC<FaqColumnProps> = ({ items, colPrefix, openKey, onTogg
  */
 export const FaqSection: React.FC = () => {
   const { messages } = useI18n();
-  const [openKey, setOpenKey] = useState<string | null>("left-0");
+  const [openKey, setOpenKey] = useState<string | null>(null);
 
   const handleToggle = (key: string) => {
     setOpenKey((prev) => (prev === key ? null : key));

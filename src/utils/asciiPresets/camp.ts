@@ -4,12 +4,14 @@ import {
   hash2,
   hexToRgb,
   mixRgb,
+  vnoise,
+} from "./blueprintGrid";
+import {
   paintGridMist,
   paintGridPine,
   paintGridRidge,
   paintGridSun,
-  vnoise,
-} from "./blueprintGrid";
+} from "./blueprintShapes";
 import { renderCampOutpostPreset } from "./campOutpost";
 import { renderCampSanctuaryPreset } from "./campSanctuary";
 import { AsciiRenderParams } from "./shared";

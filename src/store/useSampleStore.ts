@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { Profile, SampleItem } from "../types";
 import { clearCatalogSortCaches } from "../utils/catalogFilterCore";
+import { createEmptyLayerRecipe } from "../utils/layerHelpers";
+import { resetSharedListScrollAnchor } from "../utils/listScrollAnchor";
 import { computeSmartCollectionCounts } from "../utils/smartCollectionCounts";
 import { clearSmartSearchCache, executeSmartSearch } from "../utils/smartSearch";
 import {
@@ -14,6 +16,7 @@ import {
   applyClientFacetFilters,
   filterBaseSamplesInMemory,
   reconcileSelectionAfterFilter,
+  shouldPreserveDeckSelection,
 } from "./filterEngine";
 import {
   createInitialStoreState,
@@ -33,6 +36,7 @@ import {
 } from "./slices/duplicateSlice";
 import { createFileOpsSlice } from "./slices/fileOpsSlice";
 import { createFilterSlice } from "./slices/filterSlice";
+import { createLayerSlice } from "./slices/layerSlice";
 import { createLibrarySyncSlice } from "./slices/librarySyncSlice";
 import {
   createPlaybackSlice,
@@ -236,6 +240,7 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
     clearSmartSearchCache();
     clearCatalogSortCaches();
     resetPlayheadClock(0);
+    resetSharedListScrollAnchor();
     const prevSim = get().similaritySession;
     set({
       allProfileSamples: [],
@@ -279,7 +284,30 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
       sliceOpRedoStack: [],
       trashedSliceCount: 0,
       trashedSliceTotalBytes: 0,
+      trashedLayerCount: 0,
+      trashedLayerTotalBytes: 0,
       trashViewTab: "tracks",
+      favoritesViewTab: "tracks",
+      layersFilterActive: false,
+      layersWorkspaceTab: "saved",
+      layersSplitLibraryOpen: false,
+      layerHistory: [],
+      trashedLayerHistory: [],
+      isLoadingLayerHistory: false,
+      selectedLayerIds: [],
+      activeLayerId: null,
+      batchRenameLayerIds: null,
+      layerDraftName: "Untitled_Layer",
+      layerDraftEditingId: null,
+      layerDraftRecipe: createEmptyLayerRecipe(),
+      layerDraftDirty: false,
+      layerDraftSelectedClipIds: [],
+      layerDraftMissingClipIds: [],
+      layerDraftUndoStack: [],
+      layerDraftRedoStack: [],
+      layerDraftPreview: null,
+      isRenderingLayerPreview: false,
+      isSavingLayer: false,
       isScanningDuplicates: false,
       duplicateScanProgress: null,
       duplicateScanResult: null,
@@ -400,7 +428,8 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
         filtered,
         live.selectedSample,
         live.selectedSampleIds,
-        preserveMultiSelect
+        preserveMultiSelect,
+        shouldPreserveDeckSelection(live)
       );
 
       const selectionChanged =
@@ -415,10 +444,15 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
         selectedSample: reconciled.nextSelected,
         selectedSampleIds: reconciled.nextSelectedIds,
         lastSelectedIndex: reconciled.nextSelectedIndex,
-        durationSec: reconciled.nextSelected
-          ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
-          : live.durationSec,
-        ...(selectionChanged ? { sliceRange: null, currentTimeSec: 0 } : {}),
+        ...(selectionChanged
+          ? {
+              sliceRange: null,
+              currentTimeSec: 0,
+              durationSec: reconciled.nextSelected
+                ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
+                : 0,
+            }
+          : {}),
       });
     };
 
@@ -481,6 +515,7 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
   const duplicateSlice = createDuplicateSlice(sliceCtx);
   const aiSlice = createAiSlice(sliceCtx);
   const sliceHistorySlice = createSliceHistorySlice(sliceCtx);
+  const layerSlice = createLayerSlice(sliceCtx);
 
   return {
     ...createInitialStoreState(),
@@ -495,6 +530,7 @@ export const useSampleStore = create<SampleStoreState>((rawSet, get, api) => {
     ...duplicateSlice,
     ...aiSlice,
     ...sliceHistorySlice,
+    ...layerSlice,
     clearStatusNotice,
     pauseStatusNotice,
     resumeStatusNotice,

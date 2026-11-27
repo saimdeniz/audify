@@ -268,7 +268,7 @@ export const AsciiMagicCatalogPanel: React.FC = React.memo(() => {
           value={slugInput}
           onChange={(e) => setSlugInput(e.target.value)}
           placeholder="Paste ascii-magic.com/ascii/<slug> or enter slug (e.g. chai-stall-dawn)"
-          className="h-[26px] flex-1 min-w-[200px] px-2 rounded-xs bg-surface-1 border border-line text-[11px] text-fg placeholder:text-fg-3 focus:outline-none focus:border-accent"
+          className="h-[26px] flex-1 min-w-[200px] px-2 rounded-xs bg-surface-1 border border-line text-[11px] text-fg placeholder:text-fg-3 focus:border-accent"
         />
         <button
           type="submit"
@@ -366,7 +366,7 @@ export const AsciiMagicCatalogPanel: React.FC = React.memo(() => {
                 ? `Search ${catalogCount} scenes by name, tag, or slug...`
                 : "Filter saved scenes..."
             }
-            className="w-full h-[24px] pl-6 pr-2 rounded-xs bg-surface-1 border border-line text-[10.5px] text-fg placeholder:text-fg-3 focus:outline-none focus:border-accent"
+            className="w-full h-[24px] pl-6 pr-2 rounded-xs bg-surface-1 border border-line text-[10.5px] text-fg placeholder:text-fg-3 focus:border-accent"
           />
         </div>
 
@@ -407,6 +407,23 @@ export const AsciiMagicCatalogPanel: React.FC = React.memo(() => {
           >
             <RefreshCw className={`w-3 h-3 ${syncing ? "animate-spin" : ""}`} />
             <span>{syncing ? "Syncing..." : "Sync Full Catalog"}</span>
+          </button>
+        </div>
+      ) : filteredItems.length === 0 ? (
+        <div className="p-4 rounded-xs border border-line bg-surface-2 text-center space-y-2">
+          <p className="text-[11px] text-fg-2">
+            No ASCII scenes match your current search or filter.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setSearchQuery("");
+              setCategoryFilter("all");
+              setInstalledOnly(false);
+            }}
+            className="h-[24px] px-2.5 rounded-xs border border-line hover:border-accent bg-surface-3 text-accent-fg font-mono text-[10px] font-semibold cursor-pointer transition-colors"
+          >
+            Clear Filters
           </button>
         </div>
       ) : (

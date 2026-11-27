@@ -384,6 +384,83 @@ pub(crate) fn undo_rename_sample_file_with_conn(
         .ok_or_else(|| "Sample could not be loaded after undo rename".to_string())
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SampleRenameHistoryItem {
+    pub name: String,
+    pub created_at: String,
+}
+
+pub fn query_sample_rename_history_with_conn(
+    conn: &Connection,
+    sample_id: i64,
+    limit: usize,
+) -> Result<Vec<SampleRenameHistoryItem>, String> {
+    if sample_id <= 0 {
+        return Ok(Vec::new());
+    }
+    let cap = limit.clamp(1, 20);
+    let (current_name, prev_name): (String, Option<String>) = conn
+        .query_row(
+            "SELECT file_name, previous_file_name FROM samples WHERE id = ?1",
+            params![sample_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|_| "Sample not found".to_string())?;
+
+    let mut seen = std::collections::HashSet::from([current_name.trim().to_lowercase()]);
+    let mut out = Vec::new();
+    let mut push_unique = |raw: &str, ts: &str| -> bool {
+        if out.len() >= cap {
+            return true;
+        }
+        let t = raw.trim();
+        if !t.is_empty() && seen.insert(t.to_lowercase()) {
+            out.push(SampleRenameHistoryItem {
+                name: t.to_string(),
+                created_at: ts.to_string(),
+            });
+        }
+        out.len() >= cap
+    };
+
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT old_name, new_name, created_at FROM file_ops_journal
+         WHERE sample_id = ?1 AND op_type IN ('RENAME', 'UNDO_RENAME')
+         ORDER BY id DESC LIMIT 50",
+    ) {
+        if let Ok(rows) = stmt.query_map(params![sample_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        }) {
+            for (old_n, new_n, ts) in rows.flatten() {
+                if push_unique(&old_n, &ts) || push_unique(&new_n, &ts) {
+                    return Ok(out);
+                }
+            }
+        }
+    }
+    if let Some(prev) = prev_name {
+        let _ = push_unique(&prev, "");
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn get_sample_rename_history(
+    state: State<'_, AppState>,
+    sample_id: i64,
+    limit: Option<usize>,
+) -> Result<Vec<SampleRenameHistoryItem>, String> {
+    let state_owned = state.inner().clone();
+    let max_items = limit.unwrap_or(10).clamp(1, 20);
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::commands::with_read_conn(&state_owned, |conn| {
+            query_sample_rename_history_with_conn(conn, sample_id, max_items)
+        })
+    })
+    .await
+    .map_err(|e| format!("Rename history query failed: {}", e))?
+}
+
 #[tauri::command]
 pub async fn undo_rename_sample_file(
     app: tauri::AppHandle,
@@ -411,4 +488,73 @@ pub async fn undo_rename_sample_file(
         }
     }
     res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rename_history_dedups_excludes_current_respects_limit_and_falls_back() {
+        let conn = Connection::open_in_memory().expect("in-memory sqlite");
+        conn.execute_batch(
+            "CREATE TABLE samples (
+                id INTEGER PRIMARY KEY,
+                file_name TEXT NOT NULL,
+                previous_file_name TEXT
+            );
+            CREATE TABLE file_ops_journal (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sample_id INTEGER NOT NULL,
+                op_type TEXT NOT NULL,
+                old_name TEXT NOT NULL,
+                new_name TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO samples (id, file_name, previous_file_name) VALUES (1, 'final.wav', 'fallback_prev.wav')",
+            [],
+        )
+        .unwrap();
+        // Insert 12 rename steps (including a duplicate and current name)
+        let rows = [
+            ("orig_01.wav", "step_02.wav", "2026-01-01 10:00:00"),
+            ("step_02.wav", "step_03.wav", "2026-01-01 10:01:00"),
+            ("step_03.wav", "step_04.wav", "2026-01-01 10:02:00"),
+            ("step_04.wav", "step_05.wav", "2026-01-01 10:03:00"),
+            ("step_05.wav", "step_06.wav", "2026-01-01 10:04:00"),
+            ("step_06.wav", "step_07.wav", "2026-01-01 10:05:00"),
+            ("step_07.wav", "step_08.wav", "2026-01-01 10:06:00"),
+            ("step_08.wav", "step_09.wav", "2026-01-01 10:07:00"),
+            ("step_09.wav", "step_10.wav", "2026-01-01 10:08:00"),
+            ("step_10.wav", "step_11.wav", "2026-01-01 10:09:00"),
+            ("step_11.wav", "final.wav", "2026-01-01 10:10:00"),
+        ];
+        for (old_n, new_n, ts) in rows {
+            conn.execute(
+                "INSERT INTO file_ops_journal (sample_id, op_type, old_name, new_name, created_at)
+                 VALUES (1, 'RENAME', ?1, ?2, ?3)",
+                params![old_n, new_n, ts],
+            )
+            .unwrap();
+        }
+
+        let history = query_sample_rename_history_with_conn(&conn, 1, 10).unwrap();
+        assert_eq!(history.len(), 10);
+        assert_eq!(history[0].name, "step_11.wav");
+        assert!(!history.iter().any(|h| h.name.eq_ignore_ascii_case("final.wav")));
+
+        // Fallback to previous_file_name when journal has no rows
+        conn.execute(
+            "INSERT INTO samples (id, file_name, previous_file_name) VALUES (2, 'new_name.wav', 'legacy_old.wav')",
+            [],
+        )
+        .unwrap();
+        let fallback = query_sample_rename_history_with_conn(&conn, 2, 10).unwrap();
+        assert_eq!(fallback.len(), 1);
+        assert_eq!(fallback[0].name, "legacy_old.wav");
+    }
 }

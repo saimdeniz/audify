@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from "react";
-import { CopyCheck, Scissors, X } from "lucide-react";
+import { CopyCheck, Layers, Scissors, X } from "lucide-react";
 import { DuplicateGeneralControls } from "./DuplicateGeneralControls";
 import {
   FilterDrawerGenrePanel,
   FilterDrawerTagsPanel,
 } from "./FilterDrawerTaxonomyPanels";
+import { LayerGeneralControls } from "./LayerGeneralControls";
 import { SessionBinGeneralControls } from "./SessionBinGeneralControls";
 import { SliceGeneralControls } from "./SliceGeneralControls";
 import { TrashGeneralControls } from "./TrashGeneralControls";
@@ -53,6 +54,7 @@ export const FilterDrawerPanel: React.FC<FilterDrawerPanelProps> = ({
     (s) => s.duplicatesFilterActive
   );
   const slicesFilterActive = useSampleStore((s) => s.slicesFilterActive);
+  const layersFilterActive = useSampleStore((s) => s.layersFilterActive);
   const trashFilterActive = useSampleStore((s) => s.trashFilterActive);
   const typeFilter = useSampleStore((s) => s.typeFilter);
   const srFilter = useSampleStore((s) => s.srFilter);
@@ -63,6 +65,9 @@ export const FilterDrawerPanel: React.FC<FilterDrawerPanelProps> = ({
   );
   const setSlicesFilterActive = useSampleStore(
     (s) => s.setSlicesFilterActive
+  );
+  const setLayersFilterActive = useSampleStore(
+    (s) => s.setLayersFilterActive
   );
   const setTypeFilter = useSampleStore((s) => s.setTypeFilter);
   const setSrFilter = useSampleStore((s) => s.setSrFilter);
@@ -149,7 +154,7 @@ export const FilterDrawerPanel: React.FC<FilterDrawerPanelProps> = ({
   switch (activeTab) {
     case "general":
       return (
-        <div className={`flex flex-col w-full ${compact ? "gap-1" : "gap-1.5"}`}>
+        <div className={`flex flex-col w-full min-h-full ${compact ? "gap-1" : "gap-1.5"}`}>
           <div
             className={`flex items-center flex-wrap ${
               compact ? "gap-1" : "gap-1.5"
@@ -173,6 +178,22 @@ export const FilterDrawerPanel: React.FC<FilterDrawerPanelProps> = ({
 
             <button
               type="button"
+              onClick={() => setLayersFilterActive(!layersFilterActive)}
+              className={`${
+                compact ? "h-[22px] px-1.5 gap-1 text-[10.5px]" : "h-[24px] px-2.5 gap-1.5 text-[11px]"
+              } rounded-[3px] border font-medium inline-flex items-center whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                layersFilterActive
+                  ? "bg-accent-soft border-accent text-accent-fg"
+                  : "bg-surface-3 border-line text-fg-2 hover:text-fg hover:border-line-strong"
+              }`}
+              title="Layer multiple samples on a timeline, fade/trim/pitch & export custom SFX mixes"
+            >
+              <Layers className="w-3 h-3" />
+              <span>Layers</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setDuplicatesFilterActive(!duplicatesFilterActive)}
               className={`${
                 compact ? "h-[22px] px-1.5 gap-1 text-[10.5px]" : "h-[24px] px-2.5 gap-1.5 text-[11px]"
@@ -189,6 +210,7 @@ export const FilterDrawerPanel: React.FC<FilterDrawerPanelProps> = ({
           </div>
 
           {slicesFilterActive && <SliceGeneralControls compact={compact} />}
+          {layersFilterActive && <LayerGeneralControls compact={compact} />}
           {duplicatesFilterActive && (
             <DuplicateGeneralControls compact={compact} />
           )}

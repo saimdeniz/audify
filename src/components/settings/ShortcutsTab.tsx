@@ -232,13 +232,16 @@ export const ShortcutsTab: React.FC<ShortcutsTabProps> = ({
           {[
             { label: "Focus sample search", key: "CTRL + F" },
             { label: "Rename selected / batch", key: "F2 / SHIFT+F2" },
-            { label: "Create slice on waveform", key: "DRAG WAVEFORM" },
-            { label: "Export slice to NLE", key: "DRAG WAVEFORM SLICE" },
+            { label: "Create slice on waveform", key: "RIGHT / SHIFT+DRAG" },
+            { label: "Export slice to NLE", key: "DRAG SLICE BODY" },
             { label: "Toggle multi-select row", key: "CTRL + CLICK" },
             { label: "Select contiguous range", key: "SHIFT + CLICK" },
             { label: "Select all filtered", key: "CTRL + A" },
             { label: "Clear slice / selection", key: "ESC" },
             { label: "Exclude tag / mood filter", key: "ALT + CLICK" },
+            { label: "Layers: Split clip at playhead", key: "S" },
+            { label: "Layers: Duplicate selected clips", key: "CTRL + D" },
+            { label: "Layers: Undo / Redo timeline", key: "CTRL + Z / Y" },
             ...(enableLicensesSystem
               ? [{ label: "Copy credits", key: "CTRL + SHIFT + C" }]
               : []),

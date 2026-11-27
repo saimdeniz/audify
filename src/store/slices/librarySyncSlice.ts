@@ -9,6 +9,7 @@ import { executeSmartSearch } from "../../utils/smartSearch";
 import {
   applyClientFacetFilters,
   reconcileSelectionAfterFilter,
+  shouldPreserveDeckSelection,
 } from "../filterEngine";
 import { resetPlayheadClock } from "../playheadClock";
 import { isStandaloneSettingsWindow } from "../storageHelpers";
@@ -223,7 +224,8 @@ export function createLibrarySyncSlice(
           filtered,
           live.selectedSample,
           live.selectedSampleIds,
-          preserveMultiSelect
+          preserveMultiSelect,
+          shouldPreserveDeckSelection(live)
         );
 
         const isUnfilteredQuery =
@@ -271,12 +273,15 @@ export function createLibrarySyncSlice(
           selectedSample: reconciled.nextSelected,
           selectedSampleIds: reconciled.nextSelectedIds,
           lastSelectedIndex: reconciled.nextSelectedIndex,
-          ...(selectionChanged ? { sliceRange: null, currentTimeSec: 0 } : {}),
-          durationSec: reconciled.nextSelected
-            ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
-            : selectionChanged
-              ? 0
-              : live.durationSec,
+          ...(selectionChanged
+            ? {
+                sliceRange: null,
+                currentTimeSec: 0,
+                durationSec: reconciled.nextSelected
+                  ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
+                  : 0,
+              }
+            : {}),
         });
       } catch (err) {
         console.error("Failed to query samples:", err);

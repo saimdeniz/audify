@@ -79,6 +79,8 @@ export function buildProfileStoragePairs(
     | "autoCreateCollectionSubfolders"
     | "autoRouteCollectionDrops"
     | "customSliceExportPath"
+    | "customLayerExportPath"
+    | "autoSaveLayerOnNleDrag"
     | "sliceMicroFade"
     | "exportAudioPreset"
     | "exportLoudnessMode"
@@ -153,6 +155,11 @@ export function buildProfileStoragePairs(
       String(resolvedFields.autoRouteCollectionDrops),
     ],
     [AUDIFY_STORAGE_KEYS.customSliceExportPath, resolvedFields.customSliceExportPath],
+    [AUDIFY_STORAGE_KEYS.customLayerExportPath, resolvedFields.customLayerExportPath],
+    [
+      AUDIFY_STORAGE_KEYS.autoSaveLayerOnNleDrag,
+      String(resolvedFields.autoSaveLayerOnNleDrag),
+    ],
     [AUDIFY_STORAGE_KEYS.sliceMicroFade, String(resolvedFields.sliceMicroFade)],
     [AUDIFY_STORAGE_KEYS.exportAudioPreset, resolvedFields.exportAudioPreset],
     [AUDIFY_STORAGE_KEYS.exportLoudnessMode, resolvedFields.exportLoudnessMode],
@@ -231,13 +238,16 @@ export function scheduleAsyncAutoBackdropAccent(
       broadcast: false,
       markEdited: false,
     });
-    set((state: SampleStoreState) => ({
-      accentColor: extracted,
-      activeProfile: state.activeProfile
-        ? { ...state.activeProfile, color: extracted }
-        : null,
-    }));
-  });
+      set((state: SampleStoreState) => ({
+        accentColor: extracted,
+        activeProfile: state.activeProfile
+          ? { ...state.activeProfile, color: extracted }
+          : null,
+      }));
+    })
+    .catch((err) => {
+      console.error("Failed extracting auto backdrop accent:", err);
+    });
 }
 
 export function buildProfileSettingsJsonFromStore(get: StoreGet): string {
@@ -286,6 +296,8 @@ export function buildProfileSettingsJsonFromStore(get: StoreGet): string {
     autoCreateCollectionSubfolders: s.autoCreateCollectionSubfolders,
     autoRouteCollectionDrops: s.autoRouteCollectionDrops,
     customSliceExportPath: s.customSliceExportPath,
+    customLayerExportPath: s.customLayerExportPath,
+    autoSaveLayerOnNleDrag: s.autoSaveLayerOnNleDrag,
     enableAdvancedFileOps: s.enableAdvancedFileOps,
     confirmBeforeTrash: s.confirmBeforeTrash,
     enableLiveFolderWatch: s.enableLiveFolderWatch,

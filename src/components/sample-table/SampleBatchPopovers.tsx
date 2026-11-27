@@ -1,9 +1,10 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown, ChevronRight, CornerDownRight } from "lucide-react";
 import { Z_INDEX } from "../../constants/zIndex";
 import { useSampleStore } from "../../store/useSampleStore";
 import { Collection, SampleItem } from "../../types";
+import { useDialogFocusTrap } from "../../utils/modalFocus";
 import { CollectionIcon } from "../CollectionIcon";
 import { TaxonomyPicker } from "../taxonomy/TaxonomyPicker";
 import { QuickCollectionForm } from "./QuickCollectionForm";
@@ -46,6 +47,8 @@ export const SampleBatchPopovers: React.FC<SampleBatchPopoversProps> = ({
   const [collapsedMenuColIds, setCollapsedMenuColIds] = useState<
     Record<number, boolean>
   >({});
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocusTrap(true, dialogRef);
 
   const sharedStyle: React.CSSProperties = {
     bottom: popoverPos.bottom,
@@ -57,12 +60,17 @@ export const SampleBatchPopovers: React.FC<SampleBatchPopoversProps> = ({
   if (batchPopover === "collection") {
     return createPortal(
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Add selected samples to collection"
+        tabIndex={-1}
         data-context-menu-portal="true"
         data-popover-portal="true"
         data-mica-overlay="true"
         onClick={(e) => e.stopPropagation()}
         style={sharedStyle}
-        className="fixed w-[236px] bg-surface-2 audify-overlay-surface border border-line-strong rounded-md p-2 flex flex-col gap-1.5 shadow-2xl overflow-hidden"
+        className="fixed w-[236px] max-w-[calc(100vw-16px)] bg-surface-2 audify-overlay-surface border border-line-strong rounded-md p-2 flex flex-col gap-1.5 shadow-2xl overflow-hidden"
       >
         <div className="text-[10px] font-mono uppercase tracking-wider text-fg-head px-1 shrink-0">
           ADD TO COLLECTION ({selectedSampleIds.length})
@@ -136,7 +144,7 @@ export const SampleBatchPopovers: React.FC<SampleBatchPopoversProps> = ({
                       </span>
                       <span className="flex items-center space-x-1 shrink-0 ml-1">
                         {hasChildren && autoRouteCollectionDrops && (
-                          <span className="text-[8.5px] font-mono text-accent-fg px-1 bg-accent-soft rounded-xs border border-accent/20">
+                          <span className="text-[9.5px] font-mono text-accent-fg px-1 bg-accent-soft rounded-xs border border-accent/20">
                             Auto
                           </span>
                         )}
@@ -195,17 +203,19 @@ export const SampleBatchPopovers: React.FC<SampleBatchPopoversProps> = ({
     const mode = batchPopover === "tag" ? "tags" : "genres";
     return createPortal(
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={
           mode === "tags" ? "Batch assign tags" : "Batch assign genres and moods"
         }
+        tabIndex={-1}
         data-context-menu-portal="true"
         data-popover-portal="true"
         data-mica-overlay="true"
         onClick={(e) => e.stopPropagation()}
         style={sharedStyle}
-        className="fixed w-[264px] bg-surface-2 audify-overlay-surface border border-line-strong rounded-md p-2.5 shadow-2xl overflow-hidden"
+        className="fixed w-[264px] max-w-[calc(100vw-16px)] bg-surface-2 audify-overlay-surface border border-line-strong rounded-md p-2.5 shadow-2xl overflow-hidden"
       >
         <TaxonomyPicker
           mode={mode}

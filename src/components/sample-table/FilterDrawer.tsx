@@ -77,6 +77,7 @@ export function useActiveDrawerFilterCount(): number {
     (s) => s.duplicatesFilterActive
   );
   const slicesFilterActive = useSampleStore((s) => s.slicesFilterActive);
+  const layersFilterActive = useSampleStore((s) => s.layersFilterActive);
   const trashFilterActive = useSampleStore((s) => s.trashFilterActive);
   const typeFilter = useSampleStore((s) => s.typeFilter);
   const srFilter = useSampleStore((s) => s.srFilter);
@@ -91,6 +92,7 @@ export function useActiveDrawerFilterCount(): number {
     if (recentOnly) count++;
     if (binFilterActive) count++;
     if (slicesFilterActive) count++;
+    if (layersFilterActive) count++;
     if (duplicatesFilterActive) count++;
     if (trashFilterActive) count++;
     if (typeFilter !== "all") count++;
@@ -105,6 +107,7 @@ export function useActiveDrawerFilterCount(): number {
     recentOnly,
     binFilterActive,
     slicesFilterActive,
+    layersFilterActive,
     duplicatesFilterActive,
     trashFilterActive,
     typeFilter,
@@ -128,6 +131,7 @@ export const FilterDrawer: React.FC<FilterDrawerProps> = React.memo(({
     (s) => s.duplicatesFilterActive
   );
   const slicesFilterActive = useSampleStore((s) => s.slicesFilterActive);
+  const layersFilterActive = useSampleStore((s) => s.layersFilterActive);
   const trashFilterActive = useSampleStore((s) => s.trashFilterActive);
   const typeFilter = useSampleStore((s) => s.typeFilter);
   const srFilter = useSampleStore((s) => s.srFilter);
@@ -288,6 +292,7 @@ export const FilterDrawer: React.FC<FilterDrawerProps> = React.memo(({
       hasActive:
         binFilterActive ||
         slicesFilterActive ||
+        layersFilterActive ||
         duplicatesFilterActive ||
         trashFilterActive,
     },
@@ -388,6 +393,7 @@ export const FilterDrawer: React.FC<FilterDrawerProps> = React.memo(({
             <button
               key={t.id}
               type="button"
+              aria-expanded={isTabActive}
               onClick={() => handleTabClick(t.id)}
               className={`relative h-full ${
                 compact ? "px-1.5 text-[11px]" : "px-2.5 text-[11.5px]"

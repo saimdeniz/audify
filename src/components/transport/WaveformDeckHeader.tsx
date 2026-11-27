@@ -116,6 +116,9 @@ interface WaveformDeckHeaderProps {
   onSaveSlice?: (customName?: string) => Promise<boolean | void> | boolean | void;
   onSliceBadgeMouseDown?: (e: React.MouseEvent) => void;
   onHeaderSampleMouseDown?: (e: React.MouseEvent) => void;
+  isLayerDraft?: boolean;
+  layerPeakDb?: number | null;
+  layerClipped?: boolean;
 }
 
 export const WaveformDeckHeader: React.FC<WaveformDeckHeaderProps> = React.memo(
@@ -135,6 +138,9 @@ export const WaveformDeckHeader: React.FC<WaveformDeckHeaderProps> = React.memo(
     onSaveSlice,
     onSliceBadgeMouseDown,
     onHeaderSampleMouseDown,
+    isLayerDraft = false,
+    layerPeakDb = null,
+    layerClipped = false,
   }) => {
     const saveShortcutLabel = formatShortcutDisplay(
       saveSliceShortcut ?? DEFAULT_SHORTCUTS.saveSlice ?? ""
@@ -282,9 +288,23 @@ export const WaveformDeckHeader: React.FC<WaveformDeckHeaderProps> = React.memo(
           {selectedSample && isMiniDock && (
             <WaveformTimecodeReadout effectiveDuration={effectiveDuration} />
           )}
+          {isLayerDraft && !isMiniDock && layerPeakDb !== null && (
+            <span
+              className={`h-[18px] px-1.5 rounded-xs border font-mono text-[9.5px] inline-flex items-center shrink-0 ${
+                layerClipped
+                  ? "bg-warn/15 border-warn/50 text-warn font-semibold"
+                  : "bg-surface-2 border-line text-fg-2"
+              }`}
+              title="Layer master mix peak level"
+            >
+              {layerClipped ? "CLIP" : `${layerPeakDb.toFixed(1)} dB`}
+            </span>
+          )}
           {selectedSample && !sliceRange && !isMiniDock && (
             <span className="text-[10px] text-fg-3 hidden xl:inline">
-              {isSlicePreviewSample(selectedSample)
+              {isLayerDraft
+                ? "Layer Mix Preview · Click to scrub"
+                : isSlicePreviewSample(selectedSample)
                 ? "Slice preview · Use ↗ on row for source"
                 : "Right-drag to slice · I / O mark"}
             </span>

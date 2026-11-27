@@ -252,12 +252,14 @@ export function registerStoreListenersOnce({
         return;
       }
       watcherRefreshInFlight = true;
+      const startEpoch = getProfileEpoch();
       clearPeaksCache();
       clearHiResPeaksCache();
       clearSmartSearchCache();
       void get()
         .refreshAfterCatalogMutation()
         .then(() => {
+          if (startEpoch !== getProfileEpoch()) return;
           const folderLeaf =
             payload.library_path.split(/[\\/]/).filter(Boolean).pop() ||
             "Library";

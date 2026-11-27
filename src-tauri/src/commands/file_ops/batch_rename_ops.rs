@@ -2,10 +2,13 @@ use super::prune_file_ops_journal;
 use crate::ai_tagger::AiTaggerState;
 use crate::db::{get_active_profile_id, AppState};
 use crate::security::{
-    display_leaf, normalize_clean_path, sanitize_err, validate_audio_path_in_scope,
-    validate_safe_audio_stem,
+    display_leaf, normalize_clean_path, sanitize_err, validate_safe_audio_stem,
+    AuthorizedAudioScope,
 };
 use rusqlite::{params, Connection};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static BATCH_RENAME_TMP_NONCE: AtomicU64 = AtomicU64::new(1);
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
@@ -52,20 +55,27 @@ fn path_collision_key(norm_path: &str) -> String {
 
 fn build_unique_temp_rename_path(parent_dir: &Path, sample_id: i64, index: usize, ext: &str) -> PathBuf {
     let pid = std::process::id();
+    let nonce = BATCH_RENAME_TMP_NONCE.fetch_add(1, Ordering::Relaxed);
     for attempt in 0..64usize {
         let candidate = if ext.is_empty() {
-            parent_dir.join(format!(".__audify_rn_{}_{}_{}_{}.tmp", pid, sample_id, index, attempt))
+            parent_dir.join(format!(
+                ".__audify_rn_{}_{}_{}_{}_{}.tmp",
+                pid, nonce, sample_id, index, attempt
+            ))
         } else {
             parent_dir.join(format!(
-                ".__audify_rn_{}_{}_{}_{}.{}",
-                pid, sample_id, index, attempt, ext
+                ".__audify_rn_{}_{}_{}_{}_{}.{}",
+                pid, nonce, sample_id, index, attempt, ext
             ))
         };
-        if !candidate.exists() {
+        if fs::symlink_metadata(&candidate).is_err() {
             return candidate;
         }
     }
-    parent_dir.join(format!(".__audify_rn_{}_{}_{}.tmp", pid, sample_id, index))
+    parent_dir.join(format!(
+        ".__audify_rn_{}_{}_{}_{}.tmp",
+        pid, nonce, sample_id, index
+    ))
 }
 
 fn rollback_stage1_temps(staged: &[(PathBuf, PathBuf)]) {
@@ -99,6 +109,7 @@ fn build_batch_rename_plans(
     }
 
     let active_id = get_active_profile_id(conn);
+    let audio_scope = AuthorizedAudioScope::from_conn(conn, user_dir);
     let mut seen_ids = HashSet::with_capacity(entries.len());
     let mut plans = Vec::with_capacity(entries.len());
     let mut seen_target_keys = HashSet::with_capacity(entries.len());
@@ -153,7 +164,7 @@ fn build_batch_rename_plans(
             ));
         }
 
-        let resolved_src = validate_audio_path_in_scope(conn, user_dir, &current_file_path)?;
+        let resolved_src = audio_scope.validate_audio_path(&current_file_path)?;
         if !resolved_src.is_file() {
             return Err(format!(
                 "Source audio file does not exist on disk: {}",

@@ -7,6 +7,7 @@ import {
   FolderOpen,
   Hash,
   Inbox,
+  Layers,
   LayoutGrid,
   Music,
   SlidersHorizontal,
@@ -26,6 +27,7 @@ import {
 import { ContextMenuAiActions } from "./ContextMenuAiActions";
 import { ContextMenuCollectionSubmenu } from "./ContextMenuCollectionSubmenu";
 import { ContextMenuFileActions } from "./ContextMenuFileActions";
+import { ContextMenuLayersSubmenu } from "./ContextMenuLayersSubmenu";
 import {
   ContextMenuBpmKeySubmenu,
   ContextMenuGenreSubmenu,
@@ -144,8 +146,15 @@ export const SampleContextMenu: React.FC<SampleContextMenuProps> = ({
   const clearSubmenuHover = () =>
     setContextMenu((prev) => (prev ? { ...prev, subMenu: null } : null));
 
-  const setSubmenuHover = (subMenu: "collection" | "tag" | "genre" | "bpmKey") =>
-    setContextMenu((prev) => (prev ? { ...prev, subMenu } : null));
+  const setSubmenuHover = (
+    subMenu:
+      | "collection"
+      | "tag"
+      | "genre"
+      | "bpmKey"
+      | "layers"
+      | "renameHistory"
+  ) => setContextMenu((prev) => (prev ? { ...prev, subMenu } : null));
 
   const sampleLib = libraries.find(
     (l) => l.id === activeContextSample.library_id
@@ -222,6 +231,28 @@ export const SampleContextMenu: React.FC<SampleContextMenuProps> = ({
           </span>
         }
       />
+
+      {/* Layers multi-track SFX studio hover submenu */}
+      {!trashFilterActive && (
+        <SubmenuTriggerItem
+          isOpen={contextMenu.subMenu === "layers"}
+          onOpen={() => setSubmenuHover("layers")}
+          icon={<Layers className="w-3.5 h-3.5 text-accent-fg shrink-0" />}
+          label={
+            isMultiContext
+              ? `Layers (${contextMenu.targetIds.length})`
+              : "Layers"
+          }
+        >
+          <ContextMenuLayersSubmenu
+            submenuPositionClass={submenuPositionClass}
+            targetSamples={
+              isMultiContext ? targetSamplesList : [activeContextSample]
+            }
+            setContextMenu={setContextMenu}
+          />
+        </SubmenuTriggerItem>
+      )}
 
       {/* Copy Credits (only when Licenses System is enabled) */}
       {enableLicensesSystem && (
@@ -485,7 +516,7 @@ export const SampleContextMenu: React.FC<SampleContextMenuProps> = ({
         />
       )}
 
-      {/* 6. Physical File Rename, Undo Rename & 2-Stage Trash (hidden in Safe Read-Only mode unless in Trash) */}
+      {/* 6. Physical File Rename, Rename History & 2-Stage Trash (hidden in Safe Read-Only mode unless in Trash) */}
       {(trashFilterActive || enableAdvancedFileOps) && (
         <ContextMenuFileActions
           targetIds={contextMenu.targetIds}
@@ -495,6 +526,9 @@ export const SampleContextMenu: React.FC<SampleContextMenuProps> = ({
           isVaultLocked={isVaultLocked}
           vaultName={sampleLib?.name}
           selectedCollectionId={selectedCollectionId}
+          activeSubMenu={contextMenu.subMenu}
+          submenuPositionClass={submenuPositionClass}
+          setSubmenuHover={setSubmenuHover}
           clearSubmenuHover={clearSubmenuHover}
           setContextMenu={setContextMenu}
         />

@@ -8,7 +8,7 @@ use std::time::Duration;
 pub const MAX_DRAG_ICON_BYTES: usize = 2 * 1024 * 1024;
 
 pub const AUDIFY_WEBVIEW_ARGS: &str =
-    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required";
+    "--disable-features=msWebOOUI,msPdfOOUI --autoplay-policy=no-user-gesture-required";
 
 static SETTINGS_HIDE_SEQ: AtomicU64 = AtomicU64::new(0);
 static SETTINGS_VISIBLE: AtomicBool = AtomicBool::new(false);
@@ -375,6 +375,8 @@ pub async fn open_settings_window(
     let win = builder
         .build()
         .map_err(|e| security::sanitize_err(&app.state::<AppState>().user_dir, &e.to_string()))?;
+    #[cfg(target_os = "windows")]
+    crate::win_sysmenu::install_sysmenu_guard(&win);
     let _ = win.set_background_color(Some(bg));
     let win_clone = win.clone();
     std::thread::spawn(move || {

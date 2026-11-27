@@ -4,13 +4,15 @@ import {
   hash2,
   hexToRgb,
   mixRgb,
+  vnoise,
+} from "./blueprintGrid";
+import {
   paintGridCircleRing,
   paintGridLine,
   paintGridMoon,
   paintGridRidge,
   paintGridSun,
-  vnoise,
-} from "./blueprintGrid";
+} from "./blueprintShapes";
 import { AsciiRenderParams } from "./shared";
 
 export function renderSpacePreset(params: AsciiRenderParams): void {

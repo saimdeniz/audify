@@ -156,8 +156,8 @@ export const DuplicateGeneralControls: React.FC<DuplicateGeneralControlsProps> =
 
   return (
     <div
-      className={`border-t border-line-subtle flex items-center flex-wrap w-full ${
-        compact ? "pt-1 gap-1" : "pt-1.5 gap-1.5"
+      className={`border-t border-line flex items-center flex-wrap w-full ${
+        compact ? "pt-1.5 mt-0.5 gap-1" : "pt-2 mt-0.5 gap-1.5"
       }`}
     >
       <div className="inline-flex items-center rounded-[3px] border border-line bg-surface-3 p-0.5 shrink-0">
@@ -187,10 +187,10 @@ export const DuplicateGeneralControls: React.FC<DuplicateGeneralControlsProps> =
                 compact
                   ? "h-[18px] px-1.5 text-[10px]"
                   : "h-[20px] px-2 text-[10.5px]"
-              } rounded-[2px] font-mono transition-colors cursor-pointer disabled:opacity-50 ${
+              } rounded-[2px] border font-mono transition-colors cursor-pointer disabled:opacity-50 ${
                 active
-                  ? "bg-accent text-accent-on font-semibold"
-                  : "text-fg-2 hover:text-fg"
+                  ? "bg-accent-soft border-accent text-accent-fg font-semibold"
+                  : "border-transparent text-fg-2 hover:text-fg"
               }`}
             >
               {m.label}
@@ -264,11 +264,7 @@ export const DuplicateGeneralControls: React.FC<DuplicateGeneralControlsProps> =
               ? "h-[22px] w-[24px] justify-center px-0 text-[10px]"
               : "h-[22px] px-1.5 text-[10px]"
             : "h-[24px] px-2 text-[10.5px]"
-        } rounded-[3px] border font-mono inline-flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-50 shrink-0 ${
-          !hasScannedCurrentScope
-            ? "bg-accent hover:bg-accent-hover border-accent text-accent-on font-semibold"
-            : "border-line bg-surface-3 hover:border-accent text-fg-2 hover:text-accent-fg"
-        }`}
+        } rounded-[3px] border font-mono font-medium inline-flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-50 shrink-0 border-line bg-surface-3 hover:bg-accent-soft hover:border-accent text-fg-2 hover:text-accent-fg`}
         title={
           hasScannedCurrentScope
             ? "Re-scan active duplicate scope"

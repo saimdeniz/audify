@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   AUDIO_EXTENSION_RE,
   SUPPORTED_AUDIO_EXTENSIONS,
@@ -7,9 +8,6 @@ import type { SidebarTab } from "../store/types";
 import { useSampleStore } from "../store/useSampleStore";
 import { isOsDragCurrentlyInFlight } from "../utils/drag";
 import { filterVisibleLibraries, normalizePathForMatch } from "../utils/format";
-import { invokeCommand } from "../utils/tauriCommands";
-
-const MAX_STAGE_BATCH_BYTES = 16 * 1024 * 1024;
 
 interface UseExternalFolderDropParams {
   enableAdvancedFileOps: boolean;
@@ -319,7 +317,7 @@ export function useExternalFolderDrop({
       }
 
       try {
-        let allSourcePaths = [...directPaths];
+        const allSourcePaths = [...directPaths];
         if (filesToStage.length > 0) {
           const MAX_STAGE_DROP_FILES = 250;
           const MAX_STAGE_DROP_FILE_BYTES = 256 * 1024 * 1024;
@@ -349,37 +347,20 @@ export function useExternalFolderDrop({
             }
           }
 
-          // Stage in byte-bounded batches so huge multi-file drops never pin multiple GB of boxed number[] arrays in RAM.
-          let batchPayloads: { file_name: string; bytes: number[] }[] = [];
-          let batchBytes = 0;
-          const flushStageBatch = async () => {
-            if (batchPayloads.length === 0) return;
-            const staged = await invokeCommand("stage_dropped_audio_files", {
-              files: batchPayloads,
-            });
-            allSourcePaths = allSourcePaths.concat(staged);
-            batchPayloads = [];
-            batchBytes = 0;
-          };
-
+          // Stream each file via zero-JSON Tauri v2 InvokeBody::Raw binary IPC (no boxed number[] OOM spikes)
           for (const f of filesToStage) {
-            if (
-              batchPayloads.length > 0 &&
-              batchBytes + f.size > MAX_STAGE_BATCH_BYTES
-            ) {
-              await flushStageBatch();
-            }
             const buf = await f.arrayBuffer();
-            batchPayloads.push({
-              file_name: f.name,
-              bytes: Array.from(new Uint8Array(buf)),
-            });
-            batchBytes += f.size;
-            if (batchBytes >= MAX_STAGE_BATCH_BYTES) {
-              await flushStageBatch();
-            }
+            const stagedPath = await invoke<string>(
+              "stage_dropped_audio_file_raw",
+              new Uint8Array(buf),
+              {
+                headers: {
+                  "x-file-name": encodeURIComponent(f.name),
+                },
+              }
+            );
+            allSourcePaths.push(stagedPath);
           }
-          await flushStageBatch();
         }
 
         if (allSourcePaths.length > 0) {

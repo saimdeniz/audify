@@ -1,10 +1,11 @@
-import React, { useCallback, useEffect, useRef } from "react";
+import React, { Suspense, useCallback, useEffect, useRef } from "react";
 import { subscribePlayhead } from "../../store/playheadClock";
 import { useSampleStore } from "../../store/useSampleStore";
 import { useDevicePixelRatio } from "../../utils/devicePixelRatio";
 import { preExportAudioSlice } from "../../utils/drag";
 import { onError } from "../../utils/errors";
 import { useHiResPeaks } from "../../utils/hiResPeaks";
+import { isLayerDraftSample } from "../../utils/layerHelpers";
 import { usePeaksJson } from "../../utils/peaksStore";
 import { useWaveformDeckInteractions } from "./useWaveformDeckInteractions";
 import {
@@ -24,7 +25,11 @@ import {
   DEFAULT_WAVEFORM_VIEWPORT,
   WaveformViewport,
 } from "./waveformViewport";
-import { WaveformSimilarityDropOverlay } from "./WaveformSimilarityDropOverlay";
+const LazyWaveformSimilarityDropOverlay = React.lazy(() =>
+  import("./WaveformSimilarityDropOverlay").then((m) => ({
+    default: m.WaveformSimilarityDropOverlay,
+  }))
+);
 
 export const WaveformDeckCanvas: React.FC = React.memo(() => {
   const selectedSample = useSampleStore((s) => s.selectedSample);
@@ -47,6 +52,8 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
   const saveActiveSlice = useSampleStore((s) => s.saveActiveSlice);
   const setSliceRange = useSampleStore((s) => s.setSliceRange);
   const setPitchSemitones = useSampleStore((s) => s.setPitchSemitones);
+  const layerDraftPreview = useSampleStore((s) => s.layerDraftPreview);
+  const isLayerDraft = isLayerDraftSample(selectedSample);
 
   const selectedPeaksJson = usePeaksJson(
     selectedSample?.id,
@@ -273,6 +280,7 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
     const endSec = sliceRange?.endSec;
     if (
       !filePath ||
+      isLayerDraft ||
       startSec === undefined ||
       endSec === undefined ||
       dragMode !== "none" ||
@@ -292,6 +300,7 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
     return () => window.clearTimeout(timer);
   }, [
     selectedSample?.file_path,
+    isLayerDraft,
     sliceRange?.startSec,
     sliceRange?.endSec,
     dragMode,
@@ -548,6 +557,9 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
         onSaveSlice={handleSaveSlice}
         onSliceBadgeMouseDown={handleSliceBadgeMouseDown}
         onHeaderSampleMouseDown={handleHeaderSampleMouseDown}
+        isLayerDraft={isLayerDraft}
+        layerPeakDb={layerDraftPreview?.peakDb ?? null}
+        layerClipped={layerDraftPreview?.clipped ?? false}
       />
 
       <div
@@ -565,7 +577,9 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
           className="absolute inset-0 w-full h-full block"
         />
       </div>
-      <WaveformSimilarityDropOverlay panelRef={deckPanelRef} />
+      <Suspense fallback={null}>
+        <LazyWaveformSimilarityDropOverlay panelRef={deckPanelRef} />
+      </Suspense>
     </div>
   );
 });

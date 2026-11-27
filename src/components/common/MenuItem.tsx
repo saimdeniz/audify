@@ -87,7 +87,7 @@ export const MenuItem: React.FC<MenuItemProps> = ({
       onClick={onClick}
       onMouseEnter={onMouseEnter}
       title={title}
-      className={`w-full ${heightClasses} flex items-center justify-between gap-2 text-left outline-none disabled:opacity-45 transition-colors ${toneClasses} ${className}`}
+      className={`w-full ${heightClasses} flex items-center justify-between gap-2 text-left focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent focus-visible:-outline-offset-1 disabled:opacity-45 transition-colors ${toneClasses} ${className}`}
     >
       <span className="flex items-center gap-2 min-w-0 truncate">
         {icon && <span className="shrink-0 flex items-center">{icon}</span>}
@@ -133,7 +133,7 @@ export const SubmenuTriggerItem: React.FC<SubmenuTriggerItemProps> = ({
         onOpen();
       }
     }}
-    className={`relative h-[27px] px-2.5 hover:bg-accent-soft hover:text-accent-fg focus-visible:bg-accent-soft focus-visible:text-accent-fg outline-none flex items-center justify-between cursor-pointer transition-colors ${
+    className={`relative h-[27px] px-2.5 hover:bg-accent-soft hover:text-accent-fg focus-visible:bg-accent-soft focus-visible:text-accent-fg focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent focus-visible:-outline-offset-1 flex items-center justify-between cursor-pointer transition-colors ${
       isOpen ? "bg-accent-soft text-accent-fg" : ""
     }`}
   >

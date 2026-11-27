@@ -1,5 +1,7 @@
 import React from "react";
 import {
+  ArrowUpRight,
+  ExternalLink,
   FileCheck2,
   Folder,
   FolderTree,
@@ -12,7 +14,12 @@ import {
   Sparkles,
   Tag as TagIcon,
 } from "lucide-react";
-import { APP_VERSION } from "../../constants/appInfo";
+import {
+  APP_VERSION,
+  AUDIFY_RELEASES_LATEST_URL,
+} from "../../constants/appInfo";
+import { useAppUpdate } from "../../hooks/useAppUpdate";
+import { openAudifyReleasesPage } from "../../services/updateCheckService";
 import { SettingsTab } from "../../store/useSampleStore";
 
 type SettingsNavItem = {
@@ -70,7 +77,11 @@ export const SettingsSidebarNav: React.FC<SettingsSidebarNavProps> = ({
   enableLicensesSystem,
   enableAdvancedFileOps,
   onSelectTab,
-}) => (
+}) => {
+  const { info } = useAppUpdate();
+  const hasUpdate = Boolean(info?.has_update && info.latest_version);
+
+  return (
   <div className="w-[184px] bg-surface-1 border-r border-line flex flex-col shrink-0 min-h-0">
     <div className="flex-1 p-2 overflow-y-auto space-y-2.5 min-h-0">
       {NAV_GROUPS.map((group, groupIndex) => (
@@ -93,6 +104,7 @@ export const SettingsSidebarNav: React.FC<SettingsSidebarNavProps> = ({
               <button
                 key={tab.id}
                 type="button"
+                aria-current={active ? "page" : undefined}
                 onClick={() => onSelectTab(tab.id)}
                 className={`w-full h-[30px] px-2.5 rounded-sm text-left text-[12px] flex items-center justify-between border-l-2 whitespace-nowrap transition-colors ${
                   active
@@ -117,9 +129,34 @@ export const SettingsSidebarNav: React.FC<SettingsSidebarNavProps> = ({
       ))}
     </div>
 
-    <div className="px-3.5 py-2 border-t border-line-subtle flex items-center justify-between font-mono text-[10px] text-fg-3 shrink-0 select-text">
+    {hasUpdate && info && (
+      <div className="px-2 pt-2 shrink-0">
+        <button
+          type="button"
+          onClick={() => void openAudifyReleasesPage(info.release_url)}
+          title={`Download Audify v${info.latest_version} on GitHub Releases`}
+          className="w-full h-[24px] px-2 rounded-[3px] bg-accent-soft hover:bg-accent border border-accent text-accent-fg hover:text-accent-on font-mono text-[10px] font-semibold flex items-center justify-between transition-colors cursor-pointer"
+        >
+          <span className="inline-flex items-center gap-1.5 truncate">
+            <ArrowUpRight className="w-3 h-3 shrink-0" />
+            <span className="truncate">Update · v{info.latest_version}</span>
+          </span>
+        </button>
+      </div>
+    )}
+
+    <div className="px-3.5 py-2 border-t border-line-subtle flex items-center justify-between font-mono text-[10px] text-fg-3 shrink-0">
       <span>Audify</span>
-      <span className="tabular-nums">v{APP_VERSION}</span>
+      <button
+        type="button"
+        onClick={() => void openAudifyReleasesPage(AUDIFY_RELEASES_LATEST_URL)}
+        title="Open latest Audify release on GitHub (github.com/saimdeniz/audify)"
+        className="group inline-flex items-center gap-1 tabular-nums text-fg-3 hover:text-accent-fg transition-colors cursor-pointer"
+      >
+        <span>v{APP_VERSION}</span>
+        <ExternalLink className="w-2.5 h-2.5 opacity-60 group-hover:opacity-100 shrink-0" />
+      </button>
     </div>
   </div>
-);
+  );
+};

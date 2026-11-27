@@ -1,4 +1,12 @@
-import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef } from "react";
+import React, {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+} from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Pause, Play, Star } from "lucide-react";
 import { useSampleStore } from "../../store/useSampleStore";
@@ -14,6 +22,11 @@ import {
   formatDuration,
   splitFileNameAndExt,
 } from "../../utils/format";
+import {
+  getSharedListScrollAnchor,
+  recordSharedListScrollAnchor,
+  resolveRestoredScrollTarget,
+} from "../../utils/listScrollAnchor";
 import { EMPTY_SAMPLES, resolveSamplesByIds } from "../../utils/sampleLookup";
 import { DragDropFeedbackOverlay } from "../sample-table/DragDropFeedbackOverlay";
 import { SimilarityMatchBadge } from "../sample-table/SimilarityMatchBadge";
@@ -135,6 +148,50 @@ export const MiniDockList: React.FC<MiniDockListProps> = ({
     estimateSize: () => 28,
     overscan: 18,
   });
+
+  // Restore scroll position (or focus active playing track) seamlessly on Mini Dock mount
+  const hasRestoredScrollRef = useRef(false);
+  const userScrolledAfterMountRef = useRef(false);
+  useLayoutEffect(() => {
+    if (hasRestoredScrollRef.current || samples.length === 0) return;
+    hasRestoredScrollRef.current = true;
+    const { isPlaying: livePlaying, selectedSample: liveSelected } =
+      useSampleStore.getState();
+    const target = resolveRestoredScrollTarget({
+      samples,
+      selectedSampleId: liveSelected?.id ?? null,
+      isPlaying: livePlaying,
+      anchor: getSharedListScrollAnchor(),
+    });
+    if (!target) return;
+    rowVirtualizer.scrollToIndex(target.index, { align: target.align });
+    let rafId: number | null = null;
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      rafId = window.requestAnimationFrame(() => {
+        if (!userScrolledAfterMountRef.current) {
+          rowVirtualizer.scrollToIndex(target.index, { align: target.align });
+        }
+      });
+    }
+    return () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
+    };
+  }, [samples, rowVirtualizer]);
+
+  const handleListScroll = useCallback(
+    (e: React.UIEvent<HTMLDivElement>) => {
+      if (!hasRestoredScrollRef.current) return;
+      userScrolledAfterMountRef.current = true;
+      const curSamples = useSampleStore.getState().samples;
+      if (curSamples.length === 0) return;
+      const topIdx = Math.max(
+        0,
+        Math.min(curSamples.length - 1, Math.floor(e.currentTarget.scrollTop / 28))
+      );
+      recordSharedListScrollAnchor(curSamples[topIdx]?.id ?? null, topIdx);
+    },
+    []
+  );
 
   // Auto-scroll virtual list when active sample changes via Up/Down keys
   const prevSelectedIdRef = useRef<number | null>(selectedSample?.id ?? null);
@@ -303,6 +360,7 @@ export const MiniDockList: React.FC<MiniDockListProps> = ({
       ) : (
         <div
           ref={listParentRef}
+          onScroll={handleListScroll}
           className="flex-1 overflow-y-auto overflow-x-hidden relative outline-none"
           tabIndex={0}
           role="grid"
@@ -406,9 +464,6 @@ const MiniDockRow: React.FC<MiniDockRowProps> = React.memo(
     onRowContextMenu,
   }) => {
     const { stem, ext } = splitFileNameAndExt(sample.file_name);
-    const bpmDisplay =
-      sample.bpm && sample.bpm > 0 ? `${Math.round(sample.bpm)}` : null;
-    const keyDisplay = sample.camelot_key || sample.musical_key || null;
     const folderName = folderNameFromPath(sample.folder_path, sample.folder_path);
 
     return (
@@ -505,21 +560,6 @@ const MiniDockRow: React.FC<MiniDockRowProps> = React.memo(
           {stem}
           <span className="text-fg-3 font-normal">{ext}</span>
         </div>
-
-        {(bpmDisplay || keyDisplay) && (
-          <div className="flex items-center gap-1 px-1 shrink-0">
-            {bpmDisplay && (
-              <span className="px-1.5 py-0.2 rounded-[2px] bg-surface-2 border border-line font-mono tabular-nums text-[9.5px] text-fg-2">
-                {bpmDisplay}
-              </span>
-            )}
-            {keyDisplay && (
-              <span className="px-1.5 py-0.2 rounded-[2px] bg-surface-2 border border-line font-mono tabular-nums text-[9.5px] text-accent-fg">
-                {keyDisplay}
-              </span>
-            )}
-          </div>
-        )}
 
         <div className="font-mono tabular-nums text-[11px] text-fg-2 w-[54px] text-right pr-1 shrink-0">
           {formatDuration(sample.duration_ms)}

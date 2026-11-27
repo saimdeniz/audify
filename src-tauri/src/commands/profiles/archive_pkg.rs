@@ -7,8 +7,11 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
+
+static PROFILE_ARCHIVE_TMP_NONCE: AtomicU64 = AtomicU64::new(1);
 
 pub const PROFILE_ARCHIVE_SUFFIXES: &[&str] = &[
     ".audify-profile",
@@ -97,10 +100,12 @@ pub(crate) fn write_profile_package_to_path(
     let manifest_json = serde_json::to_string(&manifest)
         .map_err(|e| format!("Failed to serialize profile manifest: {}", e))?;
 
+    let tmp_nonce = PROFILE_ARCHIVE_TMP_NONCE.fetch_add(1, Ordering::Relaxed);
     let tmp_name = format!(
-        ".{}.tmp_{}",
+        ".{}.tmp_{}_{}",
         display_leaf(target_path),
-        std::process::id()
+        std::process::id(),
+        tmp_nonce
     );
     let tmp_path = target_path
         .parent()

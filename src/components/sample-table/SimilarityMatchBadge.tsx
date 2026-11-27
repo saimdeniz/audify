@@ -16,7 +16,7 @@ export const SimilarityMatchBadge: React.FC<SimilarityMatchBadgeProps> =
       return (
         <span
           className={`${
-            compact ? "px-1 py-0 text-[8.5px] leading-[15px]" : "px-1.5 py-0.5 text-[9px]"
+            compact ? "px-1 py-0 text-[9.5px] leading-[15px]" : "px-1.5 py-0.5 text-[9.5px]"
           } rounded-xs border border-accent bg-accent-soft text-accent-fg font-mono font-bold uppercase tracking-tight shrink-0`}
         >
           ANCHOR

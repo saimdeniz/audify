@@ -54,7 +54,7 @@ export const THEME_CANVAS_PALETTES: Readonly<
       fg3: "#9E9EAE",
       fgHead: "#B8B8C6",
       okRgb: "16, 185, 129",
-      okOn: "#FFFFFF",
+      okOn: "#0D0D0F",
     },
     mica: {
       surface2: "rgba(24, 24, 29, 0.78)",
@@ -67,7 +67,7 @@ export const THEME_CANVAS_PALETTES: Readonly<
       fg3: "#9E9EAE",
       fgHead: "#B8B8C6",
       okRgb: "16, 185, 129",
-      okOn: "#FFFFFF",
+      okOn: "#0D0D0F",
     },
   },
   light: {
@@ -81,7 +81,7 @@ export const THEME_CANVAS_PALETTES: Readonly<
       fg2: "#363945",
       fg3: "#525666",
       fgHead: "#484C5B",
-      okRgb: "5, 150, 105",
+      okRgb: "4, 120, 87",
       okOn: "#FFFFFF",
     },
     mica: {
@@ -94,7 +94,7 @@ export const THEME_CANVAS_PALETTES: Readonly<
       fg2: "#363945",
       fg3: "#525666",
       fgHead: "#484C5B",
-      okRgb: "5, 150, 105",
+      okRgb: "4, 120, 87",
       okOn: "#FFFFFF",
     },
   },
@@ -218,14 +218,41 @@ export function resolveAccentPresetRowBg(
   return computeFallbackRowBg(effectiveAccent, themeMode);
 }
 
+function linearizeSrgbChannel(channel255: number): number {
+  const c = Math.max(0, Math.min(255, channel255)) / 255;
+  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+
+/** WCAG 2.1 relative luminance (0.0 = black, 1.0 = white) using linearized sRGB. */
+export function srgbRelativeLuminance(r: number, g: number, b: number): number {
+  return (
+    0.2126 * linearizeSrgbChannel(r) +
+    0.7152 * linearizeSrgbChannel(g) +
+    0.0722 * linearizeSrgbChannel(b)
+  );
+}
+
+/** WCAG 2.1 contrast ratio between two relative luminances (1.0 .. 21.0). */
+export function wcagContrastRatio(lumA: number, lumB: number): number {
+  const lighter = Math.max(lumA, lumB);
+  const darker = Math.min(lumA, lumB);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+const DARK_INK_LUMINANCE = srgbRelativeLuminance(13, 13, 15);
+
 export function computeAccentOnColor(
   themeMode: ThemeMode,
   accentHex: string
 ): string {
   const effectiveAccent = normalizeAccentForTheme(accentHex, themeMode);
   const [r, g, b] = hexToRgbTriplet(effectiveAccent);
-  const accentLum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-  return accentLum > 0.45 ? "#0D0D0F" : "#FFFFFF";
+  const accentLum = srgbRelativeLuminance(r, g, b);
+  const darkHex = themeMode === "contrast" ? "#000000" : "#0D0D0F";
+  const darkLum = themeMode === "contrast" ? 0 : DARK_INK_LUMINANCE;
+  const contrastWithDark = wcagContrastRatio(accentLum, darkLum);
+  const contrastWithWhite = wcagContrastRatio(accentLum, 1);
+  return contrastWithDark >= contrastWithWhite ? darkHex : "#FFFFFF";
 }
 
 export function normalizeThemeModeValue(raw: unknown): ThemeMode {

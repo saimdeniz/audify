@@ -1,8 +1,9 @@
 import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Plus, X } from "lucide-react";
-import { deterministicColorForName } from "../constants/palettes";
 import { Z_INDEX } from "../constants/zIndex";
+import { useDialogFocusTrap } from "../utils/modalFocus";
+import { deterministicColorForName } from "../utils/taxonomyColor";
 
 const ColorPickerPopover = lazy(() =>
   import("./ColorPickerPopover").then((m) => ({
@@ -13,6 +14,7 @@ const ColorPickerPopover = lazy(() =>
 interface QuickCreatePopoverProps {
   title: string;
   placeholder?: string;
+  submitLabel?: string;
   hasColor?: boolean;
   defaultColor?: string;
   defaultValue?: string;
@@ -31,6 +33,7 @@ interface QuickCreatePopoverProps {
 export const QuickCreatePopover: React.FC<QuickCreatePopoverProps> = ({
   title,
   placeholder = "Name...",
+  submitLabel,
   hasColor = false,
   defaultColor,
   defaultValue = "",
@@ -41,6 +44,9 @@ export const QuickCreatePopover: React.FC<QuickCreatePopoverProps> = ({
   buttonLabel,
   onCreated,
 }) => {
+  const resolvedSubmitLabel =
+    submitLabel ??
+    (title.trim().toLowerCase().startsWith("save") ? "Save" : "Create");
   const [isOpen, setIsOpen] = useState(false);
   const [name, setName] = useState("");
   const [color, setColor] = useState(defaultColor || "#3B82F6");
@@ -55,6 +61,7 @@ export const QuickCreatePopover: React.FC<QuickCreatePopoverProps> = ({
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  useDialogFocusTrap(isOpen, popoverRef);
 
   const calculatePosition = useCallback(() => {
     if (!triggerRef.current) return null;
@@ -174,6 +181,8 @@ export const QuickCreatePopover: React.FC<QuickCreatePopoverProps> = ({
       <button
         ref={triggerRef}
         type="button"
+        aria-expanded={isOpen}
+        aria-haspopup="dialog"
         onClick={handleToggleOpen}
         className={
           buttonClassName ||
@@ -192,6 +201,10 @@ export const QuickCreatePopover: React.FC<QuickCreatePopoverProps> = ({
         createPortal(
           <div
             ref={popoverRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label={title}
+            tabIndex={-1}
             data-quick-create-portal="true"
             data-popover-portal="true"
             data-mica-overlay="true"
@@ -264,7 +277,7 @@ export const QuickCreatePopover: React.FC<QuickCreatePopoverProps> = ({
                   disabled={!name.trim() || isSubmitting}
                   className="h-[22px] px-2.5 text-[10px] font-mono font-semibold text-accent-on bg-accent hover:bg-accent-hover disabled:opacity-40 rounded-xs transition-colors shadow-xs cursor-pointer"
                 >
-                  Create
+                  {resolvedSubmitLabel}
                 </button>
               </div>
             </form>

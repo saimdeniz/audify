@@ -316,7 +316,7 @@ export const AsciiWallpaperSection: React.FC = React.memo(() => {
                       {preset.name}
                     </span>
                     {isSelected && (
-                      <span className="px-1 py-[1px] rounded-xs bg-accent text-accent-on text-[8.5px] font-mono font-bold uppercase tracking-wider shrink-0">
+                      <span className="px-1 py-[1px] rounded-xs bg-accent text-accent-on text-[9.5px] font-mono font-bold uppercase tracking-wider shrink-0">
                         Live
                       </span>
                     )}

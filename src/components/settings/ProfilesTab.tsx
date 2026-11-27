@@ -7,8 +7,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { useSampleStore } from "../../store/useSampleStore";
-import { deterministicColorForName } from "../../constants/palettes";
 import { Profile } from "../../types";
+import { deterministicColorForName } from "../../utils/taxonomyColor";
 import { ColorPickerPopover } from "../ColorPickerPopover";
 import { QuickCreatePopover } from "../QuickCreatePopover";
 import { InlineConfirmRowBar } from "../common/InlineConfirmDeleteButton";
@@ -131,6 +131,8 @@ export const ProfilesTab: React.FC = () => {
                   >
                     <input
                       type="text"
+                      data-inline-edit="true"
+                      aria-label="Edit profile name"
                       value={editingProfileName}
                       onChange={(e) => setEditingProfileName(e.target.value)}
                       onKeyDown={(e) => {

@@ -157,7 +157,7 @@ export const AsciiMagicCard: React.FC<AsciiMagicCardProps> = React.memo(
                 <span className="text-[9px] font-mono font-semibold text-fg-2 leading-none">
                   {cols}×{rows}
                 </span>
-                <span className="text-[8px] font-mono text-fg-3 mt-0.5 leading-none">
+                <span className="text-[9.5px] font-mono text-fg-3 mt-0.5 leading-none">
                   {fps}fps
                 </span>
               </div>
@@ -174,12 +174,12 @@ export const AsciiMagicCard: React.FC<AsciiMagicCardProps> = React.memo(
                 {name}
               </span>
               {isActive && (
-                <span className="px-1 py-[1px] rounded-xs bg-accent text-accent-on text-[8.5px] font-mono font-bold uppercase tracking-wider shrink-0">
+                <span className="px-1 py-[1px] rounded-xs bg-accent text-accent-on text-[9.5px] font-mono font-bold uppercase tracking-wider shrink-0">
                   Live
                 </span>
               )}
               {!isActive && installed && (
-                <span className="px-1 py-[1px] rounded-xs bg-surface-3 border border-line text-fg-2 text-[8.5px] font-mono uppercase shrink-0">
+                <span className="px-1 py-[1px] rounded-xs bg-surface-3 border border-line text-fg-2 text-[9.5px] font-mono uppercase shrink-0">
                   Saved
                 </span>
               )}

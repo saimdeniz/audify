@@ -4,6 +4,7 @@ import { clearSlicePathCache } from "../../utils/drag";
 import { resolveSamplesByIds } from "../../utils/sampleLookup";
 import { clearSmartSearchCache } from "../../utils/smartSearch";
 import { invokeCommand } from "../../utils/tauriCommands";
+import { resolveNextTrashViewState } from "../../utils/viewModes";
 export { formatTrashOpLabel } from "../../utils/trashStatusFormat";
 import { resetPlayheadClock } from "../playheadClock";
 import {
@@ -317,15 +318,15 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
                   ),
             fileOpUndoStack: nextUndoStack,
             ...(opts?.isHistoryReplay ? {} : { fileOpRedoStack: [] }),
-            ...(summary.trashed_count === 0
-              ? state.trashedSliceCount > 0
-                ? { trashViewTab: "slices" as const, folderFilter: null }
-                : {
-                    trashFilterActive: false,
-                    trashViewTab: "tracks" as const,
-                    folderFilter: null,
-                  }
-              : {}),
+            ...resolveNextTrashViewState(
+              state.trashFilterActive,
+              state.trashViewTab,
+              {
+                tracks: summary.trashed_count,
+                slices: state.trashedSliceCount,
+                layers: state.trashedLayerCount,
+              }
+            ),
             ...(summary.affected_count > 0 &&
             (state.duplicateScanResult ||
               Object.keys(state.duplicateScanCache).length > 0)
@@ -434,15 +435,15 @@ export function createFileOpsTrashActions(deps: FileOpsTrashDeps) {
               state.fileOpRedoStack,
               deletedSet
             ),
-            ...(summary.trashed_count === 0
-              ? state.trashedSliceCount > 0
-                ? { trashViewTab: "slices" as const, folderFilter: null }
-                : {
-                    trashFilterActive: false,
-                    trashViewTab: "tracks" as const,
-                    folderFilter: null,
-                  }
-              : {}),
+            ...resolveNextTrashViewState(
+              state.trashFilterActive,
+              state.trashViewTab,
+              {
+                tracks: summary.trashed_count,
+                slices: state.trashedSliceCount,
+                layers: state.trashedLayerCount,
+              }
+            ),
           };
         });
         if (binChanged) {

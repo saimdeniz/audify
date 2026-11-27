@@ -127,7 +127,7 @@ export const SmartSearchAutocomplete: React.FC<SmartSearchAutocompleteProps> =
                 </span>
                 <span className="flex items-center gap-1.5 shrink-0">
                   {item.facetBadge && (
-                    <span className="font-mono text-[8.5px] uppercase tracking-wider px-1 py-0.2 rounded-[2px] border border-line bg-surface-3 text-fg-3">
+                    <span className="font-mono text-[9.5px] uppercase tracking-wider px-1 py-0.2 rounded-[2px] border border-line bg-surface-3 text-fg-3">
                       {item.facetBadge}
                     </span>
                   )}

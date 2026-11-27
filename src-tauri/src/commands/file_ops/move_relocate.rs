@@ -9,7 +9,7 @@ use crate::commands::file_ops::{
 };
 use crate::db::{get_active_profile_id, AppState};
 use crate::security::{
-    has_ntfs_ads_colon, normalize_clean_path, sanitize_err, validate_audio_path_in_scope,
+    has_ntfs_ads_colon, normalize_clean_path, sanitize_err, AuthorizedAudioScope,
 };
 use rusqlite::{params, Connection};
 use std::collections::HashSet;
@@ -57,6 +57,7 @@ fn load_move_candidates(
         validate_writable_library_folder(conn, target_library_id, target_folder_path)?;
 
     let active_id = get_active_profile_id(conn);
+    let audio_scope = AuthorizedAudioScope::from_conn(conn, user_dir);
     let mut candidates = Vec::with_capacity(sample_ids.len());
     for &sid in sample_ids {
         let Ok((old_lib_id, file_path, file_name, is_trashed, src_lib_name, src_lib_ro)) = conn
@@ -93,7 +94,7 @@ fn load_move_candidates(
             ));
         }
 
-        let resolved_src = validate_audio_path_in_scope(conn, user_dir, &file_path)?;
+        let resolved_src = audio_scope.validate_audio_path(&file_path)?;
         let norm_src = normalize_clean_path(&resolved_src.to_string_lossy());
         candidates.push(MoveCandidate {
             sample_id: sid,

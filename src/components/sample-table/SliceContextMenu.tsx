@@ -210,6 +210,7 @@ export const SliceContextMenu: React.FC<SliceContextMenuProps> = ({
 
           <MenuItem
             compactHeight
+            tone="accent"
             onClick={() => {
               const ids = targetEntries.map((s) => s.id);
               setContextMenu(null);
@@ -221,8 +222,8 @@ export const SliceContextMenu: React.FC<SliceContextMenuProps> = ({
             }}
             icon={
               <Star
-                className={`w-3.5 h-3.5 ${
-                  allTargetsFav ? "text-accent-fg fill-current" : "text-fg-3"
+                className={`w-3.5 h-3.5 text-accent-fg ${
+                  allTargetsFav ? "fill-current" : ""
                 }`}
               />
             }
@@ -244,6 +245,7 @@ export const SliceContextMenu: React.FC<SliceContextMenuProps> = ({
 
           <MenuItem
             compactHeight
+            tone="accent"
             onClick={async () => {
               const paths = targetEntries.map((s) => s.slice_path);
               setContextMenu(null);
@@ -256,7 +258,7 @@ export const SliceContextMenu: React.FC<SliceContextMenuProps> = ({
                 );
               }
             }}
-            icon={<Copy className="w-3.5 h-3.5 text-fg-3" />}
+            icon={<Copy className="w-3.5 h-3.5 text-accent-fg" />}
             label={isMulti ? "Copy File Paths" : "Copy File Path"}
             rightSlot={
               <span className="font-mono text-[9.5px] text-fg-3 ml-1">
@@ -268,12 +270,13 @@ export const SliceContextMenu: React.FC<SliceContextMenuProps> = ({
           {activeEntry.file_exists && !isMulti && (
             <MenuItem
               compactHeight
+              tone="accent"
               onClick={() => {
                 const p = activeEntry.slice_path;
                 setContextMenu(null);
                 void showInFolder(p);
               }}
-              icon={<ExternalLink className="w-3.5 h-3.5 text-fg-3" />}
+              icon={<ExternalLink className="w-3.5 h-3.5 text-accent-fg" />}
               label="Show in Explorer"
               rightSlot={
                 <span className="font-mono text-[9.5px] text-fg-3 ml-1">

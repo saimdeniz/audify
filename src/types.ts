@@ -4,6 +4,7 @@ import type { TaxonomyDomain, TaxonomyFacetSlug } from "./types/profileAndSettin
 export * from "./types/aiAndSearch";
 export * from "./types/profileAndSettings";
 export * from "./types/fileOpsAndBackups";
+export * from "./types/layers";
 
 export interface Library {
   id: number;

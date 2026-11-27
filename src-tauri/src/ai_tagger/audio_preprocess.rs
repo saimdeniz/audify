@@ -152,6 +152,7 @@ pub fn decode_waveform_for_ai(path: &Path) -> Result<Vec<f32>, String> {
     if is_unc_or_network_path(&path_str) || has_ntfs_ads_colon(&path_str) {
         return Err("Unsafe or network audio path rejected".to_string());
     }
+    crate::security::reject_symlink_ancestors(path)?;
     let sym_meta = fs::symlink_metadata(path)
         .map_err(|_| "Audio file missing or inaccessible".to_string())?;
     if sym_meta.file_type().is_symlink() || !sym_meta.is_file() {
@@ -215,7 +216,8 @@ pub fn decode_waveform_for_ai(path: &Path) -> Result<Vec<f32>, String> {
         buf.copy_interleaved_ref(decoded);
         let samples = buf.samples();
 
-        let max_decode_frames = (AI_DECODE_WINDOW_SECONDS * (orig_sr as f64)).ceil() as usize;
+        let safe_sr = orig_sr.min(384_000);
+        let max_decode_frames = (AI_DECODE_WINDOW_SECONDS * (safe_sr as f64)).ceil() as usize;
         for f in 0..frames {
             if mono.len() >= max_decode_frames {
                 break;

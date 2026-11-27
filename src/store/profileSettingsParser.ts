@@ -97,6 +97,8 @@ export interface BootSettingsSnapshot extends AiBootSettingsSnapshot {
   enableLicenses: boolean;
   autoBinOnNleDrag: boolean;
   customSliceExportPath: string;
+  customLayerExportPath: string;
+  autoSaveLayerOnNleDrag: boolean;
   smartSearchSynonyms: boolean;
   autoPreview: boolean;
   isLooping: boolean;
@@ -216,6 +218,10 @@ export function loadBootSettings(): BootSettingsSnapshot {
     safeGetItem(AUDIFY_STORAGE_KEYS.autoBinOnNleDrag) === "true";
   const customSliceExportPath =
     safeGetItem(AUDIFY_STORAGE_KEYS.customSliceExportPath) || "";
+  const customLayerExportPath =
+    safeGetItem(AUDIFY_STORAGE_KEYS.customLayerExportPath) || "";
+  const autoSaveLayerOnNleDrag =
+    safeGetItem(AUDIFY_STORAGE_KEYS.autoSaveLayerOnNleDrag) === "true";
   const smartSearchSynonyms =
     safeGetItem(AUDIFY_STORAGE_KEYS.smartSearchSynonyms) !== "false";
 
@@ -286,6 +292,8 @@ export function loadBootSettings(): BootSettingsSnapshot {
     enableLicenses,
     autoBinOnNleDrag,
     customSliceExportPath,
+    customLayerExportPath,
+    autoSaveLayerOnNleDrag,
     smartSearchSynonyms,
     autoPreview,
     isLooping,
@@ -405,6 +413,7 @@ function sanitizeParsedProfileSettings(
     "enableLiveFolderWatch",
     "autoCreateCollectionSubfolders",
     "autoRouteCollectionDrops",
+    "autoSaveLayerOnNleDrag",
   ]) {
     if (out[boolKey] !== undefined && typeof out[boolKey] !== "boolean") {
       delete out[boolKey];

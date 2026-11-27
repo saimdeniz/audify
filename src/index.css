@@ -41,11 +41,11 @@ html[data-theme="dark"] {
   --c-accent-on: #0D0D0F;
   --c-accent-hover: color-mix(in srgb, rgb(var(--accent-rgb)) 86%, #ffffff);
   --ok-rgb: 16 185 129;
-  --c-ok-on: #FFFFFF;
+  --c-ok-on: #0D0D0F;
   --warn-rgb: 245 158 11;
   --info-rgb: 96 165 250;
   --danger-rgb: 239 68 68;
-  --c-danger-on: #FFFFFF;
+  --c-danger-on: #0D0D0F;
   --signal-accent: #F59E0B;
   --signal-accent-bg: #242016;
   --accent-rgb: 245 158 11;
@@ -75,7 +75,8 @@ html[data-theme="light"] {
   --c-accent-on: #0D0D0F;
   --c-accent-hover: color-mix(in srgb, rgb(var(--accent-rgb)) 88%, #000000);
   --signal-accent-bg: color-mix(in srgb, rgb(var(--accent-rgb)) 16%, #F4F5F8);
-  --ok-rgb: 5 150 105;
+  --accent-fg-rgb: 146 64 14;
+  --ok-rgb: 4 120 87;
   --c-ok-on: #FFFFFF;
   --warn-rgb: 180 83 9;
   --info-rgb: 37 99 235;
@@ -111,7 +112,7 @@ html[data-theme="contrast"] {
   --warn-rgb: 250 204 21;
   --info-rgb: 56 189 248;
   --danger-rgb: 239 68 68;
-  --c-danger-on: #FFFFFF;
+  --c-danger-on: #000000;
 }
 
 @layer base {
@@ -189,9 +190,15 @@ button:not(:disabled):not([data-window-caption="true"]):not([data-no-press-shift
   box-shadow: inset 0 0 0 999px rgb(128 128 128 / 0.22);
 }
 
-/* Keyboard focus: thin accent ring instead of browser blue */
+/* Keyboard focus: crisp accent ring across all interactive controls */
 button:focus-visible,
 [role="button"]:focus-visible,
+[role="tab"]:focus-visible,
+[role="menuitem"]:focus-visible,
+[role="option"]:focus-visible,
+[role="slider"]:focus-visible,
+[role="grid"]:focus-visible,
+a:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {

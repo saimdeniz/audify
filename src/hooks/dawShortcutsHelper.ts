@@ -1,6 +1,7 @@
 import { getPlayheadSec } from "../store/playheadClock";
 import { useSampleStore } from "../store/useSampleStore";
 import { isRangeSliderTarget } from "../utils/shortcuts";
+import { isNonSampleTableViewActive } from "../utils/viewModes";
 
 type AppStoreState = ReturnType<typeof useSampleStore.getState>;
 
@@ -43,11 +44,8 @@ export function handleDawListNavigationShortcut(
   state: AppStoreState
 ): boolean {
   if (e.altKey) return false;
-  // Never leak sample-table jumps while viewing Slices or Trash -> Slices
-  if (
-    state.slicesFilterActive ||
-    (state.trashFilterActive && state.trashViewTab === "slices")
-  ) {
+  // Never leak sample-table jumps while viewing Slices or Saved/Favorites/Trash Layers tables
+  if (isNonSampleTableViewActive(state)) {
     return false;
   }
   if (isRangeSliderTarget(e.target as HTMLElement | null)) return false;

@@ -2,11 +2,52 @@ import { invoke } from "@tauri-apps/api/core";
 import { Collection, SampleItem } from "../../types";
 import { isPathInsideFolder } from "../../utils/format";
 import { invokeCommand } from "../../utils/tauriCommands";
-import { deduplicateTemplates, persistNavigationFilters } from "../storageHelpers";
+import {
+  reconcileSelectionAfterFilter,
+  shouldPreserveDeckSelection,
+} from "../filterEngine";
+import {
+  deduplicateTemplates,
+  persistNavigationFilters,
+  postCrossWindowSync,
+} from "../storageHelpers";
 import type { StoreSliceContext } from "../types";
 
 export function createCatalogCollectionActions(ctx: StoreSliceContext) {
-  const { set, get, applyInstantMemoryFilter, emitNotice } = ctx;
+  const { set, get, applyInstantMemoryFilter, emitNotice, getProfileEpoch } = ctx;
+
+  /**
+   * Lightweight collection-only refresh (~1-2 ms) that avoids the heavy 9-query +
+   * disk folder walk inside `refreshSidebarData()`.
+   */
+  const refreshCollectionsOnly = async () => {
+    const epoch = getProfileEpoch();
+    try {
+      const collections = await invoke<Collection[]>("get_collections");
+      if (epoch !== getProfileEpoch()) return;
+      if (Array.isArray(collections)) {
+        set({ collections });
+      }
+      postCrossWindowSync("catalog");
+    } catch (err) {
+      console.error("Failed to refresh collections:", err);
+    }
+  };
+
+  const adjustCollectionCountsOptimistic = (
+    collections: Collection[],
+    targetId: number,
+    delta: number
+  ): Collection[] => {
+    const target = collections.find((c) => c.id === targetId);
+    const parentId = target?.parent_id ?? null;
+    return collections.map((c) => {
+      if (c.id === targetId || (parentId !== null && c.id === parentId)) {
+        return { ...c, sample_count: Math.max(0, c.sample_count + delta) };
+      }
+      return c;
+    });
+  };
 
   return {
     createCollection: async (
@@ -73,7 +114,7 @@ export function createCatalogCollectionActions(ctx: StoreSliceContext) {
           }
         }
 
-        await get().refreshSidebarData();
+        await refreshCollectionsOnly();
         set({
           statusMessage: targetParentId
             ? `Created sub-collection "${created.name}"`
@@ -88,7 +129,8 @@ export function createCatalogCollectionActions(ctx: StoreSliceContext) {
     },
 
     addToCollection: async (collectionId: number, sampleId: number) => {
-      const targetCol = get().collections.find((c) => c.id === collectionId);
+      const prevCollections = get().collections;
+      const targetCol = prevCollections.find((c) => c.id === collectionId);
       if (targetCol?.smart_query?.trim()) {
         emitNotice(
           `"${targetCol.name}" is a Smart Collection and updates automatically from its search query`,
@@ -96,21 +138,36 @@ export function createCatalogCollectionActions(ctx: StoreSliceContext) {
         );
         return;
       }
+      const epoch = getProfileEpoch();
+      if (targetCol) {
+        set({
+          collections: adjustCollectionCountsOptimistic(
+            prevCollections,
+            collectionId,
+            1
+          ),
+          statusMessage: `Added sample to collection "${targetCol.name}"`,
+        });
+      }
       try {
         const col = await invoke<Collection>("add_to_collection", {
           collectionId,
           sampleId,
         });
+        if (epoch !== getProfileEpoch()) return;
         set((state) => ({
           collections: state.collections.map((c) => (c.id === col.id ? col : c)),
           statusMessage: `Added sample to collection "${col.name}" (${col.sample_count})`,
         }));
-        await get().refreshSidebarData();
+        await refreshCollectionsOnly();
         const activeColId = get().selectedCollectionId;
         if (activeColId === collectionId || activeColId === col.parent_id) {
           await get().fetchSamples({ preserveMultiSelect: true });
         }
       } catch (err) {
+        if (epoch === getProfileEpoch()) {
+          set({ collections: prevCollections });
+        }
         console.error("Failed to add to collection:", err);
         emitNotice(`Add to collection error: ${String(err)}`, "error");
       }
@@ -121,7 +178,8 @@ export function createCatalogCollectionActions(ctx: StoreSliceContext) {
       sampleIds: number[]
     ) => {
       if (sampleIds.length === 0) return;
-      const targetCol = get().collections.find((c) => c.id === collectionId);
+      const prevCollections = get().collections;
+      const targetCol = prevCollections.find((c) => c.id === collectionId);
       if (targetCol?.smart_query?.trim()) {
         emitNotice(
           `"${targetCol.name}" is a Smart Collection and updates automatically from its search query`,
@@ -129,21 +187,36 @@ export function createCatalogCollectionActions(ctx: StoreSliceContext) {
         );
         return;
       }
+      const epoch = getProfileEpoch();
+      if (targetCol) {
+        set({
+          collections: adjustCollectionCountsOptimistic(
+            prevCollections,
+            collectionId,
+            sampleIds.length
+          ),
+          statusMessage: `Added ${sampleIds.length} samples to "${targetCol.name}"`,
+        });
+      }
       try {
         const col = await invokeCommand("add_samples_to_collection_batch", {
           collectionId,
           sampleIds,
         });
+        if (epoch !== getProfileEpoch()) return;
         set((state) => ({
           collections: state.collections.map((c) => (c.id === col.id ? col : c)),
           statusMessage: `Added ${sampleIds.length} samples to "${col.name}" (${col.sample_count})`,
         }));
-        await get().refreshSidebarData();
+        await refreshCollectionsOnly();
         const activeColId = get().selectedCollectionId;
         if (activeColId === collectionId || activeColId === col.parent_id) {
           await get().fetchSamples({ preserveMultiSelect: true });
         }
       } catch (err) {
+        if (epoch === getProfileEpoch()) {
+          set({ collections: prevCollections });
+        }
         console.error("Failed to batch add to collection:", err);
         emitNotice(`Add to collection error: ${String(err)}`, "error");
       }
@@ -225,7 +298,7 @@ export function createCatalogCollectionActions(ctx: StoreSliceContext) {
           }
         }
 
-        await get().refreshSidebarData();
+        await refreshCollectionsOnly();
         const activeColId = get().selectedCollectionId;
         if (
           activeColId !== null &&
@@ -243,12 +316,23 @@ export function createCatalogCollectionActions(ctx: StoreSliceContext) {
         return;
       }
 
+      const prevCollections = get().collections;
+      const epoch = getProfileEpoch();
+      set({
+        collections: adjustCollectionCountsOptimistic(
+          prevCollections,
+          targetCollectionId,
+          samplesToAdd.length
+        ),
+        statusMessage: `Added ${samplesToAdd.length} track(s) to "${targetCol.name}"`,
+      });
       try {
         await invokeCommand("add_samples_to_collection_batch", {
           collectionId: targetCollectionId,
           sampleIds: samplesToAdd.map((s) => s.id),
         });
-        await get().refreshSidebarData();
+        if (epoch !== getProfileEpoch()) return;
+        await refreshCollectionsOnly();
         const activeColId = get().selectedCollectionId;
         if (
           activeColId === targetCollectionId ||
@@ -256,10 +340,10 @@ export function createCatalogCollectionActions(ctx: StoreSliceContext) {
         ) {
           await get().fetchSamples({ preserveMultiSelect: true });
         }
-        set({
-          statusMessage: `Added ${samplesToAdd.length} track(s) to "${targetCol.name}"`,
-        });
       } catch (err) {
+        if (epoch === getProfileEpoch()) {
+          set({ collections: prevCollections });
+        }
         console.error("Failed to add samples to collection:", err);
         emitNotice(`Add to collection error: ${String(err)}`, "error");
       }
@@ -270,7 +354,8 @@ export function createCatalogCollectionActions(ctx: StoreSliceContext) {
       sampleIds: number[]
     ) => {
       if (sampleIds.length === 0) return;
-      const targetCol = get().collections.find((c) => c.id === collectionId);
+      const prevState = get();
+      const targetCol = prevState.collections.find((c) => c.id === collectionId);
       if (targetCol?.smart_query?.trim()) {
         emitNotice(
           "Smart Collections are dynamic — edit the query to change matched items",
@@ -278,17 +363,91 @@ export function createCatalogCollectionActions(ctx: StoreSliceContext) {
         );
         return;
       }
+
+      const epoch = getProfileEpoch();
+      const prevCollections = prevState.collections;
+      const prevSamples = prevState.samples;
+      const prevRawSamples = prevState.rawSamples;
+      const prevSelectedSample = prevState.selectedSample;
+      const prevSelectedIds = prevState.selectedSampleIds;
+      const prevLastSelectedIndex = prevState.lastSelectedIndex;
+      const activeColId = prevState.selectedCollectionId;
+
+      const isViewingDirectOrChild =
+        activeColId !== null &&
+        (activeColId === collectionId ||
+          prevCollections.some(
+            (c) => c.id === activeColId && c.parent_id === collectionId
+          ));
+      const isViewingParent =
+        activeColId !== null && targetCol?.parent_id === activeColId;
+      const shouldPatchList = isViewingDirectOrChild || isViewingParent;
+
+      const removeSet = new Set(sampleIds);
+      const nextCollections = adjustCollectionCountsOptimistic(
+        prevCollections,
+        collectionId,
+        -sampleIds.length
+      );
+      const label = targetCol?.name ?? "collection";
+
+      if (shouldPatchList) {
+        const nextRaw = prevRawSamples.filter((s) => !removeSet.has(s.id));
+        const nextSamples = prevSamples.filter((s) => !removeSet.has(s.id));
+        const reconciled = reconcileSelectionAfterFilter(
+          nextSamples,
+          prevSelectedSample,
+          prevSelectedIds,
+          true,
+          shouldPreserveDeckSelection(prevState)
+        );
+        set({
+          collections: nextCollections,
+          rawSamples: nextRaw,
+          samples: nextSamples,
+          selectedSample: reconciled.nextSelected,
+          selectedSampleIds: reconciled.nextSelectedIds,
+          lastSelectedIndex: reconciled.nextSelectedIndex,
+          statusMessage: `Removed ${sampleIds.length} sample(s) from "${label}"`,
+        });
+      } else {
+        set({
+          collections: nextCollections,
+          statusMessage: `Removed ${sampleIds.length} sample(s) from "${label}"`,
+        });
+      }
+
       try {
         const col = await invokeCommand("remove_samples_from_collection", {
           collectionId,
           sampleIds,
         });
-        await get().refreshSidebarData();
-        await get().fetchSamples({ preserveMultiSelect: true });
-        set({
+        if (epoch !== getProfileEpoch()) return;
+        set((state) => ({
+          collections: state.collections.map((c) => (c.id === col.id ? col : c)),
           statusMessage: `Removed ${sampleIds.length} sample(s) from "${col.name}"`,
-        });
+        }));
+        await refreshCollectionsOnly();
+        // If viewing a parent while removing from one child sub-collection, reconcile in case
+        // a sibling sub-collection still holds one of those tracks.
+        if (isViewingParent && get().selectedCollectionId === activeColId) {
+          await get().fetchSamples({ preserveMultiSelect: true });
+        }
       } catch (err) {
+        if (epoch === getProfileEpoch()) {
+          set({
+            collections: prevCollections,
+            ...(shouldPatchList && get().selectedCollectionId === activeColId
+              ? {
+                  rawSamples: prevRawSamples,
+                  samples: prevSamples,
+                  selectedSample: prevSelectedSample,
+                  selectedSampleIds: prevSelectedIds,
+                  lastSelectedIndex: prevLastSelectedIndex,
+                }
+              : {}),
+          });
+        }
         console.error("Failed to remove samples from collection:", err);
         emitNotice(`Remove from collection error: ${String(err)}`, "error");
       }
@@ -344,7 +503,7 @@ export function createCatalogCollectionActions(ctx: StoreSliceContext) {
           newRulePath: newRulePath !== undefined ? newRulePath : null,
           newSmartQuery: cleanSmartQuery !== undefined ? cleanSmartQuery : null,
         });
-        await get().refreshSidebarData();
+        await refreshCollectionsOnly();
         if (get().selectedCollectionId === collectionId && col.smart_query?.trim()) {
           if (!applyInstantMemoryFilter({ preserveMultiSelect: true })) {
             await get().fetchSamples({ preserveMultiSelect: true });
@@ -368,7 +527,7 @@ export function createCatalogCollectionActions(ctx: StoreSliceContext) {
           collectionId,
           newParentId,
         });
-        await get().refreshSidebarData();
+        await refreshCollectionsOnly();
         const parentName = newParentId
           ? get().collections.find((c) => c.id === newParentId)?.name
           : null;
@@ -408,7 +567,7 @@ export function createCatalogCollectionActions(ctx: StoreSliceContext) {
           set({ selectedCollectionId: null });
         }
 
-        await get().refreshSidebarData();
+        await refreshCollectionsOnly();
         if (wasSelectedOrChild) {
           if (!applyInstantMemoryFilter({ preserveMultiSelect: false })) {
             await get().fetchSamples({ preserveMultiSelect: false });

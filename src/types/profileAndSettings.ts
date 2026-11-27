@@ -322,6 +322,8 @@ export interface ProfileSettings {
   autoCreateCollectionSubfolders?: boolean;
   autoRouteCollectionDrops?: boolean;
   customSliceExportPath?: string;
+  customLayerExportPath?: string;
+  autoSaveLayerOnNleDrag?: boolean;
   enableAdvancedFileOps?: boolean;
   confirmBeforeTrash?: boolean;
   enableLiveFolderWatch?: boolean;

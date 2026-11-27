@@ -610,7 +610,7 @@ describe("Integrated Duplicates View & UI Polish", () => {
     fireEvent.click(
       screen.getByRole("button", { name: /Empty to Recycle Bin/i })
     );
-    const emptyDialog = screen.getByRole("dialog", {
+    const emptyDialog = screen.getByRole("alertdialog", {
       name: /Empty Recycle Bin/i,
     });
     expect(emptyDialog.getAttribute("data-mica-overlay")).toBe("true");

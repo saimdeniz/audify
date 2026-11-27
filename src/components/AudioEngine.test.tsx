@@ -8,7 +8,7 @@ const nativeAudioPauseMock = vi.fn(() => Promise.resolve());
 const nativeAudioUnloadMock = vi.fn(() => Promise.resolve());
 const nativeAudioSeekMock = vi.fn((_pos?: number) => Promise.resolve());
 const nativeAudioSetDeviceMock = vi.fn(() => Promise.resolve());
-const nativeAudioSetParamsMock = vi.fn(() => Promise.resolve());
+const nativeAudioSetParamsMock = vi.fn((_params?: unknown) => Promise.resolve());
 let syncListener: ((payload: unknown) => void) | null = null;
 const subscribeNativeAudioSyncMock = vi.fn(
   (cb: (payload: unknown) => void) => {
@@ -31,7 +31,7 @@ vi.mock("../services/nativeAudioClient", async (importOriginal) => {
     nativeAudioUnload: () => nativeAudioUnloadMock(),
     nativeAudioSeek: (pos: number) => nativeAudioSeekMock(pos),
     nativeAudioSetDevice: () => nativeAudioSetDeviceMock(),
-    nativeAudioSetParams: () => nativeAudioSetParamsMock(),
+    nativeAudioSetParams: (params?: unknown) => nativeAudioSetParamsMock(params),
     subscribeNativeAudioSync: (cb: (payload: unknown) => void) =>
       subscribeNativeAudioSyncMock(cb),
   };
@@ -220,5 +220,36 @@ describe("AudioEngine native bridge stability across visual re-renders", () => {
 
     expect(useSampleStore.getState().isPlaying).toBe(true);
     expect(useSampleStore.getState().selectedSample?.id).toBe(sampleB.id);
+  });
+
+  it("isolates layer://draft playback from global top-deck pitchSemitones", async () => {
+    const draftSample: SampleItem = {
+      ...SAMPLE_A,
+      id: -999999,
+      file_path: "layer://draft",
+      file_name: "Draft_Mix.wav",
+      duration_ms: 1000,
+    };
+
+    useSampleStore.setState({
+      selectedSample: draftSample,
+      isPlaying: false,
+      pitchSemitones: -12,
+      playTriggerSeq: 1,
+    });
+
+    nativeAudioSetParamsMock.mockClear();
+    render(<AudioEngine />);
+
+    await waitFor(() => {
+      expect(nativeAudioSetParamsMock).toHaveBeenCalled();
+    });
+    const calls = nativeAudioSetParamsMock.mock.calls;
+    const lastArgs = calls[calls.length - 1]?.[0] as {
+      pitchSemitones?: number;
+      updateSlice?: boolean;
+    };
+    expect(lastArgs.pitchSemitones).toBe(0);
+    expect(lastArgs.updateSlice).toBe(false);
   });
 });

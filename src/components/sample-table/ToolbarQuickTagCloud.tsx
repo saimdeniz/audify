@@ -190,17 +190,19 @@ export const ToolbarQuickTagCloud: React.FC = React.memo(() => {
     };
   }, [showTagOverflow]);
 
+  const hasSuggestions = suggestedTags.length > 0;
   useEffect(() => {
     const el = cloudContainerRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
     const measure = () => {
-      setCloudWidth(el.clientWidth);
+      const nextW = el.clientWidth;
+      setCloudWidth((prev) => (prev === nextW ? prev : nextW));
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [suggestedTags.length]);
+  }, [hasSuggestions]);
 
   useEffect(() => {
     if (!showTagOverflow) return;

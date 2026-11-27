@@ -28,16 +28,22 @@ fn is_allowlisted_url(url: &str) -> bool {
     url == DEFAULT_MODEL_URL || url == DEFAULT_ORT_WHL_URL
 }
 
-pub(crate) fn build_http_agent() -> ureq::Agent {
+pub(crate) fn build_https_agent_with_timeout(timeout_secs: u64) -> ureq::Agent {
     let tls_config = ureq::tls::TlsConfig::builder()
         .provider(ureq::tls::TlsProvider::NativeTls)
         .root_certs(ureq::tls::RootCerts::PlatformVerifier)
         .build();
     ureq::Agent::config_builder()
+        .https_only(true)
+        .max_redirects(5)
         .tls_config(tls_config)
-        .timeout_global(Some(std::time::Duration::from_secs(300)))
+        .timeout_global(Some(std::time::Duration::from_secs(timeout_secs)))
         .build()
         .new_agent()
+}
+
+pub(crate) fn build_http_agent() -> ureq::Agent {
+    build_https_agent_with_timeout(300)
 }
 
 fn emit_download_progress(

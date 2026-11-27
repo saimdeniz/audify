@@ -1,7 +1,7 @@
 mod scope;
 pub use scope::{
-    collect_profile_slice_dirs, sanitize_err, validate_audio_path_in_scope,
-    validate_path_in_libraries_or_cache, AuthorizedAudioScope,
+    collect_profile_layer_dirs, collect_profile_slice_dirs, sanitize_err,
+    validate_audio_path_in_scope, validate_path_in_libraries_or_cache, AuthorizedAudioScope,
 };
 
 use std::fs;
@@ -228,12 +228,18 @@ pub fn is_forbidden_os_or_root_path(raw: &str) -> bool {
 /// (drive/root -> leaf) BEFORE touching deeper child components or calling `fs::canonicalize`,
 /// blocking Windows SMB Net-NTLMv2 leaks via intermediate directory junctions.
 pub(crate) fn reject_symlink_ancestors(path: &Path) -> Result<(), String> {
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err("Parent directory traversal ('..') is not allowed".to_string());
+    }
     let mut current = PathBuf::new();
     for comp in path.components() {
         current.push(comp.as_os_str());
         match comp {
             Component::Prefix(_) | Component::RootDir | Component::CurDir => continue,
-            Component::Normal(_) | Component::ParentDir => match fs::symlink_metadata(&current) {
+            Component::ParentDir => {
+                return Err("Parent directory traversal ('..') is not allowed".to_string());
+            }
+            Component::Normal(_) => match fs::symlink_metadata(&current) {
                 Ok(sym) => {
                     if sym.file_type().is_symlink() {
                         return Err("Symbolic links and junctions are not allowed".to_string());
@@ -416,15 +422,51 @@ pub fn ensure_inside(base: &Path, target: &Path) -> Result<PathBuf, String> {
     }
 }
 
+/// Canonicalizes `path` if it exists, or canonicalizes its deepest existing ancestor and
+/// re-attaches the remaining nonexistent child components. Prevents Windows 8.3 short-path
+/// mismatches (e.g. `C:\Users\RUNNER~1\...` vs `C:\Users\runneradmin\...`) when comparing
+/// an existing directory against a not-yet-created subdirectory.
+fn canonicalize_existing_ancestor(path: &Path) -> PathBuf {
+    if let Ok(canon) = fs::canonicalize(path) {
+        return strip_verbatim_prefix(&canon);
+    }
+    let mut suffix: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = path;
+    while let Some(parent) = cur.parent() {
+        if let Some(name) = cur.file_name() {
+            suffix.push(name.to_os_string());
+        } else {
+            break;
+        }
+        if let Ok(canon_parent) = fs::canonicalize(parent) {
+            let mut resolved = strip_verbatim_prefix(&canon_parent);
+            for comp in suffix.into_iter().rev() {
+                resolved.push(comp);
+            }
+            return resolved;
+        }
+        cur = parent;
+    }
+    path.to_path_buf()
+}
+
 /// Ensures `candidate` neither sits inside Audify's `user_dir` (which holds `samples.db`,
 /// `backups/`, and WebView cache) nor is a parent directory containing `user_dir`.
 pub fn ensure_not_inside_user_dir(user_dir: &Path, candidate: &Path) -> Result<(), String> {
-    let user_canon = fs::canonicalize(user_dir)
-        .map(|p| strip_verbatim_prefix(&p))
-        .unwrap_or_else(|_| user_dir.to_path_buf());
-    let cand_canon = fs::canonicalize(candidate)
-        .map(|p| strip_verbatim_prefix(&p))
-        .unwrap_or_else(|_| candidate.to_path_buf());
+    let raw_cand = candidate.to_string_lossy();
+    if is_unc_or_network_path(&raw_cand)
+        || has_ntfs_ads_colon(&raw_cand)
+        || super::has_parent_dir_traversal(&raw_cand)
+    {
+        return Err("Unsafe or network path rejected".to_string());
+    }
+    reject_symlink_ancestors(candidate)?;
+
+    let user_canon = canonicalize_existing_ancestor(user_dir);
+    let cand_canon = canonicalize_existing_ancestor(candidate);
+    if is_unc_or_network_path(&cand_canon.to_string_lossy()) {
+        return Err("Network/UNC path rejected".to_string());
+    }
 
     let user_norm = normalize_clean_path(&user_canon.to_string_lossy());
     let cand_norm = normalize_clean_path(&cand_canon.to_string_lossy());

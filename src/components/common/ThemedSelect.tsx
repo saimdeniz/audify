@@ -243,6 +243,7 @@ export const ThemedSelect: React.FC<ThemedSelectProps> = ({
             role="listbox"
             aria-label={ariaLabel || placeholder}
             data-popover-portal="true"
+            data-settings-dropdown-open="true"
             data-mica-overlay="true"
             onKeyDown={handleMenuKeyDown}
             onClick={(e) => e.stopPropagation()}

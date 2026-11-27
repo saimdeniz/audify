@@ -6,8 +6,9 @@ mod path_guards;
 pub use inputs::{
     detect_image_magic, detect_wallpaper_media_magic, has_parent_dir_traversal, is_dos_device_name,
     is_personal_path, is_safe_existing_bg_image, is_valid_collection_icon,
-    sanitize_hex_color_or_default, sanitize_settings_paths, validate_hex_color,
-    validate_safe_audio_stem, whitelist_and_sanitize_settings, ALLOWED_BG_IMAGE_EXTS,
+    sanitize_hex_color_or_default, sanitize_settings_paths, truncate_filename_stem_utf16,
+    validate_hex_color, validate_safe_audio_stem, whitelist_and_sanitize_settings,
+    ALLOWED_BG_IMAGE_EXTS,
     ALLOWED_BG_MEDIA_EXTS, ALLOWED_BG_VIDEO_EXTS, ALLOWED_PROFILE_SETTINGS_KEYS,
 };
 pub use json_io::{
@@ -18,20 +19,23 @@ pub use json_io::{
     MAX_SNAPSHOT_ARCHIVE_BYTES,
 };
 pub use os_shell::{
-    move_files_to_os_recycle_bin, open_directory_in_shell, reveal_file_in_explorer,
+    move_files_to_os_recycle_bin, open_directory_in_shell, open_https_url_in_browser,
+    reveal_file_in_explorer,
 };
 pub(crate) use path_guards::reject_symlink_ancestors;
 pub use path_guards::{
-    collect_profile_slice_dirs, display_leaf, ensure_inside, ensure_not_inside_user_dir,
-    ensure_safe_export_dir, has_ntfs_ads_colon, is_forbidden_os_or_root_path, is_safe_library_dir,
-    is_unc_or_network_path, normalize_clean_path, sanitize_err, strip_verbatim_prefix,
-    validate_audio_path_in_scope, validate_path_in_libraries_or_cache, AuthorizedAudioScope,
+    collect_profile_layer_dirs, collect_profile_slice_dirs, display_leaf, ensure_inside,
+    ensure_not_inside_user_dir, ensure_safe_export_dir, has_ntfs_ads_colon,
+    is_forbidden_os_or_root_path, is_safe_library_dir, is_unc_or_network_path,
+    normalize_clean_path, sanitize_err, strip_verbatim_prefix, validate_audio_path_in_scope,
+    validate_path_in_libraries_or_cache, AuthorizedAudioScope,
 };
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::Path;
 
     #[test]
     fn unc_and_network_path_detection() {
@@ -208,5 +212,50 @@ mod tests {
         });
         let cleaned_valid = whitelist_and_sanitize_settings(&valid_input, true, true).unwrap();
         assert_eq!(cleaned_valid["accentColor"], "#0EA5E9");
+    }
+
+    #[test]
+    fn reject_symlink_ancestors_blocks_parent_dir_traversal_before_not_found() {
+        let root = std::env::temp_dir().join(format!("audify_sec_trav_{}", std::process::id()));
+        let _ = fs::create_dir_all(&root);
+        let traversal = root.join("nonexistent_dir").join("..").join("target.wav");
+        assert!(
+            reject_symlink_ancestors(&traversal).is_err(),
+            "ParentDir ('..') after a nonexistent component must be rejected immediately"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ensure_not_inside_user_dir_rejects_unc_ads_and_parent_traversal() {
+        let user_dir = std::env::temp_dir().join(format!("audify_sec_udir_{}", std::process::id()));
+        let _ = fs::create_dir_all(&user_dir);
+        assert!(ensure_not_inside_user_dir(&user_dir, Path::new(r"\\evil.local\share\x")).is_err());
+        assert!(ensure_not_inside_user_dir(&user_dir, Path::new(r"C:\Audio\x:ads")).is_err());
+        assert!(ensure_not_inside_user_dir(&user_dir, Path::new(r"C:\Audio\..\Other")).is_err());
+        assert!(ensure_not_inside_user_dir(&user_dir, &user_dir.join("backups")).is_err());
+        assert!(ensure_not_inside_user_dir(
+            &user_dir,
+            &user_dir.join("backups").join("deep_nonexistent")
+        )
+        .is_err());
+        let sibling = std::env::temp_dir().join(format!("audify_sec_sib_{}", std::process::id()));
+        assert!(ensure_not_inside_user_dir(&user_dir, &sibling).is_ok());
+        let _ = fs::remove_dir_all(&user_dir);
+    }
+
+    #[test]
+    fn truncate_filename_stem_utf16_respects_ntfs_255_unit_limit_and_surrogates() {
+        // 150 emoji (each 2 UTF-16 code units = 300 units) + 20 reserved units -> must fit <= 255
+        let emojis = "🎵".repeat(150);
+        let trunc = truncate_filename_stem_utf16(&emojis, 20);
+        assert!(trunc.encode_utf16().count() + 20 <= 255);
+        assert!(!trunc.is_empty());
+
+        // Trailing dots/spaces after truncation are stripped cleanly for Windows safety
+        let spaced = format!("{}   ...", "a".repeat(240));
+        let clean = truncate_filename_stem_utf16(&spaced, 10);
+        assert!(!clean.ends_with(' ') && !clean.ends_with('.'));
+        assert!(clean.encode_utf16().count() + 10 <= 255);
     }
 }

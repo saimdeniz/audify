@@ -415,4 +415,36 @@ describe("fileOpsSlice Undo/Redo atomicity & persistActiveProfileSettings sequen
     expect(useSampleStore.getState().trashedTotalBytes).toBe(2900);
     expect(loadSavedTrashStatus()).toEqual({ count: 1, totalBytes: 2900 });
   });
+
+  it("keeps global Ctrl+Z strictly session-scoped and never mutates historical SQLite fileOpJournal entries", async () => {
+    const oldRenamed = makeSample(99, {
+      file_name: "3stepapproach22.wav",
+      file_path: "C:/Audio/3stepapproach22.wav",
+      previous_file_name: "3stepapproach.wav",
+    });
+    useSampleStore.setState({
+      allProfileSamples: [oldRenamed],
+      rawSamples: [oldRenamed],
+      samples: [oldRenamed],
+      fileOpUndoStack: [],
+      fileOpJournal: [
+        {
+          id: 1,
+          sample_id: 99,
+          op_type: "RENAME",
+          old_path: "C:/Audio/3stepapproach.wav",
+          new_path: "C:/Audio/3stepapproach22.wav",
+          old_name: "3stepapproach.wav",
+          new_name: "3stepapproach22.wav",
+          created_at: "2026-01-01 00:00:00",
+          can_undo: true,
+        },
+      ],
+    });
+
+    const undone = await useSampleStore.getState().undoLastFileOp();
+    expect(undone).toBe(false);
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(useSampleStore.getState().samples[0].file_name).toBe("3stepapproach22.wav");
+  });
 });

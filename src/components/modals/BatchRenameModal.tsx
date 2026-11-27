@@ -11,6 +11,7 @@ import {
   DEFAULT_BATCH_RENAME_CONFIG,
 } from "../../utils/batchRename";
 import { splitFileNameAndExt } from "../../utils/format";
+import { layerEntryToRenameAdapter } from "../../utils/layerHelpers";
 import { useDialogFocusTrap } from "../../utils/modalFocus";
 import { resolveSamplesByIds } from "../../utils/sampleLookup";
 import { sliceEntryToRenameAdapter } from "../../utils/slicePreview";
@@ -32,28 +33,42 @@ function parentFolderKeyFromPath(filePath: string): string {
 export const BatchRenameModal: React.FC = () => {
   const batchRenameSampleIds = useSampleStore((s) => s.batchRenameSampleIds);
   const batchRenameSliceIds = useSampleStore((s) => s.batchRenameSliceIds);
+  const batchRenameLayerIds = useSampleStore((s) => s.batchRenameLayerIds);
   const samples = useSampleStore((s) => s.samples);
   const sliceHistory = useSampleStore((s) => s.sliceHistory);
+  const layerHistory = useSampleStore((s) => s.layerHistory);
   const libraries = useSampleStore((s) => s.libraries);
   const isMiniDock = useSampleStore((s) => s.isMiniDock);
   const closeBatchRenameModal = useSampleStore((s) => s.closeBatchRenameModal);
   const closeBatchRenameSlicesModal = useSampleStore(
     (s) => s.closeBatchRenameSlicesModal
   );
+  const closeBatchRenameLayersModal = useSampleStore(
+    (s) => s.closeBatchRenameLayersModal
+  );
   const batchRenameSamples = useSampleStore((s) => s.batchRenameSamples);
   const batchRenameSlices = useSampleStore((s) => s.batchRenameSlices);
+  const batchRenameLayers = useSampleStore((s) => s.batchRenameLayers);
 
   const [config, setConfig] = useState<BatchRenameConfig>(
     DEFAULT_BATCH_RENAME_CONFIG
   );
   const [isApplying, setIsApplying] = useState(false);
 
-  const isSliceMode =
-    (!batchRenameSampleIds || batchRenameSampleIds.length === 0) &&
-    Boolean(batchRenameSliceIds && batchRenameSliceIds.length > 0);
-  const activeIds = isSliceMode ? batchRenameSliceIds : batchRenameSampleIds;
+  const hasSampleIds = Boolean(batchRenameSampleIds && batchRenameSampleIds.length > 0);
+  const hasSliceIds = Boolean(batchRenameSliceIds && batchRenameSliceIds.length > 0);
+  const hasLayerIds = Boolean(batchRenameLayerIds && batchRenameLayerIds.length > 0);
+  const isSliceMode = !hasSampleIds && hasSliceIds;
+  const isLayerMode = !hasSampleIds && !hasSliceIds && hasLayerIds;
+  const activeIds = isSliceMode
+    ? batchRenameSliceIds
+    : isLayerMode
+    ? batchRenameLayerIds
+    : batchRenameSampleIds;
   const closeModal = isSliceMode
     ? closeBatchRenameSlicesModal
+    : isLayerMode
+    ? closeBatchRenameLayersModal
     : closeBatchRenameModal;
 
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -71,6 +86,16 @@ export const BatchRenameModal: React.FC = () => {
       }
       return out;
     }
+    if (isLayerMode) {
+      if (!batchRenameLayerIds || batchRenameLayerIds.length === 0) return [];
+      const layerMap = new Map(layerHistory.map((l) => [l.id, l]));
+      const out: SampleItem[] = [];
+      for (const id of batchRenameLayerIds) {
+        const hit = layerMap.get(id);
+        if (hit) out.push(layerEntryToRenameAdapter(hit));
+      }
+      return out;
+    }
     if (!batchRenameSampleIds || batchRenameSampleIds.length === 0) return [];
     const storeState = useSampleStore.getState();
     const primaryPool =
@@ -78,7 +103,16 @@ export const BatchRenameModal: React.FC = () => {
         ? storeState.allProfileSamples
         : samples;
     return resolveSamplesByIds(batchRenameSampleIds, primaryPool, samples);
-  }, [isSliceMode, batchRenameSliceIds, sliceHistory, batchRenameSampleIds, samples]);
+  }, [
+    isSliceMode,
+    isLayerMode,
+    batchRenameSliceIds,
+    batchRenameLayerIds,
+    sliceHistory,
+    layerHistory,
+    batchRenameSampleIds,
+    samples,
+  ]);
 
   const isSingle = selectedSamples.length === 1;
   const singleSplit = useMemo(
@@ -97,12 +131,12 @@ export const BatchRenameModal: React.FC = () => {
 
   const readOnlyLibraryIds = useMemo(() => {
     const ids = new Set<number>();
-    if (isSliceMode) return ids;
+    if (isSliceMode || isLayerMode) return ids;
     for (const lib of libraries) {
       if (lib.is_read_only) ids.add(lib.id);
     }
     return ids;
-  }, [isSliceMode, libraries]);
+  }, [isSliceMode, isLayerMode, libraries]);
 
   const siblingSamplesPool = useMemo(() => {
     if (isSliceMode) {
@@ -118,6 +152,19 @@ export const BatchRenameModal: React.FC = () => {
         )
         .map((entry) => sliceEntryToRenameAdapter(entry));
     }
+    if (isLayerMode) {
+      const folderKeys = new Set<string>();
+      for (const s of selectedSamples) {
+        folderKeys.add(parentFolderKeyFromPath(s.file_path));
+      }
+      return layerHistory
+        .filter(
+          (entry) =>
+            entry.file_exists &&
+            folderKeys.has(parentFolderKeyFromPath(entry.layer_path))
+        )
+        .map((entry) => layerEntryToRenameAdapter(entry));
+    }
     const storeState = useSampleStore.getState();
     const catalogPool =
       storeState.allProfileSamples.length > 0
@@ -131,7 +178,7 @@ export const BatchRenameModal: React.FC = () => {
     return catalogPool.filter((s) =>
       folderKeys.has(parentFolderKeyFromPath(s.file_path))
     );
-  }, [isSliceMode, sliceHistory, selectedSamples, samples]);
+  }, [isSliceMode, isLayerMode, sliceHistory, layerHistory, selectedSamples, samples]);
 
   const preview = useMemo(
     () =>
@@ -152,6 +199,12 @@ export const BatchRenameModal: React.FC = () => {
           new_stem: row.finalStem,
         }));
         await batchRenameSlices(entries);
+      } else if (isLayerMode) {
+        const entries = preview.readyRows.map((row) => ({
+          layer_id: row.sample.id,
+          new_stem: row.finalStem,
+        }));
+        await batchRenameLayers(entries);
       } else {
         const entries = preview.readyRows.map((row) => ({
           sample_id: row.sample.id,
@@ -201,6 +254,10 @@ export const BatchRenameModal: React.FC = () => {
             ? isSingle
               ? "Rename Slice File"
               : "Batch Rename Slice Files"
+            : isLayerMode
+            ? isSingle
+              ? "Rename Layer File"
+              : "Batch Rename Layer Files"
             : isSingle
             ? "Rename Audio File"
             : "Batch Rename Audio Files"
@@ -220,6 +277,10 @@ export const BatchRenameModal: React.FC = () => {
                 ? isSingle
                   ? "RENAME SLICE"
                   : "BATCH RENAME SLICES"
+                : isLayerMode
+                ? isSingle
+                  ? "RENAME LAYER"
+                  : "BATCH RENAME LAYERS"
                 : isSingle
                 ? "RENAME FILE"
                 : "BATCH RENAME FILES"}
@@ -250,11 +311,11 @@ export const BatchRenameModal: React.FC = () => {
           }}
           className="flex-1 min-h-0 flex flex-col overflow-hidden"
         >
-          {isSliceMode && (
+          {(isSliceMode || isLayerMode) && (
             <div className="px-4 py-1.5 bg-warn/10 border-b border-warn/30 text-warn text-[10.5px] font-mono flex items-center gap-2 shrink-0">
               <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
               <span>
-                Renaming changes the .wav filename on disk — DAW timeline clips referencing the old name may need relinking. Ctrl+Z reverts.
+                Renaming changes the rendered {isLayerMode ? "layer " : ""}.wav filename on disk — DAW timeline clips referencing the old name may need relinking. Ctrl+Z reverts.
               </span>
             </div>
           )}
@@ -316,6 +377,12 @@ export const BatchRenameModal: React.FC = () => {
                   ? isSingle
                     ? "Rename Slice"
                     : `Rename ${preview.readyRows.length} Slice${
+                        preview.readyRows.length === 1 ? "" : "s"
+                      }`
+                  : isLayerMode
+                  ? isSingle
+                    ? "Rename Layer"
+                    : `Rename ${preview.readyRows.length} Layer${
                         preview.readyRows.length === 1 ? "" : "s"
                       }`
                   : isSingle

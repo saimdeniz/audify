@@ -38,6 +38,24 @@ const FRAME_CONFIGS: Record<string, FrameConfig> = {
     rect: { left: 0.3, top: 3.1, width: 16.3, height: 10.2 },
     tag: "TRANSPORT · LIVE PITCH (-12st / +12st)",
   },
+  "layers:editor": {
+    image: () => "./media/layers-editor.webp",
+    aspectClass: "aspect-[1920/1032]",
+    rect: { left: 16.6, top: 48.8, width: 83.2, height: 32.8 },
+    tag: "LAYERS TIMELINE · GAIN / PITCH / REV / SPLIT / DRAG MIX",
+  },
+  "layers:stack": {
+    image: () => "./media/layers-stack.webp",
+    aspectClass: "aspect-[1920/1032]",
+    rect: { left: 16.6, top: 48.8, width: 83.2, height: 32.8 },
+    tag: "11 STACKED SFX LANES · LIVE MIX PREVIEW",
+  },
+  "layers:saved": {
+    image: () => "./media/layers-saved.webp",
+    aspectClass: "aspect-[1920/1032]",
+    rect: { left: 16.6, top: 15.4, width: 83.2, height: 20.8 },
+    tag: "SAVED LAYERS VAULT · USER/LAYERS (48kHz WAV)",
+  },
   "search:table": {
     image: themeMainImage,
     aspectClass: "aspect-[1920/1032]",
@@ -149,7 +167,7 @@ export const FeatureTourSection: React.FC<FeatureTourSectionProps> = ({ onOpenLi
         <Reveal delayMs={80}>
           <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[340px_minmax(0,1fr)]">
             {/* Left Interactive Chapter Rail */}
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-1.5">
               {items.map((item) => {
                 const isActive = item.id === activeFeature.id;
                 return (
@@ -160,7 +178,7 @@ export const FeatureTourSection: React.FC<FeatureTourSectionProps> = ({ onOpenLi
                       setActiveFeatureId(item.id);
                       setHoverPeek(false);
                     }}
-                    className={`group rounded-md border p-3.5 text-left transition-all duration-100 ${
+                    className={`group rounded-md border px-3.5 py-3 text-left transition-all duration-100 ${
                       isActive
                         ? "border-accent bg-accent-soft"
                         : "surface-card-soft border-line hover:border-line-hover"
@@ -181,13 +199,13 @@ export const FeatureTourSection: React.FC<FeatureTourSectionProps> = ({ onOpenLi
                       />
                     </div>
                     <h3
-                      className={`mt-1 text-[13.5px] font-semibold ${
+                      className={`mt-0.5 text-[13px] font-semibold ${
                         isActive ? "text-fg" : "text-fg-2 group-hover:text-fg"
                       }`}
                     >
                       {item.title}
                     </h3>
-                    <p className="mt-1 text-[12px] leading-relaxed text-fg-3">
+                    <p className="mt-1 text-[11.5px] leading-relaxed text-fg-3">
                       {item.shortDesc}
                     </p>
                   </button>
@@ -195,8 +213,8 @@ export const FeatureTourSection: React.FC<FeatureTourSectionProps> = ({ onOpenLi
               })}
             </div>
 
-            {/* Right Code-Driven Focus-Frame Stage */}
-            <div className="surface-glass flex flex-col overflow-hidden rounded-lg border border-line-strong shadow-xl">
+            {/* Right Code-Driven Focus-Frame Stage (sticky on desktop so lower chapters stay framed) */}
+            <div className="surface-glass flex flex-col overflow-hidden rounded-lg border border-line-strong shadow-xl lg:sticky lg:top-20">
               {/* Stage Header with Interactive Sub-State Pills */}
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-surface-header px-3.5 py-2.5">
                 <div className="flex flex-wrap items-center gap-1.5">
@@ -341,7 +359,7 @@ export const FeatureTourSection: React.FC<FeatureTourSectionProps> = ({ onOpenLi
                       {/* Floating technical tag anchored cleanly inside/outside frame */}
                       <span
                         className={`absolute max-w-[calc(100%-8px)] truncate whitespace-nowrap rounded-[3px] border border-accent bg-surface-0 px-1.5 py-0.5 font-mono text-[8.5px] font-semibold tracking-wider text-accent-fg shadow-md sm:max-w-none sm:px-2 sm:text-[9.5px] ${
-                          top > 18 ? "-top-6" : "top-1.5 sm:top-2"
+                          top > 12 ? "-top-6" : "top-1.5 sm:top-2"
                         } ${left > 60 ? "right-1" : "left-1"}`}
                       >
                         {frameConfig.tag}

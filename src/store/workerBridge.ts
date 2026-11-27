@@ -7,7 +7,10 @@ import {
   syncCatalogWorkerPool,
   syncCatalogWorkerTaxonomy,
 } from "../workers/catalogWorkerClient";
-import { reconcileSelectionAfterFilter } from "./filterEngine";
+import {
+  reconcileSelectionAfterFilter,
+  shouldPreserveDeckSelection,
+} from "./filterEngine";
 import { resetPlayheadClock } from "./playheadClock";
 import { buildDuplicateOrderMap } from "./slices/duplicateSlice";
 import type { SampleStoreState } from "./types";
@@ -187,7 +190,8 @@ export function dispatchWorkerInstantMemoryFilter(params: {
       filtered,
       live.selectedSample,
       live.selectedSampleIds,
-      preserveMultiSelect
+      preserveMultiSelect,
+      shouldPreserveDeckSelection(live)
     );
     const selectionChanged =
       (reconciled.nextSelected?.id ?? null) !== (live.selectedSample?.id ?? null);
@@ -201,12 +205,15 @@ export function dispatchWorkerInstantMemoryFilter(params: {
       selectedSample: reconciled.nextSelected,
       selectedSampleIds: reconciled.nextSelectedIds,
       lastSelectedIndex: reconciled.nextSelectedIndex,
-      ...(selectionChanged ? { sliceRange: null, currentTimeSec: 0 } : {}),
-      durationSec: reconciled.nextSelected
-        ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
-        : selectionChanged
-          ? 0
-          : live.durationSec,
+      ...(selectionChanged
+        ? {
+            sliceRange: null,
+            currentTimeSec: 0,
+            durationSec: reconciled.nextSelected
+              ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
+              : 0,
+          }
+        : {}),
     });
   });
 }

@@ -15,6 +15,7 @@ struct AssetScopeMemo {
     user_dir: PathBuf,
     libs: BTreeSet<PathBuf>,
     slices: BTreeSet<PathBuf>,
+    layers: BTreeSet<PathBuf>,
 }
 
 static LAST_ASSET_SCOPE: Mutex<Option<AssetScopeMemo>> = Mutex::new(None);
@@ -23,21 +24,34 @@ static LAST_ASSET_SCOPE: Mutex<Option<AssetScopeMemo>> = Mutex::new(None);
 /// verifying UNC/ADS/symlink-ancestor safety.
 pub(crate) fn register_runtime_asset_dir(
     app: &tauri::AppHandle,
-    _user_dir: &Path,
+    user_dir: &Path,
     dir: &Path,
 ) {
     use tauri::Manager;
 
     let raw = dir.to_string_lossy();
-    if security::is_unc_or_network_path(&raw) || security::has_ntfs_ads_colon(&raw) {
+    if raw.trim().is_empty()
+        || security::is_unc_or_network_path(&raw)
+        || security::has_ntfs_ads_colon(&raw)
+        || security::has_parent_dir_traversal(&raw)
+        || security::is_forbidden_os_or_root_path(&raw)
+    {
         return;
     }
     if security::reject_symlink_ancestors(dir).is_err() {
         return;
     }
-    let clean = fs::canonicalize(dir)
-        .map(|p| security::strip_verbatim_prefix(&p))
-        .unwrap_or_else(|_| security::strip_verbatim_prefix(dir));
+    let Ok(canon) = fs::canonicalize(dir) else {
+        return;
+    };
+    let clean = security::strip_verbatim_prefix(&canon);
+    let clean_str = clean.to_string_lossy();
+    if security::is_unc_or_network_path(&clean_str)
+        || security::is_forbidden_os_or_root_path(&clean_str)
+        || security::ensure_not_inside_user_dir(user_dir, &clean).is_err()
+    {
+        return;
+    }
 
     let scope = app.asset_protocol_scope();
     let _ = scope.allow_directory(&clean, true);
@@ -95,11 +109,16 @@ pub fn reconcile_library_asset_scopes(
         .into_iter()
         .filter(|d| security::ensure_not_inside_user_dir(&state.user_dir, d).is_ok())
         .collect();
+    let current_layers: BTreeSet<PathBuf> = security::collect_profile_layer_dirs(conn, true)
+        .into_iter()
+        .filter(|d| security::ensure_not_inside_user_dir(&state.user_dir, d).is_ok())
+        .collect();
 
     let next_memo = AssetScopeMemo {
         user_dir: state.user_dir.clone(),
         libs: current_libs,
         slices: current_slices,
+        layers: current_layers,
     };
 
     {
@@ -115,9 +134,12 @@ pub fn reconcile_library_asset_scopes(
     for safe_sub in [
         state.user_dir.join("images"),
         state.user_dir.join("slices"),
+        state.user_dir.join("layers"),
         state.user_dir.join("trash"),
         state.user_dir.join("cache").join("slices"),
         state.user_dir.join("cache").join("slice_trash"),
+        state.user_dir.join("cache").join("layer_preview"),
+        state.user_dir.join("cache").join("layer_trash"),
         state.user_dir.join("cache").join("playback_fallback"),
     ] {
         if !security::is_unc_or_network_path(&safe_sub.to_string_lossy()) {
@@ -131,6 +153,9 @@ pub fn reconcile_library_asset_scopes(
     }
     for slice_dir in &next_memo.slices {
         let _ = scope.allow_directory(slice_dir, true);
+    }
+    for layer_dir in &next_memo.layers {
+        let _ = scope.allow_directory(layer_dir, true);
     }
 }
 

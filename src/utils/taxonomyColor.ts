@@ -120,6 +120,11 @@ export function generateDeterministicFullSpectrumColor(name: string): string {
   return hslToHex(h, s, l);
 }
 
+export function deterministicColorForName(name: string): string {
+  if (!name || !name.trim()) return "#22C55E";
+  return generateDeterministicFullSpectrumColor(name);
+}
+
 /**
  * Generates a fresh random vivid color across the full 16M RGB gamut
  * while staying within a Dark/Light/Contrast legible saturation & lightness band.

@@ -4,10 +4,12 @@ import {
   hash2,
   hexToRgb,
   mixRgb,
+} from "./blueprintGrid";
+import {
   paintGridMist,
   paintGridMoon,
   paintGridRidge,
-} from "./blueprintGrid";
+} from "./blueprintShapes";
 import { AsciiRenderParams } from "./shared";
 
 export function renderCampOutpostPreset(params: AsciiRenderParams): void {

@@ -268,6 +268,9 @@ impl NativeEdgePill {
                 return;
             };
             if hbitmap.is_invalid() || bits_ptr.is_null() {
+                if !hbitmap.is_invalid() {
+                    let _ = DeleteObject(hbitmap.into());
+                }
                 let _ = DeleteDC(mem_dc);
                 let _ = ReleaseDC(None, screen_dc);
                 return;

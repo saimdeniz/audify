@@ -186,7 +186,10 @@ export function createAppearanceAndModalActions(
           return;
         }
         applyAutoAccentOrFallback(extracted);
-      });
+      })
+        .catch((err) => {
+          console.error("Failed extracting ASCII Magic auto accent:", err);
+        });
       return;
     }
 
@@ -206,7 +209,10 @@ export function createAppearanceAndModalActions(
         if (extracted) {
           applyAutoAccentOrFallback(extracted);
         }
-      });
+      })
+        .catch((err) => {
+          console.error("Failed extracting wallpaper auto accent:", err);
+        });
       return;
     }
 

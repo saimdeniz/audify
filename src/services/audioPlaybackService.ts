@@ -1,4 +1,4 @@
-import { getPlayheadSec } from "../store/playheadClock";
+import { getPlayheadSec } from "../utils/playheadClock";
 import { nativeAudioReleaseHandle } from "./nativeAudioClient";
 
 let activeAudioElementRef: HTMLAudioElement | null = null;

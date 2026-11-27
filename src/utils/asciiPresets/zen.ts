@@ -1,7 +1,18 @@
 import {
-  clamp01, createGridFrame, hash2, hexToRgb, mixRgb,
-  paintGridBox, paintGridCircleRing, paintGridCloud, paintGridLine, paintGridMist, paintGridSun,
+  clamp01,
+  createGridFrame,
+  hash2,
+  hexToRgb,
+  mixRgb,
 } from "./blueprintGrid";
+import {
+  paintGridBox,
+  paintGridCircleRing,
+  paintGridCloud,
+  paintGridLine,
+  paintGridMist,
+  paintGridSun,
+} from "./blueprintShapes";
 import { AsciiRenderParams } from "./shared";
 
 export function renderZenPreset(params: AsciiRenderParams): void {

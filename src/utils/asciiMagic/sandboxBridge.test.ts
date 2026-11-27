@@ -28,5 +28,10 @@ describe("AsciiMagicSandboxBridge origin validation", () => {
     await expect(asciiMagicSandbox.loadPiece("koi-pond")).rejects.toThrow(
       "Invalid ASCII sandbox runner origin"
     );
+
+    convertFileSrcMock.mockReturnValueOnce(`${window.location.origin}/runner.html`);
+    await expect(asciiMagicSandbox.loadPiece("koi-pond")).rejects.toThrow(
+      "Invalid ASCII sandbox runner origin"
+    );
   });
 });

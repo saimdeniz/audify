@@ -167,10 +167,12 @@ const SettingsModalInner: React.FC<{ standalone?: boolean }> = ({
       }
 
       if (e.key === "Escape") {
-        // Yield Escape to nested portals (ColorPickerPopover, QuickCreatePopover, modal confirm) or open dropdowns
+        // Yield Escape to nested portals (ColorPickerPopover, QuickCreatePopover, CustomFacetPopover, modal confirm), open dropdowns, or active inline edit inputs
+        const activeEl = document.activeElement as HTMLElement | null;
         if (
+          activeEl?.hasAttribute("data-inline-edit") ||
           document.querySelector(
-            "[data-modal-portal='true']:not([data-settings-modal-portal='true']), [data-color-picker-portal], [data-quick-create-portal], [data-settings-dropdown-open='true']"
+            "[data-modal-portal='true']:not([data-settings-modal-portal='true']), [data-popover-portal='true'], [data-color-picker-portal], [data-quick-create-portal], [data-settings-dropdown-open='true']"
           )
         ) {
           return;

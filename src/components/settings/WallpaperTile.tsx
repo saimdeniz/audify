@@ -91,13 +91,13 @@ export const WallpaperTile: React.FC<WallpaperTileProps> = React.memo(
         )}
 
         {showFolderBadge && (
-          <span className="absolute bottom-1 left-1 max-w-[70%] truncate px-1 py-[1px] rounded-xs bg-surface-1 border border-line-strong font-mono text-[8px] font-medium text-fg-2 shadow-xs pointer-events-none">
+          <span className="absolute bottom-1 left-1 max-w-[70%] truncate px-1 py-[1px] rounded-xs bg-surface-1 border border-line-strong font-mono text-[9.5px] font-medium text-fg-2 shadow-xs pointer-events-none">
             {subfolder}
           </span>
         )}
 
         {mediaBadge && (
-          <span className="absolute bottom-1 right-1 px-1 py-[1px] rounded-xs bg-surface-1 border border-line-strong font-mono text-[8.5px] font-bold text-accent-fg uppercase tracking-wider shadow-xs pointer-events-none">
+          <span className="absolute bottom-1 right-1 px-1 py-[1px] rounded-xs bg-surface-1 border border-line-strong font-mono text-[9.5px] font-bold text-accent-fg uppercase tracking-wider shadow-xs pointer-events-none">
             {mediaBadge}
           </span>
         )}

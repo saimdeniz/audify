@@ -2,14 +2,16 @@ import {
   clamp01,
   createGridFrame,
   mixRgb,
+  Rgb,
+} from "./blueprintGrid";
+import {
   paintGridBox,
   paintGridCircleRing,
   paintGridCloud,
   paintGridLine,
   paintGridRidge,
   paintGridSun,
-  Rgb,
-} from "./blueprintGrid";
+} from "./blueprintShapes";
 import { renderRetroArcadePreset } from "./retroArcade";
 import { AsciiRenderParams } from "./shared";
 

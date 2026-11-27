@@ -15,6 +15,7 @@ import {
   Hash,
   Inbox,
   Layers,
+  LayoutGrid,
   Music,
   Pencil,
   Star,
@@ -82,6 +83,7 @@ export const SampleBatchActionBar: React.FC<SampleBatchActionBarProps> = ({
   );
   const openBatchRenameModal = useSampleStore((s) => s.openBatchRenameModal);
   const addSamplesToBin = useSampleStore((s) => s.addSamplesToBin);
+  const sendSamplesToLayers = useSampleStore((s) => s.sendSamplesToLayers);
   const copyAttributionForSamples = useSampleStore(
     (s) => s.copyAttributionForSamples
   );
@@ -106,7 +108,10 @@ export const SampleBatchActionBar: React.FC<SampleBatchActionBarProps> = ({
     const update = () => {
       const rect = getTrigger()?.getBoundingClientRect();
       if (!rect) return;
-      const width = batchPopover === "collection" ? 236 : 210;
+      const width = Math.min(
+        batchPopover === "collection" ? 236 : 264,
+        Math.max(180, window.innerWidth - 16)
+      );
       const left = Math.max(
         8,
         Math.min(rect.left, window.innerWidth - width - 8)
@@ -169,7 +174,7 @@ export const SampleBatchActionBar: React.FC<SampleBatchActionBarProps> = ({
       data-mica-overlay="true"
       onClick={(e) => e.stopPropagation()}
       style={{ zIndex: Z_INDEX.batchBar }}
-      className={`absolute left-1/2 -translate-x-1/2 w-max max-w-[96%] bg-surface-2 border border-accent/85 rounded-md flex items-center shadow-2xl whitespace-nowrap ${
+      className={`absolute left-1/2 -translate-x-1/2 w-max max-w-[calc(100%-16px)] overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden bg-surface-2 border border-accent/85 rounded-md flex items-center shadow-2xl whitespace-nowrap ${
         compact
           ? "bottom-2.5 px-2 py-1 gap-1"
           : "bottom-5 px-3 py-1.5 gap-2"
@@ -225,7 +230,7 @@ export const SampleBatchActionBar: React.FC<SampleBatchActionBarProps> = ({
           }`}
           title="Add selected to Collection"
         >
-          <Layers className={`${iconClass} text-accent-fg`} />
+          <LayoutGrid className={`${iconClass} text-accent-fg`} />
           <ChevronDown className={chevClass} />
         </button>
       </div>
@@ -335,6 +340,17 @@ export const SampleBatchActionBar: React.FC<SampleBatchActionBarProps> = ({
       >
         <Inbox className={`${iconClass} text-accent-fg`} />
       </button>
+
+      {!trashFilterActive && (
+        <button
+          type="button"
+          onClick={() => void sendSamplesToLayers(selectedSampleObjects)}
+          className={`${btnSquareClass} bg-surface-3 hover:border-accent border border-line text-fg inline-flex items-center justify-center rounded-sm shrink-0 active:scale-[0.97] transition-all`}
+          title={`Send ${selectedSampleIds.length} tracks to Layers Editor`}
+        >
+          <Layers className={`${iconClass} text-accent-fg`} />
+        </button>
+      )}
 
       {enableLicensesSystem && (
         <button

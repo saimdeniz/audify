@@ -204,7 +204,7 @@ describe("Unified Option C Slice Trash & Theme-Accent Empty Button", () => {
 
     fireEvent.click(emptyBtn);
     expect(
-      await screen.findByRole("dialog", { name: /Empty Recycle Bin/i })
+      await screen.findByRole("alertdialog", { name: /Empty Recycle Bin/i })
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /^Empty$/i }));
 

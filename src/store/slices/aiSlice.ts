@@ -9,16 +9,11 @@ import {
 import type {
   AiModelStatus,
   AiSimilarityScope,
-  AiTagSuggestionItem,
   AiTaggingMode,
   SampleItem,
 } from "../../types";
 import { invokeCommand } from "../../utils/tauriCommands";
-import {
-  isStandaloneSettingsWindow,
-  postCrossWindowSync,
-  safeSetItem,
-} from "../storageHelpers";
+import { safeSetItem } from "../storageHelpers";
 import type { StoreSliceContext } from "../types";
 import type { AiModelLifecycleActions } from "./aiModelLifecycle";
 import type {
@@ -26,6 +21,7 @@ import type {
   SimilaritySearchOverrides,
   SimilaritySeqTracker,
 } from "./aiSimilarityActions";
+import type { AiSeqTracker } from "./aiSuggestionActions";
 
 export interface AiSliceActions {
   fetchAiModelStatus: () => Promise<AiModelStatus | null>;
@@ -86,6 +82,11 @@ const similaritySeqTracker: SimilaritySeqTracker = {
   current: () => similaritySearchSeq,
 };
 
+const aiSuggestionsSeqTracker: AiSeqTracker = {
+  bump: () => ++aiSuggestionsSeq,
+  current: () => aiSuggestionsSeq,
+};
+
 export function cancelPendingSimilaritySearch(): void {
   similaritySearchSeq += 1;
   if (similarityRefetchTimer !== null) {
@@ -99,22 +100,16 @@ export function invalidateAiSliceAsyncState(): void {
   aiSuggestionsSeq += 1;
 }
 
-function groupSuggestionsBySample(
-  items: AiTagSuggestionItem[]
-): Record<number, AiTagSuggestionItem[]> {
-  const map: Record<number, AiTagSuggestionItem[]> = {};
-  for (const item of items) {
-    if (!map[item.sample_id]) {
-      map[item.sample_id] = [item];
-    } else {
-      map[item.sample_id].push(item);
-    }
-  }
-  return map;
-}
-
 export function createAiSlice(ctx: StoreSliceContext): AiSliceActions {
   const { set, get, applyInstantMemoryFilter, emitNotice } = ctx;
+
+  let cachedSuggestionMod: typeof import("./aiSuggestionActions") | null = null;
+  const loadSuggestionMod = async () => {
+    if (!cachedSuggestionMod) {
+      cachedSuggestionMod = await import("./aiSuggestionActions");
+    }
+    return cachedSuggestionMod;
+  };
 
   let cachedLifecycle: AiModelLifecycleActions | null = null;
   const loadLifecycle = async (): Promise<AiModelLifecycleActions> => {
@@ -264,102 +259,13 @@ export function createAiSlice(ctx: StoreSliceContext): AiSliceActions {
     analyzeSamplesAi: async (opts) => {
       if (get().isAnalyzingAi) return;
       const epoch = ctx.getProfileEpoch();
-
-      if (opts?.silentIfNotReady) {
-        const status =
-          get().aiModelStatus ?? (await get().fetchAiModelStatus());
-        if (epoch !== ctx.getProfileEpoch() || !status?.ready) return;
-      }
-
-      const taggingMode = get().aiTaggingMode;
-      set({
-        isAnalyzingAi: true,
-        aiIndexProgress: {
-          processed: 0,
-          total: opts?.sampleIds?.length ?? 0,
-          percentage: 0,
-          current_file: "Preparing ONNX audio analysis...",
-          indexed_count: 0,
-          tags_suggested: 0,
-          avg_ms_per_clip: 0,
-        },
-        statusMessage: "Running local AI audio analysis...",
-      });
-
-      try {
-        const summary = await invokeCommand("analyze_samples_ai", {
-          sampleIds: opts?.sampleIds ?? null,
-          confidenceThreshold: get().aiTagConfidenceThreshold,
-          autoApply: taggingMode === "auto_apply",
-          taggingMode,
-          reanalyzeExisting: opts?.reanalyzeExisting ?? false,
-          knnLearning: get().aiKnnTagLearning,
-        });
-        if (epoch !== ctx.getProfileEpoch()) {
-          set({ isAnalyzingAi: false, aiIndexProgress: null });
-          return;
-        }
-        const scopedSampleIds =
-          opts?.sampleIds && opts.sampleIds.length > 0 ? opts.sampleIds : undefined;
-        await Promise.all([
-          get().fetchAiTagSuggestions(scopedSampleIds),
-          get().fetchAiModelStatus(),
-        ]);
-        if (epoch !== ctx.getProfileEpoch()) {
-          set({ isAnalyzingAi: false, aiIndexProgress: null });
-          return;
-        }
-        if (summary.tags_auto_applied > 0) {
-          await get().refreshAfterCatalogMutation({
-            reloadSamples: true,
-            syncCatalog: true,
-          });
-        } else if (summary.indexed > 0 || summary.suggestions_added > 0) {
-          postCrossWindowSync("catalog");
-        }
-        if (epoch !== ctx.getProfileEpoch()) {
-          set({ isAnalyzingAi: false, aiIndexProgress: null });
-          return;
-        }
-        const skippedSilent = summary.skipped_silent ?? 0;
-        const tagSummary =
-          taggingMode === "vectors_only"
-            ? "similarity vectors only"
-            : `${summary.suggestions_added + summary.tags_auto_applied} tags`;
-        const silentSuffix =
-          skippedSilent > 0
-            ? ` · ${skippedSilent} silent skipped`
-            : "";
-        const msg = summary.canceled
-          ? `AI analysis canceled (${summary.indexed} indexed)`
-          : summary.indexed === 0
-          ? skippedSilent > 0
-            ? `All analyzable samples are already AI indexed (${skippedSilent} silent ${skippedSilent === 1 ? "track" : "tracks"} skipped).`
-            : "All active samples are already AI indexed."
-          : `AI indexed ${summary.indexed} samples · ${tagSummary}${silentSuffix} (${summary.avg_ms_per_clip.toFixed(1)} ms/clip)`;
-        set({
-          isAnalyzingAi: false,
-          aiIndexProgress: null,
-          statusMessage: msg,
-        });
-        if (!(opts?.silentIfNotReady && summary.indexed === 0)) {
-          emitNotice(
-            msg,
-            summary.indexed === 0 && skippedSilent > 0 ? "info" : "success"
-          );
-        }
-      } catch (err) {
-        set({ isAnalyzingAi: false, aiIndexProgress: null });
-        if (epoch !== ctx.getProfileEpoch()) return;
-        if (!opts?.silentIfNotReady) {
-          emitNotice(`AI analysis failed: ${String(err)}`, "error");
-        }
-      }
+      const mod = cachedSuggestionMod ?? (await loadSuggestionMod());
+      await mod.executeAnalyzeSamplesAi(ctx, epoch, opts);
     },
 
     runKnnTagLearning: async (sampleIds) => {
-      const { executeKnnTagLearning } = await import("./aiSuggestionActions");
-      await executeKnnTagLearning(ctx, sampleIds);
+      const mod = cachedSuggestionMod ?? (await loadSuggestionMod());
+      await mod.executeKnnTagLearning(ctx, sampleIds);
     },
 
     cancelAiAnalysis: async () => {
@@ -371,60 +277,20 @@ export function createAiSlice(ctx: StoreSliceContext): AiSliceActions {
     },
 
     fetchAiTagSuggestions: async (sampleIds) => {
-      if (isStandaloneSettingsWindow()) return;
       const scopedIds =
         sampleIds && sampleIds.length > 0 ? sampleIds : undefined;
-      const reqSeq = scopedIds ? aiSuggestionsSeq : ++aiSuggestionsSeq;
+      const reqSeq = scopedIds
+        ? aiSuggestionsSeqTracker.current()
+        : aiSuggestionsSeqTracker.bump();
       const epoch = ctx.getProfileEpoch();
-      try {
-        const items = await invokeCommand("get_ai_tag_suggestions", {
-          status: "pending",
-          sampleIds: scopedIds ?? null,
-        });
-        if (
-          epoch !== ctx.getProfileEpoch() ||
-          (!scopedIds && reqSeq !== aiSuggestionsSeq)
-        ) {
-          return;
-        }
-        if (!Array.isArray(items)) return;
-        const grouped = groupSuggestionsBySample(items);
-
-        if (scopedIds) {
-          const nextMap = { ...get().aiSuggestionsBySampleId };
-          let deltaCount = 0;
-          for (const sid of scopedIds) {
-            if (nextMap[sid]) {
-              deltaCount -= nextMap[sid].length;
-              delete nextMap[sid];
-            }
-          }
-          for (const [sidStr, list] of Object.entries(grouped)) {
-            const sid = Number(sidStr);
-            nextMap[sid] = list;
-            deltaCount += list.length;
-          }
-          set((state) => ({
-            aiSuggestionsBySampleId: nextMap,
-            pendingAiSuggestionsCount: Math.max(
-              0,
-              state.pendingAiSuggestionsCount + deltaCount
-            ),
-          }));
-          return;
-        }
-
-        set((state) => ({
-          aiSuggestionsBySampleId: grouped,
-          pendingAiSuggestionsCount:
-            items.length < 5000
-              ? items.length
-              : Math.max(items.length, state.pendingAiSuggestionsCount),
-        }));
-      } catch (err) {
-        if (epoch !== ctx.getProfileEpoch()) return;
-        console.error("Failed fetching AI tag suggestions:", err);
-      }
+      const mod = cachedSuggestionMod ?? (await loadSuggestionMod());
+      await mod.executeFetchAiTagSuggestions(
+        ctx,
+        aiSuggestionsSeqTracker,
+        reqSeq,
+        epoch,
+        scopedIds
+      );
     },
 
     findSimilarSamples: async (anchor, overrides) => {
@@ -470,59 +336,18 @@ export function createAiSlice(ctx: StoreSliceContext): AiSliceActions {
     },
 
     resolveAiTagSuggestion: async (sampleId, tagName, approve) => {
-      const curMap = get().aiSuggestionsBySampleId;
-      const list = curMap[sampleId] || [];
-      const remaining = list.filter(
-        (item) => item.tag_name.toLowerCase() !== tagName.toLowerCase()
-      );
-      const nextMap = { ...curMap };
-      if (remaining.length > 0) {
-        nextMap[sampleId] = remaining;
-      } else {
-        delete nextMap[sampleId];
-      }
-      const nextCount = Math.max(
-        0,
-        get().pendingAiSuggestionsCount - (list.length - remaining.length)
-      );
-      set({
-        aiSuggestionsBySampleId: nextMap,
-        pendingAiSuggestionsCount: nextCount,
-      });
-
-      try {
-        await invokeCommand("resolve_ai_tag_suggestion", {
-          sampleId,
-          tagName,
-          approve,
-        });
-        if (approve) {
-          await get().refreshAfterCatalogMutation({
-            reloadSamples: true,
-            syncCatalog: true,
-          });
-        } else {
-          postCrossWindowSync("catalog");
-        }
-        void get().fetchAiModelStatus();
-      } catch (err) {
-        await get().fetchAiTagSuggestions();
-        emitNotice(`Failed updating AI tag suggestion: ${String(err)}`, "error");
-      }
+      const mod = cachedSuggestionMod ?? (await loadSuggestionMod());
+      await mod.executeResolveAiTagSuggestion(ctx, sampleId, tagName, approve);
     },
 
     approveAllAiTagSuggestions: async (sampleIds) => {
-      const { runBatchSuggestionMutation } = await import(
-        "./aiSuggestionActions"
-      );
-      await runBatchSuggestionMutation(get, emitNotice, "approve", sampleIds);
+      const mod = cachedSuggestionMod ?? (await loadSuggestionMod());
+      await mod.runBatchSuggestionMutation(get, emitNotice, "approve", sampleIds);
     },
 
     dismissAllAiTagSuggestions: async (sampleIds) => {
-      const { runBatchSuggestionMutation } = await import(
-        "./aiSuggestionActions"
-      );
-      await runBatchSuggestionMutation(get, emitNotice, "dismiss", sampleIds);
+      const mod = cachedSuggestionMod ?? (await loadSuggestionMod());
+      await mod.runBatchSuggestionMutation(get, emitNotice, "dismiss", sampleIds);
     },
   };
 }

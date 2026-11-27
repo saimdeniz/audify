@@ -13,6 +13,7 @@ import {
   WaveformStyle,
 } from "../../types";
 import { AudioOutputDeviceRow } from "./AudioOutputDeviceRow";
+import { LayersAudioCard } from "./LayersAudioCard";
 import { ToggleRow } from "./ToggleRow";
 
 const WAVEFORM_PREVIEW_SAMPLES = [
@@ -224,6 +225,9 @@ export const AudioTab: React.FC = () => {
           />
         </div>
       </div>
+
+      {/* CARD 5: LAYERS & MIX EXPORT */}
+      <LayersAudioCard />
       </div>
 
       <div className="space-y-3 min-w-0">

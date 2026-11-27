@@ -206,7 +206,7 @@ export const CollectionsStudioTree: React.FC<CollectionsStudioTreeProps> = ({
           </div>
           <span className="flex items-center gap-1.5 shrink-0 ml-2">
             {isDropHover && (
-              <span className="font-mono text-[8.5px] text-accent-fg font-semibold">
+              <span className="font-mono text-[9.5px] text-accent-fg font-semibold">
                 ↳ Nest
               </span>
             )}
@@ -271,7 +271,7 @@ export const CollectionsStudioTree: React.FC<CollectionsStudioTreeProps> = ({
         <div className="flex items-center space-x-2 truncate min-w-0">
           <Zap className="w-3.5 h-3.5 text-accent-fg shrink-0" />
           <span className="font-medium truncate text-fg">{col.name}</span>
-          <span className="text-[8.5px] font-mono font-bold px-1 py-0.2 rounded-xs bg-accent-soft text-accent-fg border border-accent/40 shrink-0 uppercase tracking-wider">
+          <span className="text-[9.5px] font-mono font-bold px-1 py-0.2 rounded-xs bg-accent-soft text-accent-fg border border-accent/40 shrink-0 uppercase tracking-wider">
             SMART
           </span>
         </div>
@@ -436,7 +436,7 @@ export const CollectionsStudioTree: React.FC<CollectionsStudioTreeProps> = ({
                     </span>
                     <span className="flex items-center gap-1.5 shrink-0">
                       {activeDropKey === "sec:manual" && (
-                        <span className="text-[8.5px] text-accent-fg font-semibold">
+                        <span className="text-[9.5px] text-accent-fg font-semibold">
                           ↳ Promote to Root
                         </span>
                       )}

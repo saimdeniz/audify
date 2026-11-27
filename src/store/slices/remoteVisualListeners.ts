@@ -59,6 +59,8 @@ export function applyRemoteSettingsFromStorage(get: StoreGet, set: StoreSet): vo
     enableLicensesSystem: snap.enableLicenses,
     autoBinOnNleDrag: snap.autoBinOnNleDrag,
     customSliceExportPath: snap.customSliceExportPath,
+    customLayerExportPath: snap.customLayerExportPath,
+    autoSaveLayerOnNleDrag: snap.autoSaveLayerOnNleDrag,
     smartSearchSynonyms: snap.smartSearchSynonyms,
     autoPreview: snap.autoPreview,
     isLooping: snap.isLooping,

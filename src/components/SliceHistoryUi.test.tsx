@@ -379,7 +379,10 @@ describe("Slices UI Unification, Favorites, Undo/Redo & Guards", () => {
     fireEvent.click(screen.getByTitle(/Save slice to export folder & Slices tab/i));
     const input = await screen.findByDisplayValue("wolf_rztowy_01_1.20-2.85s");
     fireEvent.change(input, { target: { value: "CustomWolf" } });
-    fireEvent.click(screen.getByRole("button", { name: /^Create$/i }));
+    const saveDialog = screen.getByRole("dialog", { name: "Save Slice" });
+    const saveSubmit = saveDialog.querySelector<HTMLButtonElement>('button[type="submit"]');
+    expect(saveSubmit?.textContent).toBe("Save");
+    fireEvent.click(saveSubmit!);
     await waitFor(() => {
       expect(onSave).toHaveBeenCalledWith("CustomWolf");
     });

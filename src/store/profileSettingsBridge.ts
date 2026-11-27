@@ -305,6 +305,18 @@ export function applyProfileSettingsToStore(
       : isBoot
       ? cur.customSliceExportPath
       : "";
+  const customLayerExportPath =
+    typeof parsed.customLayerExportPath === "string"
+      ? parsed.customLayerExportPath
+      : isBoot
+      ? cur.customLayerExportPath
+      : "";
+  const autoSaveLayerOnNleDrag = resolveBool(
+    parsed.autoSaveLayerOnNleDrag,
+    isBoot,
+    cur.autoSaveLayerOnNleDrag,
+    false
+  );
 
   const sliceMicroFade = resolveBool(parsed.sliceMicroFade, isBoot, cur.sliceMicroFade, false);
   const exportAudioPreset: ExportAudioPreset =
@@ -420,6 +432,8 @@ export function applyProfileSettingsToStore(
     autoCreateCollectionSubfolders,
     autoRouteCollectionDrops,
     customSliceExportPath,
+    customLayerExportPath,
+    autoSaveLayerOnNleDrag,
     ...aiResolved.fields,
   };
 

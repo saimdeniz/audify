@@ -7,6 +7,8 @@ import { SampleTable } from "./components/SampleTable";
 import { BottomStatusBar, TopHeaderBar } from "./components/StatusBar";
 import { TopTransportDeck } from "./components/TopTransportDeck";
 import { useAppGlobalShortcuts } from "./hooks/useAppGlobalShortcuts";
+import { useStartupUpdateCheck } from "./hooks/useAppUpdate";
+import { useNavigationHistoryController } from "./hooks/useNavigationHistory";
 import {
   hasActiveVisualBackdrop,
   isStandaloneSettingsWindow,
@@ -69,7 +71,10 @@ export const App: React.FC = () => {
     Boolean(s.pendingTrashRequest || s.pendingFileConflictPrompt)
   );
   const hasBatchRenameModal = useSampleStore(
-    (s) => s.batchRenameSampleIds !== null || s.batchRenameSliceIds !== null
+    (s) =>
+      s.batchRenameSampleIds !== null ||
+      s.batchRenameSliceIds !== null ||
+      s.batchRenameLayerIds !== null
   );
   const clearCreditToast = useSampleStore((s) => s.clearCreditToast);
   const pauseCreditToast = useSampleStore((s) => s.pauseCreditToast);
@@ -122,6 +127,8 @@ export const App: React.FC = () => {
   }, []);
 
   useAppGlobalShortcuts();
+  useNavigationHistoryController();
+  useStartupUpdateCheck();
   const [showShortcutsGuide, setShowShortcutsGuide] = useState(false);
 
   useEffect(() => {

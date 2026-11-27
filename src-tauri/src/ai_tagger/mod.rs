@@ -282,53 +282,77 @@ pub fn infer_single_sample_path(
     model.infer_waveform(waveform)
 }
 
+/// Inserts/promotes an AI-approved tag on `sample_id` while caching `(tag_id, is_genre)`
+/// across a batch transaction so bulk approval avoids N+1 `tags`/`tag_facets` lookups and
+/// defers `sync_primary_genre_for_samples` to a single batched pass.
+pub(crate) fn ensure_manual_tag_on_sample_batched(
+    conn: &Connection,
+    sample_id: i64,
+    tag_name: &str,
+    tag_cache: &mut std::collections::HashMap<String, (i64, bool)>,
+) -> Result<bool, String> {
+    let trimmed = tag_name.trim();
+    if trimmed.is_empty() || trimmed.len() > 64 {
+        return Err("Invalid tag name".to_string());
+    }
+    let key = trimmed.to_lowercase();
+    let (tag_id, is_genre) = if let Some(&cached) = tag_cache.get(&key) {
+        cached
+    } else {
+        let id: i64 = match conn.query_row(
+            "SELECT id FROM tags WHERE LOWER(name) = LOWER(?1) LIMIT 1",
+            [trimmed],
+            |r| r.get(0),
+        ) {
+            Ok(id) => id,
+            Err(_) => crate::db::ensure_taxonomy_tag(conn, trimmed, None, None, None, true)
+                .or_else(|_| {
+                    let color = deterministic_color_for_name(trimmed);
+                    conn.execute(
+                        "INSERT INTO tags (name, color, is_manual) VALUES (?1, ?2, 1)",
+                        params![trimmed, color],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    Ok::<i64, String>(conn.last_insert_rowid())
+                })?,
+        };
+        let genre_flag = conn
+            .query_row::<i64, _, _>(
+                "SELECT COALESCE(facet_id, 1) FROM tags WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .map(|fid| crate::db::taxonomy::facet_domain_in_db(conn, fid) == "genres")
+            .unwrap_or(false);
+        tag_cache.insert(key, (id, genre_flag));
+        (id, genre_flag)
+    };
+
+    let mut stmt = conn
+        .prepare_cached(
+            "INSERT INTO sample_tags (sample_id, tag_id, is_manual, source)
+             VALUES (?1, ?2, 1, 'ai_approved')
+             ON CONFLICT(sample_id, tag_id) DO UPDATE SET
+                is_manual = 1,
+                source = CASE WHEN sample_tags.source = 'manual' THEN 'manual' ELSE 'ai_approved' END",
+        )
+        .map_err(|e| e.to_string())?;
+    stmt.execute(params![sample_id, tag_id])
+        .map_err(|e| e.to_string())?;
+
+    Ok(is_genre)
+}
+
 pub fn ensure_manual_tag_on_sample(
     conn: &Connection,
     sample_id: i64,
     tag_name: &str,
 ) -> Result<(), String> {
-    let trimmed = tag_name.trim();
-    if trimmed.is_empty() || trimmed.len() > 64 {
-        return Err("Invalid tag name".to_string());
+    let mut cache = std::collections::HashMap::new();
+    let is_genre = ensure_manual_tag_on_sample_batched(conn, sample_id, tag_name, &mut cache)?;
+    if is_genre {
+        let _ = crate::db::sync_primary_genre_for_samples(conn, &[sample_id]);
     }
-    let tag_id: i64 = match conn.query_row(
-        "SELECT id FROM tags WHERE LOWER(name) = LOWER(?1) LIMIT 1",
-        [trimmed],
-        |r| r.get(0),
-    ) {
-        Ok(id) => id,
-        Err(_) => crate::db::ensure_taxonomy_tag(conn, trimmed, None, None, None, true)
-            .or_else(|_| {
-                let color = deterministic_color_for_name(trimmed);
-                conn.execute(
-                    "INSERT INTO tags (name, color, is_manual) VALUES (?1, ?2, 1)",
-                    params![trimmed, color],
-                )
-                .map_err(|e| e.to_string())?;
-                Ok::<i64, String>(conn.last_insert_rowid())
-            })?,
-    };
-
-    conn.execute(
-        "INSERT INTO sample_tags (sample_id, tag_id, is_manual, source)
-         VALUES (?1, ?2, 1, 'ai_approved')
-         ON CONFLICT(sample_id, tag_id) DO UPDATE SET
-            is_manual = 1,
-            source = CASE WHEN sample_tags.source = 'manual' THEN 'manual' ELSE 'ai_approved' END",
-        params![sample_id, tag_id],
-    )
-    .map_err(|e| e.to_string())?;
-
-    if let Ok(fid) = conn.query_row::<i64, _, _>(
-        "SELECT COALESCE(facet_id, 1) FROM tags WHERE id = ?1",
-        params![tag_id],
-        |r| r.get(0),
-    ) {
-        if crate::db::taxonomy::facet_domain_in_db(conn, fid) == "genres" {
-            let _ = crate::db::sync_primary_genre_for_samples(conn, &[sample_id]);
-        }
-    }
-
     Ok(())
 }
 

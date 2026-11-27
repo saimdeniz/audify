@@ -792,4 +792,115 @@ describe("useSampleStore architecture & race guards", () => {
     await useSampleStore.getState().moveSamplesToTrash([101]);
     expect(useSampleStore.getState().favoritesCount).toBe(2);
   });
+
+  it("preserves live playback across tab switches and keeps Layers draft stable on Saved <-> Editor toggle", async () => {
+    const fav = makeSample(101, { file_name: "fav.wav", is_favorite: true });
+    const playingNonFav = makeSample(102, {
+      file_name: "playing.wav",
+      is_favorite: false,
+    });
+    const draftSample = makeSample(-999_999, {
+      file_name: "Layer_001.wav",
+      file_path: "layer://draft",
+      duration_ms: 21320,
+    });
+
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_layer_history") return [];
+      return null;
+    });
+
+    // 1. Playing non-favorite track in All Files -> switch to Favorites must NOT hijack deck or stop audio
+    useSampleStore.setState({
+      allProfileSamples: [fav, playingNonFav],
+      rawSamples: [fav, playingNonFav],
+      samples: [fav, playingNonFav],
+      selectedSample: playingNonFav,
+      selectedSampleIds: [102],
+      isPlaying: true,
+      favoriteOnly: false,
+      layersFilterActive: false,
+    });
+
+    useSampleStore.getState().setFavoriteOnly(true);
+    let st = useSampleStore.getState();
+    expect(st.samples.map((s) => s.id)).toEqual([101]);
+    expect(st.selectedSample?.id).toBe(102);
+    expect(st.isPlaying).toBe(true);
+    expect(st.selectedSampleIds).toEqual([]);
+
+    // 2. Playing Layer draft on Saved tab -> toggle to Editor must keep draft playing without flashing library sample or re-rendering
+    invokeMock.mockClear();
+    useSampleStore.setState({
+      allProfileSamples: [fav, playingNonFav],
+      rawSamples: [fav, playingNonFav],
+      samples: [fav, playingNonFav],
+      layersFilterActive: true,
+      layersWorkspaceTab: "saved",
+      selectedSample: draftSample,
+      selectedSampleIds: [],
+      isPlaying: true,
+      favoriteOnly: false,
+      layerDraftPreview: {
+        durationSec: 21.32,
+        masterPeaks: [0.5, 0.8],
+        lanePeaks: [],
+        peakDb: 0,
+        clipped: false,
+      },
+      layerDraftRecipe: {
+        version: 1,
+        lanes: [
+          {
+            id: "lane-1",
+            name: "Lane 1",
+            colorHex: "#38BDF8",
+            volumeDb: 0,
+            muted: false,
+            solo: false,
+          },
+        ],
+        clips: [
+          {
+            id: "clip-1",
+            laneId: "lane-1",
+            sourceSampleId: 101,
+            sourcePath: fav.file_path,
+            sourceName: fav.file_name,
+            startSec: 0,
+            trimStartSec: 0,
+            trimEndSec: 1.5,
+            fadeInSec: 0,
+            fadeOutSec: 0,
+            gainDb: 0,
+            pitchSemitones: 0,
+            reversed: false,
+          },
+        ],
+        masterGainDb: 0,
+        snapEnabled: true,
+        snapGridSec: 0.1,
+      },
+    });
+
+    useSampleStore.getState().setLayersWorkspaceTab("editor");
+    st = useSampleStore.getState();
+    expect(st.selectedSample?.id).toBe(-999_999);
+    expect(st.isPlaying).toBe(true);
+    expect(
+      invokeMock.mock.calls.some((call) => call[0] === "preview_layer_mix")
+    ).toBe(false);
+
+    // 3. Paused Layer draft on Saved tab -> toggle to Editor also keeps draft pinned without library flash
+    useSampleStore.setState({
+      layersWorkspaceTab: "saved",
+      isPlaying: false,
+    });
+    useSampleStore.getState().setLayersWorkspaceTab("editor");
+    st = useSampleStore.getState();
+    expect(st.selectedSample?.id).toBe(-999_999);
+    expect(
+      invokeMock.mock.calls.some((call) => call[0] === "preview_layer_mix")
+    ).toBe(false);
+  });
 });

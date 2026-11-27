@@ -1,5 +1,6 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { normalizePathForMatch } from "./pathHelpers";
+import { registerWallpaperCacheCleaner } from "./wallpaperCacheRegistry";
 
 const MAX_CACHE_ENTRIES = 64;
 const MAX_VIEWPORT_CACHE_ENTRIES = 6;
@@ -451,6 +452,7 @@ export function clearWallpaperMediaCaches(
 
   if (scope === "all") {
     globalThumbEpoch += 1;
+    keyEvictEpochs.clear();
     for (const url of thumbMemoryCache.values()) {
       if (url.startsWith("blob:")) {
         URL.revokeObjectURL(url);
@@ -460,3 +462,10 @@ export function clearWallpaperMediaCaches(
     pendingThumbPromises.clear();
   }
 }
+
+registerWallpaperCacheCleaner("wallpaper_media_viewport", () => {
+  clearWallpaperMediaCaches("viewport");
+});
+registerWallpaperCacheCleaner("wallpaper_media_all", () => {
+  clearWallpaperMediaCaches("all");
+});

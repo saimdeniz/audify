@@ -1,6 +1,6 @@
 import React from "react";
 import { ChevronsDown, ChevronsUp, GripVertical, Search, X } from "lucide-react";
-import { deterministicColorForName } from "../../constants/palettes";
+import { deterministicColorForName } from "../../utils/taxonomyColor";
 import type { StudioDragVisual } from "../../hooks/useStudioPointerDrag";
 import type {
   Tag,

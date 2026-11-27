@@ -1,14 +1,12 @@
 import { releaseAudioFileHandleIfPathMatching } from "../../services/audioPlaybackService";
-import {
-  SliceHistoryEntry,
-  SliceOpHistoryItem,
-} from "../../types";
+import type { SliceOpHistoryItem } from "../../types";
 import { getCachedPreviewSlicePath } from "../../utils/drag";
 import { splitFileNameAndExt } from "../../utils/format";
 import { normalizePathForMatch } from "../../utils/pathHelpers";
 import {
   isSlicePreviewSample,
   sliceEntryToPreviewSample,
+  upsertSliceEntryInList,
 } from "../../utils/slicePreview";
 import { invokeCommand } from "../../utils/tauriCommands";
 import type { StoreSliceContext } from "../types";
@@ -20,19 +18,6 @@ import {
   createSliceUndoAndJumpActions,
   pushBoundedSliceHistory,
 } from "./sliceUndoAndJumpActions";
-
-export function upsertSliceEntryInList(
-  list: SliceHistoryEntry[],
-  entry: SliceHistoryEntry
-): SliceHistoryEntry[] {
-  const norm = normalizePathForMatch(entry.slice_path);
-  const filtered = list.filter(
-    (item) =>
-      item.id !== entry.id &&
-      normalizePathForMatch(item.slice_path) !== norm
-  );
-  return [entry, ...filtered];
-}
 
 export function createSliceHistoryActions(ctx: StoreSliceContext) {
   const { set, get, emitNotice } = ctx;

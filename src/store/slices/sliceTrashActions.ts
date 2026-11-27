@@ -1,7 +1,8 @@
 import { SliceHistoryEntry, SliceOpHistoryItem } from "../../types";
+import { upsertSliceEntryInList } from "../../utils/slicePreview";
 import { invokeCommand } from "../../utils/tauriCommands";
+import { resolveNextTrashViewState } from "../../utils/viewModes";
 import type { StoreSliceContext } from "../types";
-import { upsertSliceEntryInList } from "./sliceHistoryActions";
 import { pushBoundedSliceHistory } from "./sliceUndoAndJumpActions";
 
 interface SliceTrashActionDeps {
@@ -144,10 +145,19 @@ export function createSliceTrashActions(
         const nextSelectedIds = prev.selectedSliceIds.filter(
           (id) => !restoredIds.has(id)
         );
-        const shouldSwitchTab =
-          prev.trashFilterActive &&
-          prev.trashViewTab === "slices" &&
-          nextTrashed.length === 0;
+        const nextTrashedSliceCount = Math.max(
+          nextTrashed.length,
+          prev.trashedSliceCount - restored.length
+        );
+        const trashExitPatch = resolveNextTrashViewState(
+          prev.trashFilterActive,
+          prev.trashViewTab,
+          {
+            tracks: prev.trashedCount,
+            slices: nextTrashedSliceCount,
+            layers: prev.trashedLayerCount,
+          }
+        );
         const nextUndoItem: SliceOpHistoryItem | null =
           restored.length > 0 && !opts?.isHistoryReplay
             ? {
@@ -163,10 +173,7 @@ export function createSliceTrashActions(
         return {
           sliceHistory: nextHistory,
           trashedSliceHistory: nextTrashed,
-          trashedSliceCount: Math.max(
-            nextTrashed.length,
-            prev.trashedSliceCount - restored.length
-          ),
+          trashedSliceCount: nextTrashedSliceCount,
           selectedSliceIds: nextSelectedIds,
           activeSliceId:
             prev.activeSliceId !== null && restoredIds.has(prev.activeSliceId)
@@ -181,15 +188,7 @@ export function createSliceTrashActions(
                 sliceOpRedoStack: [],
               }
             : {}),
-          ...(shouldSwitchTab
-            ? prev.trashedCount > 0
-              ? { trashViewTab: "tracks" as const }
-              : {
-                  trashFilterActive: false,
-                  trashViewTab: "tracks" as const,
-                  folderFilter: null,
-                }
-            : {}),
+          ...trashExitPatch,
         };
       });
 
@@ -260,11 +259,18 @@ export function createSliceTrashActions(
         const nextSelected = prev.selectedSliceIds.filter(
           (id) => !deletedSet.has(id)
         );
-        const leaveSliceTrash =
-          prev.trashFilterActive &&
-          prev.trashViewTab === "slices" &&
-          summary.trashed_count === 0;
-        exitedTrashToTracks = leaveSliceTrash;
+        const trashExitPatch = resolveNextTrashViewState(
+          prev.trashFilterActive,
+          prev.trashViewTab,
+          {
+            tracks: prev.trashedCount,
+            slices: summary.trashed_count,
+            layers: prev.trashedLayerCount,
+          }
+        );
+        exitedTrashToTracks =
+          trashExitPatch.trashFilterActive === false ||
+          trashExitPatch.trashViewTab === "tracks";
         return {
           trashedSliceHistory: nextTrashed,
           trashedSliceCount: summary.trashed_count,
@@ -282,15 +288,7 @@ export function createSliceTrashActions(
             prev.sliceOpRedoStack,
             deletedSet
           ),
-          ...(leaveSliceTrash
-            ? prev.trashedCount > 0
-              ? { trashViewTab: "tracks" as const }
-              : {
-                  trashFilterActive: false,
-                  trashViewTab: "tracks" as const,
-                  folderFilter: null,
-                }
-            : {}),
+          ...trashExitPatch,
         };
       });
 

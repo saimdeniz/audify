@@ -12,6 +12,16 @@ pub(super) fn extract_custom_slice_path(settings_json: &str) -> Option<String> {
     }
 }
 
+pub(super) fn extract_custom_layer_path(settings_json: &str) -> Option<String> {
+    let val: serde_json::Value = serde_json::from_str(settings_json).ok()?;
+    let raw = val.get("customLayerExportPath")?.as_str()?.trim();
+    if raw.is_empty() {
+        None
+    } else {
+        Some(normalize_clean_path(raw))
+    }
+}
+
 pub(super) fn collect_profile_library_ids(conn: &Connection, profile_id: i64) -> Vec<i64> {
     let Ok(mut stmt) = conn.prepare(
         "SELECT l.id FROM libraries l
@@ -127,6 +137,10 @@ pub(crate) fn apply_share_safe(pkg: &mut ProfileExportPackage) {
         );
         obj.insert(
             "customSliceExportPath".to_string(),
+            serde_json::Value::String(String::new()),
+        );
+        obj.insert(
+            "customLayerExportPath".to_string(),
             serde_json::Value::String(String::new()),
         );
         obj.insert(

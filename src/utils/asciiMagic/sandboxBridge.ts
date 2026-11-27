@@ -160,9 +160,13 @@ class AsciiMagicSandboxBridge {
     } catch {
       resolvedOrigin = "";
     }
-    if (!resolvedOrigin || resolvedOrigin === "null") {
+    if (
+      !resolvedOrigin ||
+      resolvedOrigin === "null" ||
+      (typeof window !== "undefined" && resolvedOrigin === window.location.origin)
+    ) {
       return Promise.reject(
-        new Error("Invalid ASCII sandbox runner origin")
+        new Error("Invalid ASCII sandbox runner origin (must be isolated)")
       );
     }
     this.expectedOrigin = resolvedOrigin;

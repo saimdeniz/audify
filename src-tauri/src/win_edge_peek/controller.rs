@@ -1,5 +1,8 @@
 //! Win32 DWM Cloak + Extended Frame Bounds + Hover/Drag Edge-Peek loop.
 
+#[path = "window_ops.rs"]
+mod window_ops;
+
 use super::pill_window::{compute_pill_dimensions, take_pill_clicked, NativeEdgePill};
 use super::{EdgePeekInner, EdgePeekStatePayload, EdgePillTheme, EdgeSide, EDGE_PEEK_STATE_EVENT};
 use std::ffi::c_void;
@@ -8,192 +11,19 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
-use windows::core::BOOL;
-use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
-use windows::Win32::Graphics::Dwm::{
-    DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_CLOAK, DWMWA_EXTENDED_FRAME_BOUNDS,
+pub(super) use window_ops::{dispatch_restore_window_normal, restore_window_normal};
+use window_ops::{
+    any_mouse_button_down, dispatch_layered_and_cloak, dispatch_layered_state, live_window_scale,
+    measure_visible_rect_and_insets, EdgePeekRestoreGuard,
 };
+use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetWindowLongPtrW, GetWindowRect, IsIconic, IsWindow,
-    SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST,
-    LWA_ALPHA, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, WS_EX_LAYERED, WS_EX_TRANSPARENT,
+    GetCursorPos, IsIconic, IsWindow, SetWindowPos, HWND_TOPMOST, SWP_ASYNCWINDOWPOS,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
 };
-
-#[link(name = "user32")]
-extern "system" {
-    fn GetAsyncKeyState(vkey: i32) -> i16;
-    fn GetDpiForWindow(hwnd: HWND) -> u32;
-}
-
-fn live_window_scale(hwnd: HWND, fallback: f64) -> f64 {
-    let dpi = unsafe { GetDpiForWindow(hwnd) };
-    if (48..=480).contains(&dpi) {
-        (dpi as f64 / 96.0).clamp(0.75, 4.0)
-    } else {
-        fallback.clamp(0.75, 4.0)
-    }
-}
-
-struct EdgePeekRestoreGuard {
-    app: AppHandle,
-    hwnd_raw: isize,
-    gen: u64,
-    gen_arc: Arc<AtomicU64>,
-}
-
-impl Drop for EdgePeekRestoreGuard {
-    fn drop(&mut self) {
-        if std::thread::panicking() || self.gen_arc.load(Ordering::Acquire) == self.gen {
-            dispatch_restore_window_normal(&self.app, self.hwnd_raw);
-        }
-    }
-}
-
-const VK_LBUTTON: i32 = 0x01;
-const VK_RBUTTON: i32 = 0x02;
-
-fn any_mouse_button_down() -> bool {
-    unsafe {
-        ((GetAsyncKeyState(VK_LBUTTON) as u16) & 0x8000) != 0
-            || ((GetAsyncKeyState(VK_RBUTTON) as u16) & 0x8000) != 0
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct FrameInsets {
-    left: i32,
-    top: i32,
-    right: i32,
-    bottom: i32,
-}
-
-fn measure_visible_rect_and_insets(hwnd: HWND) -> Option<(RECT, FrameInsets)> {
-    unsafe {
-        let mut win_rect = RECT::default();
-        if GetWindowRect(hwnd, &mut win_rect).is_err() {
-            return None;
-        }
-        let mut frame_rect = RECT::default();
-        let got_dwm = DwmGetWindowAttribute(
-            hwnd,
-            DWMWA_EXTENDED_FRAME_BOUNDS,
-            &mut frame_rect as *mut RECT as *mut c_void,
-            size_of::<RECT>() as u32,
-        )
-        .is_ok();
-        if got_dwm && frame_rect.right > frame_rect.left && frame_rect.bottom > frame_rect.top {
-            let insets = FrameInsets {
-                left: (frame_rect.left - win_rect.left).max(0),
-                top: (frame_rect.top - win_rect.top).max(0),
-                right: (win_rect.right - frame_rect.right).max(0),
-                bottom: (win_rect.bottom - frame_rect.bottom).max(0),
-            };
-            Some((frame_rect, insets))
-        } else {
-            Some((win_rect, FrameInsets::default()))
-        }
-    }
-}
-
-fn set_dwm_cloak(hwnd: HWND, cloaked: bool) -> bool {
-    unsafe {
-        let val = BOOL(if cloaked { 1 } else { 0 });
-        DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_CLOAK,
-            &val as *const BOOL as *const c_void,
-            size_of::<BOOL>() as u32,
-        )
-        .is_ok()
-    }
-}
-
-fn set_layered_state(hwnd: HWND, alpha: u8, click_through: bool) {
-    unsafe {
-        if !IsWindow(Some(hwnd)).as_bool() {
-            return;
-        }
-        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        let mut next = ex | (WS_EX_LAYERED.0 as isize);
-        if click_through {
-            next |= WS_EX_TRANSPARENT.0 as isize;
-        } else {
-            next &= !(WS_EX_TRANSPARENT.0 as isize);
-        }
-        if next != ex {
-            let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next);
-        }
-        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
-    }
-}
-
-/// Dispatches `SetWindowLongPtrW` / `SetLayeredWindowAttributes` onto the Win32 main UI thread
-/// so background Edge-Peek workers never synchronously send `WM_STYLECHANGING` across threads.
-fn dispatch_layered_state(
-    app: &AppHandle,
-    hwnd_raw: isize,
-    alpha: u8,
-    click_through: bool,
-    gen: u64,
-    gen_arc: &Arc<AtomicU64>,
-) {
-    let gen_check = Arc::clone(gen_arc);
-    let _ = app.run_on_main_thread(move || {
-        if gen_check.load(Ordering::Acquire) != gen {
-            return;
-        }
-        set_layered_state(HWND(hwnd_raw as *mut c_void), alpha, click_through);
-    });
-}
-
-/// Dispatches `restore_window_normal` onto the Win32 main UI thread (safe from any worker thread).
-pub(super) fn dispatch_restore_window_normal(app: &AppHandle, hwnd_raw: isize) {
-    if hwnd_raw == 0 {
-        return;
-    }
-    let _ = app.run_on_main_thread(move || {
-        restore_window_normal(hwnd_raw);
-    });
-}
-
-pub(super) fn restore_window_normal(hwnd_raw: isize) {
-    if hwnd_raw == 0 {
-        return;
-    }
-    unsafe {
-        let hwnd = HWND(hwnd_raw as *mut c_void);
-        if !IsWindow(Some(hwnd)).as_bool() {
-            return;
-        }
-        let _ = set_dwm_cloak(hwnd, false);
-        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        if (ex & (WS_EX_LAYERED.0 as isize)) != 0 {
-            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA);
-        }
-        let cleaned = ex & !(WS_EX_LAYERED.0 as isize) & !(WS_EX_TRANSPARENT.0 as isize);
-        if cleaned != ex {
-            let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, cleaned);
-            let _ = SetWindowPos(
-                hwnd,
-                None,
-                0,
-                0,
-                0,
-                0,
-                SWP_ASYNCWINDOWPOS
-                    | SWP_NOACTIVATE
-                    | SWP_NOMOVE
-                    | SWP_NOSIZE
-                    | SWP_NOZORDER
-                    | SWP_FRAMECHANGED,
-            );
-        }
-    }
-}
 
 pub(super) fn snap_window_to_edge(hwnd_raw: isize, side: EdgeSide, scale: f64) -> Option<RECT> {
     if hwnd_raw == 0 {
@@ -462,8 +292,18 @@ pub(super) fn run_edge_peek_loop(
                 if let Some(ref mut p) = pill {
                     p.hide();
                 }
-                dispatch_layered_state(&app, hwnd_raw, 0, false, gen, &gen_arc);
-                let _ = set_dwm_cloak(hwnd, false);
+                // Apply alpha=0 BEFORE uncloaking inside one main-thread turn (zero opaque 1-frame flash)
+                dispatch_layered_and_cloak(
+                    &app,
+                    hwnd_raw,
+                    None,
+                    0,
+                    false,
+                    None,
+                    Some(false),
+                    gen,
+                    &gen_arc,
+                );
                 unsafe {
                     let _ = SetWindowPos(
                         hwnd,
@@ -526,14 +366,16 @@ pub(super) fn run_edge_peek_loop(
                 if gen_arc.load(Ordering::Acquire) != gen {
                     break;
                 }
-                let cloaked = set_dwm_cloak(hwnd, true);
-                // Keep alpha at 255 while DWM-cloaked so taskbar thumbnail stays clean & intact,
-                // while WS_EX_LAYERED | WS_EX_TRANSPARENT ensures 100% click-through.
-                dispatch_layered_state(
+                // Cloak FIRST, then set alpha=255 (taskbar thumbnail intact) & WS_EX_TRANSPARENT
+                // atomically on the Win32 main thread so no opaque frame can leak before cloak.
+                dispatch_layered_and_cloak(
                     &app,
                     hwnd_raw,
-                    if cloaked { 255 } else { 0 },
+                    Some(255),
+                    0,
                     true,
+                    Some(true),
+                    None,
                     gen,
                     &gen_arc,
                 );
@@ -559,11 +401,15 @@ pub(super) fn run_edge_peek_loop(
                 EdgeSide::Right => (work.right - pt.x).abs(),
                 EdgeSide::Left => (pt.x - work.left).abs(),
             };
-            if edge_dist > 140 {
-                60
+            if edge_dist > 320 {
+                140
+            } else if edge_dist > 140 {
+                85
             } else {
                 20
             }
+        } else if !is_native_drag && outside_since.is_none() {
+            50
         } else {
             20
         };

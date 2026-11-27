@@ -81,31 +81,7 @@ pub(super) fn prepare_relocate_plans(
             &dst_parent_str,
         )?;
 
-        let clean_name = validate_safe_audio_stem(
-            Path::new(raw_name)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("Audio"),
-        )?;
-        let ext = Path::new(raw_name)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
-        if !ext.is_empty()
-            && (has_ntfs_ads_colon(ext)
-                || ext.contains(':')
-                || !ext.chars().all(|c| c.is_ascii_alphanumeric()))
-        {
-            return Err("Invalid target file extension".to_string());
-        }
-        let final_name = if ext.is_empty() {
-            clean_name
-        } else {
-            format!("{}.{}", clean_name, ext)
-        };
-        if has_ntfs_ads_colon(&final_name) || final_name.contains(':') {
-            return Err("Invalid target filename".to_string());
-        }
+        let final_name = validate_relocate_target_filename(&cur_file_name, raw_name)?;
         let final_dst_pb = clean_dst_parent.join(&final_name);
         let norm_old = normalize_clean_path(&resolved_src.to_string_lossy());
         let norm_new = normalize_clean_path(&final_dst_pb.to_string_lossy());
@@ -244,4 +220,56 @@ pub(super) fn commit_relocate_db(
     }
 
     Ok(out)
+}
+
+pub(super) fn validate_relocate_target_filename(
+    cur_file_name: &str,
+    raw_name: &str,
+) -> Result<String, String> {
+    let clean_name = validate_safe_audio_stem(
+        Path::new(raw_name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Audio"),
+    )?;
+    let src_ext = Path::new(cur_file_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    let ext = Path::new(raw_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    let ext_lower = ext.to_ascii_lowercase();
+    if ext.is_empty()
+        || has_ntfs_ads_colon(ext)
+        || ext.contains(':')
+        || !ext.eq_ignore_ascii_case(src_ext)
+        || !crate::scanner::SUPPORTED_EXTENSIONS.contains(&ext_lower.as_str())
+    {
+        return Err("Target file extension must match the source audio format".to_string());
+    }
+    let final_name = format!("{}.{}", clean_name, ext);
+    if has_ntfs_ads_colon(&final_name) || final_name.contains(':') {
+        return Err("Invalid target filename".to_string());
+    }
+    Ok(final_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_relocate_target_filename;
+
+    #[test]
+    fn relocate_filename_rejects_executable_or_mismatched_extension() {
+        assert!(validate_relocate_target_filename("kick.wav", "kick.exe").is_err());
+        assert!(validate_relocate_target_filename("kick.wav", "kick.bat").is_err());
+        assert!(validate_relocate_target_filename("kick.wav", "kick.mp3").is_err());
+        assert!(validate_relocate_target_filename("kick.wav", "kick.wav:evil").is_err());
+        assert!(validate_relocate_target_filename("kick.wav", "kick").is_err());
+        assert_eq!(
+            validate_relocate_target_filename("kick.wav", "snare.WAV").unwrap(),
+            "snare.WAV"
+        );
+    }
 }

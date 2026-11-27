@@ -21,6 +21,7 @@ import {
   type PlayheadAnchor,
 } from "../services/nativeAudioClient";
 import {
+  getLayerDraftPlayheadSec,
   getPlayheadSec,
   resetPlayheadClock,
   setPlayheadSec,
@@ -30,6 +31,7 @@ import {
   isViewportRenderActive,
   subscribeAppActivity,
 } from "../utils/appFocusMonitor";
+import { isLayerDraftSample } from "../utils/layerHelpers";
 import { normalizePathForMatch } from "../utils/pathHelpers";
 
 const LazyHtmlAudioFallbackEngine = lazy(() =>
@@ -158,6 +160,11 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
         state.setIsPlaying(false);
       }
     } else if (payload.event === "paused" || payload.event === "stopped") {
+      if (payload.event === "stopped" && !payload.filePath) {
+        // Handle was released/unloaded on the Rust side (e.g. rename/trash/unload);
+        // clear loaded cache so the next Play/Seek reloads instead of targeting empty DSP.
+        loadedSampleRef.current = null;
+      }
       resetPlayheadClock(payload.positionSec);
       state.setCurrentTimeSec(payload.positionSec);
     } else if (
@@ -241,10 +248,15 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
       state.setDurationSec(activeSample.duration_ms / 1000);
     }
 
+    const isDraft = isLayerDraftSample(activeSample);
     const hasUnappliedSeek =
       state.seekRequest !== null &&
       state.seekRequest.seq !== lastAppliedSeekSeqRef.current;
-    let startSec = state.sliceRange ? state.sliceRange.startSec : 0;
+    let startSec = isDraft
+      ? Math.max(0, getLayerDraftPlayheadSec())
+      : state.sliceRange
+      ? state.sliceRange.startSec
+      : 0;
     if (hasUnappliedSeek && state.seekRequest) {
       lastAppliedSeekSeqRef.current = state.seekRequest.seq;
       startSec = state.seekRequest.timeSec;
@@ -262,7 +274,7 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
       positionSec: startSec,
       anchorMs: performance.now(),
       playbackRate:
-        state.pitchSemitones === 0
+        isDraft || state.pitchSemitones === 0
           ? 1
           : Math.max(0.25, Math.min(4.0, Math.pow(2, state.pitchSemitones / 12))),
       durationSec:
@@ -276,6 +288,31 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
       triggerSeq: playTriggerSeq,
       isPlaying: state.isPlaying,
     };
+
+    if (isLayerDraftSample(activeSample)) {
+      // Live Layers Editor drafts are loaded straight into native WASAPI RAM via `preview_layer_mix`.
+      loadedSampleRef.current = {
+        id: activeSample.id,
+        path: activeSample.file_path,
+      };
+      loadingSampleRef.current = null;
+      pendingSeekDuringLoadRef.current = null;
+      if (hasUnappliedSeek) {
+        void nativeAudioSeek(startSec).catch(() => {});
+        if (state.isPlaying) {
+          void nativeAudioPlay().catch(() => {
+            lastEngineForcedPlayingRef.current = false;
+            useSampleStore.getState().setIsPlaying(false);
+          });
+        }
+      } else if (state.isPlaying && sameTrackAlreadyLoaded) {
+        void nativeAudioPlay().catch(() => {
+          lastEngineForcedPlayingRef.current = false;
+          useSampleStore.getState().setIsPlaying(false);
+        });
+      }
+      return;
+    }
 
     if (sameTrackAlreadyLoaded && hasUnappliedSeek) {
       void nativeAudioSeek(startSec).catch(() => {});
@@ -297,16 +334,25 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
     };
     pendingSeekDuringLoadRef.current = null;
 
-    void nativeAudioLoad({
-      filePath: activeSample.file_path,
-      autoplay: state.isPlaying,
-      startSec,
-      sliceStartSec: state.sliceRange ? state.sliceRange.startSec : null,
-      sliceEndSec: state.sliceRange ? state.sliceRange.endSec : null,
+    const sentParams = {
       volume: state.volume,
       pitchSemitones: state.pitchSemitones,
       looping: state.isLooping,
       normalizePreview: state.normalizePreview,
+      sliceStartSec: state.sliceRange ? state.sliceRange.startSec : null,
+      sliceEndSec: state.sliceRange ? state.sliceRange.endSec : null,
+    };
+
+    void nativeAudioLoad({
+      filePath: activeSample.file_path,
+      autoplay: state.isPlaying,
+      startSec,
+      sliceStartSec: sentParams.sliceStartSec,
+      sliceEndSec: sentParams.sliceEndSec,
+      volume: sentParams.volume,
+      pitchSemitones: sentParams.pitchSemitones,
+      looping: sentParams.looping,
+      normalizePreview: sentParams.normalizePreview,
       skipLeadingSilence: state.skipLeadingSilence,
     })
       .then((payload) => {
@@ -319,24 +365,31 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
         const queuedSeek = pendingSeekDuringLoadRef.current;
         pendingSeekDuringLoadRef.current = null;
 
-        const liveNow = useSampleStore.getState();
-        // If user pressed Pause while decode was in-flight, honor Pause immediately
-        if (!liveNow.isPlaying && payload.isPlaying) {
-          anchorRef.current.isPlaying = false;
-          void nativeAudioPause().catch(() => {});
-          if (queuedSeek !== null) {
-            const clamped =
-              payload.durationSec > 0
-                ? Math.max(0, Math.min(payload.durationSec, queuedSeek))
-                : Math.max(0, queuedSeek);
-            anchorRef.current.positionSec = clamped;
-            anchorRef.current.anchorMs = performance.now();
-            resetPlayheadClock(clamped);
-            void nativeAudioSeek(clamped).catch(() => {});
-          }
-          return;
-        }
+        // Always apply sync metadata (durationSec, seq, device) before honoring mid-load state changes
         applySyncPayload(payload);
+
+        const liveNow = useSampleStore.getState();
+        const liveSliceStart = liveNow.sliceRange ? liveNow.sliceRange.startSec : null;
+        const liveSliceEnd = liveNow.sliceRange ? liveNow.sliceRange.endSec : null;
+        if (
+          liveNow.volume !== sentParams.volume ||
+          liveNow.pitchSemitones !== sentParams.pitchSemitones ||
+          liveNow.isLooping !== sentParams.looping ||
+          liveNow.normalizePreview !== sentParams.normalizePreview ||
+          liveSliceStart !== sentParams.sliceStartSec ||
+          liveSliceEnd !== sentParams.sliceEndSec
+        ) {
+          void nativeAudioSetParams({
+            volume: liveNow.volume,
+            pitchSemitones: liveNow.pitchSemitones,
+            looping: liveNow.isLooping,
+            normalizePreview: liveNow.normalizePreview,
+            updateSlice: true,
+            sliceStartSec: liveSliceStart,
+            sliceEndSec: liveSliceEnd,
+          }).catch(() => {});
+        }
+
         if (queuedSeek !== null) {
           const clamped =
             payload.durationSec > 0
@@ -346,6 +399,13 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
           anchorRef.current.anchorMs = performance.now();
           resetPlayheadClock(clamped);
           void nativeAudioSeek(clamped).catch(() => {});
+        }
+
+        // If user pressed Pause while decode was in-flight, honor Pause immediately
+        if (!liveNow.isPlaying && payload.isPlaying) {
+          anchorRef.current.isPlaying = false;
+          void nativeAudioPause().catch(() => {});
+          return;
         }
         // Symmetric race fix: if user pressed Play while an autoplay:false load was in-flight,
         // start playback now that the new track is actually loaded in the engine.
@@ -421,17 +481,19 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
 
   // Sync live DSP parameters (volume, varispeed pitch, loop, auto-gain, slice bounds)
   useEffect(() => {
+    const isDraft = isLayerDraftSample(useSampleStore.getState().selectedSample);
+    const effectivePitch = isDraft ? 0 : pitchSemitones;
     const rate =
-      pitchSemitones === 0
+      effectivePitch === 0
         ? 1
-        : Math.max(0.25, Math.min(4.0, Math.pow(2, pitchSemitones / 12)));
+        : Math.max(0.25, Math.min(4.0, Math.pow(2, effectivePitch / 12)));
     const nowMs = performance.now();
     if (anchorRef.current.isPlaying) {
       const currentPos = computeInterpolatedPlayheadSec(
         anchorRef.current,
         nowMs,
         0,
-        sliceRange,
+        isDraft ? null : sliceRange,
         isLooping
       );
       anchorRef.current.positionSec = currentPos;
@@ -441,12 +503,12 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
 
     void nativeAudioSetParams({
       volume,
-      pitchSemitones,
+      pitchSemitones: effectivePitch,
       looping: isLooping,
       normalizePreview,
-      updateSlice: true,
-      sliceStartSec: sliceRange ? sliceRange.startSec : null,
-      sliceEndSec: sliceRange ? sliceRange.endSec : null,
+      updateSlice: !isDraft,
+      sliceStartSec: !isDraft && sliceRange ? sliceRange.startSec : null,
+      sliceEndSec: !isDraft && sliceRange ? sliceRange.endSec : null,
     }).catch(() => {});
   }, [volume, pitchSemitones, isLooping, normalizePreview, sliceRange]);
 
