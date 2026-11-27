@@ -234,6 +234,13 @@ mod tests {
         assert!(ensure_not_inside_user_dir(&user_dir, Path::new(r"C:\Audio\x:ads")).is_err());
         assert!(ensure_not_inside_user_dir(&user_dir, Path::new(r"C:\Audio\..\Other")).is_err());
         assert!(ensure_not_inside_user_dir(&user_dir, &user_dir.join("backups")).is_err());
+        assert!(ensure_not_inside_user_dir(
+            &user_dir,
+            &user_dir.join("backups").join("deep_nonexistent")
+        )
+        .is_err());
+        let sibling = std::env::temp_dir().join(format!("audify_sec_sib_{}", std::process::id()));
+        assert!(ensure_not_inside_user_dir(&user_dir, &sibling).is_ok());
         let _ = fs::remove_dir_all(&user_dir);
     }
 
