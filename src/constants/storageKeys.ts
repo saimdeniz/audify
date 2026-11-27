@@ -67,6 +67,10 @@ export const AUDIFY_STORAGE_KEYS = {
   columnOrderV2: "audify_column_order_v2",
   columnWidthsV3: "audify_column_widths_v3",
   sliceColumnWidthsV1: "audify_slice_column_widths_v1",
+  layerColumnWidthsV1: "audify_layer_column_widths_v1",
+  layerLaneHeaderWidthV1: "audify_layer_lane_header_width_v1",
+  layerLaneHeightV1: "audify_layer_lane_height_v1",
+  layerSplitRatioV1: "audify_layer_split_ratio_v1",
   filterDrawerOpen: "audify_filter_drawer_open",
   filterDrawerTab: "audify_filter_drawer_tab",
   filterDrawerHeight: "audify_filter_drawer_height_v1",
@@ -80,6 +84,9 @@ export const AUDIFY_STORAGE_KEYS = {
   binSampleIds: "audify_bin_sample_ids",
   autoBinOnNleDrag: "audify_auto_bin_nle_drag",
   customSliceExportPath: "audify_custom_slice_export_path",
+  customLayerExportPath: "audify_custom_layer_export_path",
+  autoSaveLayerOnNleDrag: "audify_auto_save_layer_nle_drag",
+  layerTopDeckView: "audify_layer_top_deck_view",
   miniDockBoundsV4: "audify_mini_dock_bounds_v4",
   miniDockPinned: "audify_mini_dock_pinned",
   miniDockEdgePeek: "audify_mini_dock_edge_peek",
@@ -103,6 +110,11 @@ export const AUDIFY_STORAGE_KEYS = {
   aiSimilarityTopK: "audify_ai_similarity_top_k",
   aiSimilarityScope: "audify_ai_similarity_scope",
   aiSimilarityDurationMatch: "audify_ai_similarity_duration_match",
+
+  // App Update Checker
+  autoCheckUpdates: "audify_auto_check_updates",
+  updateCheckCacheV1: "audify_update_check_cache_v1",
+  dismissedUpdateVersion: "audify_dismissed_update_version",
 
   // Cross-window sync & standalone settings UI
   crossWindowSync: CROSS_WINDOW_SYNC_KEY,

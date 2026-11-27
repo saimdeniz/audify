@@ -368,6 +368,7 @@ export function createDuplicateSlice(ctx: StoreSliceContext) {
           binFilterActive: false,
           trashFilterActive: false,
           slicesFilterActive: false,
+          layersFilterActive: false,
           selectedCollectionId: null,
           selectedTagIds: [],
           selectedGenre: null,
@@ -421,7 +422,7 @@ export function createDuplicateSlice(ctx: StoreSliceContext) {
             st.selectedSample;
       set({
         selectedSampleIds: extraIds,
-        selectedSample: firstSample,
+        selectedSample: st.isPlaying ? st.selectedSample : firstSample,
         lastSelectedIndex: firstIndex >= 0 ? firstIndex : null,
       });
       emitNotice(

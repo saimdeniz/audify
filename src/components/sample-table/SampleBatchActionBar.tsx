@@ -15,6 +15,7 @@ import {
   Hash,
   Inbox,
   Layers,
+  LayoutGrid,
   Music,
   Pencil,
   Star,
@@ -82,6 +83,7 @@ export const SampleBatchActionBar: React.FC<SampleBatchActionBarProps> = ({
   );
   const openBatchRenameModal = useSampleStore((s) => s.openBatchRenameModal);
   const addSamplesToBin = useSampleStore((s) => s.addSamplesToBin);
+  const sendSamplesToLayers = useSampleStore((s) => s.sendSamplesToLayers);
   const copyAttributionForSamples = useSampleStore(
     (s) => s.copyAttributionForSamples
   );
@@ -225,7 +227,7 @@ export const SampleBatchActionBar: React.FC<SampleBatchActionBarProps> = ({
           }`}
           title="Add selected to Collection"
         >
-          <Layers className={`${iconClass} text-accent-fg`} />
+          <LayoutGrid className={`${iconClass} text-accent-fg`} />
           <ChevronDown className={chevClass} />
         </button>
       </div>
@@ -335,6 +337,17 @@ export const SampleBatchActionBar: React.FC<SampleBatchActionBarProps> = ({
       >
         <Inbox className={`${iconClass} text-accent-fg`} />
       </button>
+
+      {!trashFilterActive && (
+        <button
+          type="button"
+          onClick={() => void sendSamplesToLayers(selectedSampleObjects)}
+          className={`${btnSquareClass} bg-surface-3 hover:border-accent border border-line text-fg inline-flex items-center justify-center rounded-sm shrink-0 active:scale-[0.97] transition-all`}
+          title={`Send ${selectedSampleIds.length} tracks to Layers Editor`}
+        >
+          <Layers className={`${iconClass} text-accent-fg`} />
+        </button>
+      )}
 
       {enableLicensesSystem && (
         <button

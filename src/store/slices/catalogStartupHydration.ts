@@ -208,6 +208,10 @@ export function scheduleStartupBackgroundStages(
     if (!standaloneSettings) {
       get().fetchFolderStats().catch(onError("folder stats"));
       get().fetchAiTagSuggestions().catch(onError("ai suggestions"));
+      get().fetchSliceHistory().catch(onError("slice history"));
+      get().fetchLayerHistory().catch(onError("layer history"));
+      get().fetchSliceTrashStatus().catch(onError("slice trash status"));
+      get().fetchLayerTrashStatus().catch(onError("layer trash status"));
     }
     get().refreshTrashStatus().catch(onError("trash status"));
     get().fetchAiModelStatus().catch(onError("ai model status"));

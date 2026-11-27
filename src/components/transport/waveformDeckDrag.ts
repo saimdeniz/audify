@@ -8,6 +8,7 @@ import {
   startNativeSampleDrag,
   startNativeSliceDrag,
 } from "../../utils/drag";
+import { isLayerDraftSample } from "../../utils/layerHelpers";
 
 /**
  * Starts a native OS WAV slice drag from the waveform slice badge or deck header,
@@ -68,6 +69,21 @@ export function startDeckHeaderSampleDrag(
   clientX: number,
   clientY: number
 ): void {
+  if (isLayerDraftSample(sample)) {
+    beginDragOnMove(clientX, clientY, () => {
+      void useSampleStore
+        .getState()
+        .prepareLayerDraftForNleDrag()
+        .then((res) => {
+          if (res) {
+            const label = res.savedRecord?.layer_name ?? sample.file_name;
+            void startNativeSampleDrag([res.wavPath], label);
+          }
+        });
+    });
+    return;
+  }
+
   if (range && range.endSec - range.startSec > 0.03) {
     startDeckSliceDrag(sample, range, clientX, clientY);
     return;

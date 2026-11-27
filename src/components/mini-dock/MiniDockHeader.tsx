@@ -9,6 +9,7 @@ import {
 import { useSampleStore } from "../../store/useSampleStore";
 import { beginWindowTitlebarDrag } from "../../utils/drag";
 import { AudifyLogoIcon } from "../StatusBar";
+import { NavHistoryButtons } from "../common/NavHistoryButtons";
 import { WindowCaptionControls } from "../WindowCaptionControls";
 
 export const MiniDockHeader: React.FC = () => {
@@ -57,6 +58,7 @@ export const MiniDockHeader: React.FC = () => {
             DOCK
           </span>
         </div>
+        <NavHistoryButtons />
       </div>
 
       <div data-no-drag="true" className="flex items-center h-full shrink-0">

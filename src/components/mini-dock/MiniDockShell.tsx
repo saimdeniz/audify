@@ -30,6 +30,11 @@ const LazySlicesTableView = lazy(() =>
     default: m.SlicesTableView,
   }))
 );
+const LazyMiniDockLayersList = lazy(() =>
+  import("./MiniDockLayersList").then((m) => ({
+    default: m.MiniDockLayersList,
+  }))
+);
 
 export const MiniDockShell: React.FC = () => {
   const samples = useSampleStore((s) => s.samples);
@@ -42,6 +47,9 @@ export const MiniDockShell: React.FC = () => {
   const setStatusMessage = useSampleStore((s) => s.setStatusMessage);
   const miniDockShortcut = useSampleStore((s) => s.shortcuts.toggleMiniDock);
   const slicesFilterActive = useSampleStore((s) => s.slicesFilterActive);
+  const layersFilterActive = useSampleStore((s) => s.layersFilterActive);
+  const favoriteOnly = useSampleStore((s) => s.favoriteOnly);
+  const favoritesViewTab = useSampleStore((s) => s.favoritesViewTab);
   const trashFilterActive = useSampleStore((s) => s.trashFilterActive);
   const trashViewTab = useSampleStore((s) => s.trashViewTab);
   const miniDockEdgePeek = useSampleStore((s) => s.miniDockEdgePeek);
@@ -53,7 +61,13 @@ export const MiniDockShell: React.FC = () => {
   const addSamplesToBin = useSampleStore((s) => s.addSamplesToBin);
 
   const showSlicesTable =
-    slicesFilterActive || (trashFilterActive && trashViewTab === "slices");
+    slicesFilterActive ||
+    (trashFilterActive && trashViewTab === "slices") ||
+    (favoriteOnly && favoritesViewTab === "slices");
+  const showLayersList =
+    layersFilterActive ||
+    (trashFilterActive && trashViewTab === "layers") ||
+    (favoriteOnly && favoritesViewTab === "layers");
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const osDragSampleRef = useRef<SampleItem | null>(null);
@@ -374,6 +388,10 @@ export const MiniDockShell: React.FC = () => {
           {showSlicesTable ? (
             <Suspense fallback={null}>
               <LazySlicesTableView />
+            </Suspense>
+          ) : showLayersList ? (
+            <Suspense fallback={null}>
+              <LazyMiniDockLayersList />
             </Suspense>
           ) : (
             <MiniDockList

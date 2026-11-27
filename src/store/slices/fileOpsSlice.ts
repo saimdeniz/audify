@@ -186,8 +186,12 @@ export function createFileOpsSlice(ctx: StoreSliceContext) {
       const wasTrashActive = get().trashFilterActive;
       const curState = get();
       const nextTab: TrashViewTab = trashFilterActive
-        ? curState.trashedCount === 0 && curState.trashedSliceCount > 0
+        ? curState.trashedCount > 0
+          ? "tracks"
+          : curState.trashedSliceCount > 0
           ? "slices"
+          : curState.trashedLayerCount > 0
+          ? "layers"
           : "tracks"
         : "tracks";
       if (trashFilterActive) {
@@ -203,22 +207,37 @@ export function createFileOpsSlice(ctx: StoreSliceContext) {
               binFilterActive: false,
               duplicatesFilterActive: false,
               slicesFilterActive: false,
+              layersFilterActive: false,
               favoriteOnly: false,
+              favoritesViewTab: "tracks",
               recentOnly: false,
               selectedCollectionId: null,
               selectedSliceIds: [],
               activeSliceId: null,
+              selectedLayerIds: [],
+              activeLayerId: null,
             }
           : wasTrashActive
-          ? { folderFilter: null, selectedSliceIds: [], activeSliceId: null }
+          ? {
+              folderFilter: null,
+              selectedSliceIds: [],
+              activeSliceId: null,
+              selectedLayerIds: [],
+              activeLayerId: null,
+            }
           : {}),
       });
+      if (trashFilterActive) {
+        void get().fetchSliceTrashStatus();
+        void get().fetchLayerTrashStatus();
+      }
       if (trashFilterActive && nextTab === "slices") {
         void get().fetchTrashedSlices();
         return;
       }
-      if (trashFilterActive) {
-        void get().fetchSliceTrashStatus();
+      if (trashFilterActive && nextTab === "layers") {
+        void get().fetchTrashedLayers();
+        return;
       }
       if (!applyInstantMemoryFilter({ preserveMultiSelect: false })) {
         void get().fetchSamples({ preserveMultiSelect: false });
@@ -230,12 +249,16 @@ export function createFileOpsSlice(ctx: StoreSliceContext) {
         trashViewTab,
         selectedSampleIds: [],
         selectedSliceIds: [],
+        selectedLayerIds: [],
         activeSliceId: null,
+        activeLayerId: null,
         batchRenameSliceIds: null,
         batchRenameSampleIds: null,
       });
       if (trashViewTab === "slices") {
         void get().fetchTrashedSlices();
+      } else if (trashViewTab === "layers") {
+        void get().fetchTrashedLayers();
       } else {
         if (!applyInstantMemoryFilter({ preserveMultiSelect: false })) {
           void get().fetchSamples({ preserveMultiSelect: false });
@@ -265,12 +288,21 @@ export function createFileOpsSlice(ctx: StoreSliceContext) {
         const st = get();
         const wasTrashActive = st.trashFilterActive;
         const shouldExitTrash =
-          wasTrashActive && info.trashed_count === 0 && st.trashedSliceCount === 0;
+          wasTrashActive &&
+          info.trashed_count === 0 &&
+          st.trashedSliceCount === 0 &&
+          st.trashedLayerCount === 0;
         const shouldSwitchToSlices =
           wasTrashActive &&
           info.trashed_count === 0 &&
           st.trashedSliceCount > 0 &&
-          st.trashViewTab !== "slices";
+          st.trashViewTab === "tracks";
+        const shouldSwitchToLayers =
+          wasTrashActive &&
+          info.trashed_count === 0 &&
+          st.trashedSliceCount === 0 &&
+          st.trashedLayerCount > 0 &&
+          st.trashViewTab !== "layers";
         set({
           trashedCount: info.trashed_count,
           trashedTotalBytes: info.total_bytes,
@@ -289,6 +321,11 @@ export function createFileOpsSlice(ctx: StoreSliceContext) {
                 trashViewTab: "slices" as const,
                 trashedProfileSamples: [],
               }
+            : shouldSwitchToLayers
+            ? {
+                trashViewTab: "layers" as const,
+                trashedProfileSamples: [],
+              }
             : {}),
         });
         if (shouldExitTrash) {
@@ -297,6 +334,8 @@ export function createFileOpsSlice(ctx: StoreSliceContext) {
           }
         } else if (shouldSwitchToSlices) {
           void get().fetchTrashedSlices();
+        } else if (shouldSwitchToLayers) {
+          void get().fetchTrashedLayers();
         }
       } catch (err) {
         console.error("Failed to fetch trash status:", err);

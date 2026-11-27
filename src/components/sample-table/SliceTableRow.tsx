@@ -162,10 +162,10 @@ export const SliceTableRow: React.FC<SliceTableRowProps> = React.memo(
               <AlertTriangle className="w-3.5 h-3.5 text-warn shrink-0" />
             </span>
           )}
-          <div className="truncate font-medium tracking-tight min-w-0">
+          <div className="truncate text-[13px] font-normal min-w-0">
             <span className="text-fg">{sliceStem}</span>
             {sliceExt && (
-              <span className="text-fg-2 font-normal">{sliceExt}</span>
+              <span className="text-fg-3">{sliceExt}</span>
             )}
           </div>
         </div>

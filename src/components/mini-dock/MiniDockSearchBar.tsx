@@ -4,6 +4,7 @@ import { useSampleStore } from "../../store/useSampleStore";
 import { getMatchingSynonymsForQuery } from "../../utils/sfxThesaurus";
 import { QuickCreatePopover } from "../QuickCreatePopover";
 import { useSearchAutocomplete } from "../sample-table/useSearchAutocomplete";
+import { MiniDockCategoryDropdown } from "./MiniDockCategoryDropdown";
 import { MiniDockSortDropdown } from "./MiniDockSortDropdown";
 
 const SmartSearchAutocomplete = lazy(() =>
@@ -29,7 +30,11 @@ export const MiniDockSearchBar: React.FC<MiniDockSearchBarProps> = React.memo(
     const searchQuery = useSampleStore((s) => s.searchQuery);
     const smartSearchSynonyms = useSampleStore((s) => s.smartSearchSynonyms);
     const slicesFilterActive = useSampleStore((s) => s.slicesFilterActive);
+    const layersFilterActive = useSampleStore((s) => s.layersFilterActive);
+    const favoriteOnly = useSampleStore((s) => s.favoriteOnly);
+    const favoritesViewTab = useSampleStore((s) => s.favoritesViewTab);
     const trashFilterActive = useSampleStore((s) => s.trashFilterActive);
+    const trashViewTab = useSampleStore((s) => s.trashViewTab);
     const tags = useSampleStore((s) => s.tags);
     const genres = useSampleStore((s) => s.genres);
 
@@ -42,7 +47,12 @@ export const MiniDockSearchBar: React.FC<MiniDockSearchBarProps> = React.memo(
     const searchBoxRef = useRef<HTMLDivElement>(null);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
 
-    const canUseSmartOperators = !slicesFilterActive && !trashFilterActive;
+    const isShowingLayers =
+      layersFilterActive ||
+      (trashFilterActive && trashViewTab === "layers") ||
+      (favoriteOnly && favoritesViewTab === "layers");
+    const canUseSmartOperators =
+      !slicesFilterActive && !showSlicesTable && !isShowingLayers && !trashFilterActive;
 
     const synonymHints = useMemo(
       () =>
@@ -151,9 +161,17 @@ export const MiniDockSearchBar: React.FC<MiniDockSearchBarProps> = React.memo(
               }
             }}
             placeholder={
-              showSlicesTable
+              isShowingLayers
+                ? trashFilterActive
+                  ? "Search trashed layers..."
+                  : favoriteOnly
+                  ? "Search favorite layers..."
+                  : "Search saved layers..."
+                : showSlicesTable
                 ? trashFilterActive
                   ? "Search trashed slices..."
+                  : favoriteOnly
+                  ? "Search favorite slices..."
                   : "Search slices..."
                 : trashFilterActive
                 ? "Search trashed files..."
@@ -265,7 +283,8 @@ export const MiniDockSearchBar: React.FC<MiniDockSearchBarProps> = React.memo(
             </Suspense>
           )}
         </div>
-        {!showSlicesTable && <MiniDockSortDropdown />}
+        {!showSlicesTable && !isShowingLayers && <MiniDockSortDropdown />}
+        {(favoriteOnly || trashFilterActive) && <MiniDockCategoryDropdown />}
       </div>
     );
   }

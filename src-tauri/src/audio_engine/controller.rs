@@ -1,4 +1,4 @@
-use super::decoder::{open_audio_source, TrackDecodeCache};
+use super::decoder::{open_audio_source, AudioSource, DecodedTrack, NormGainAccumulator, TrackDecodeCache};
 use super::dsp::PlaybackDsp;
 use super::output::{open_output_stream, CallbackSignals, OpenedOutputStream};
 use super::{AudioSyncPayload, EngineCmd, AUDIO_SYNC_EVENT};
@@ -290,6 +290,86 @@ fn handle_cmd(ctx: &mut ControllerCtx, cmd: EngineCmd, latest_load_seq: &AtomicU
             }
         }
 
+        EngineCmd::LoadMemoryPcm {
+            load_seq,
+            req,
+            reply,
+        } => {
+            if load_seq < latest_load_seq.load(Ordering::Acquire) {
+                if let Some(r) = reply {
+                    let _ = r.send(Ok(ctx.build_snapshot("superseded", None)));
+                }
+                return;
+            }
+
+            let sample_rate = req.sample_rate.max(8_000);
+            let total_frames = (req.samples.len() / 2) as u64;
+            let mut norm_acc = NormGainAccumulator::new(sample_rate);
+            norm_acc.feed_stereo(&req.samples);
+            let source = AudioSource::InMemory(Arc::new(DecodedTrack {
+                path_norm: req.display_path.to_lowercase(),
+                sample_rate,
+                total_frames,
+                samples: req.samples,
+                norm_gain: norm_acc.current_gain(),
+                leading_silence_sec: 0.0,
+            }));
+
+            let mut stream_err: Option<String> = None;
+            let will_play_req = req.autoplay && total_frames > 0;
+            if will_play_req {
+                if let Err(e) = ctx.ensure_stream() {
+                    stream_err = Some(e);
+                }
+            }
+            let will_play = will_play_req && stream_err.is_none();
+            let req_path_norm = req.display_path.to_lowercase();
+            let new_dur_sec = (total_frames as f64) / (sample_rate as f64);
+            let prev_src = if let Ok(mut g) = ctx.dsp.lock() {
+                g.set_params(
+                    Some(req.volume),
+                    Some(0.0),
+                    Some(req.looping),
+                    Some(req.normalize_preview),
+                    Some(None),
+                );
+                let is_live_hot_swap = will_play
+                    && g.is_playing()
+                    && g.active_path_norm() == Some(req_path_norm.as_str());
+                if is_live_hot_swap {
+                    let live_sec = g.position_sec().clamp(0.0, new_dur_sec.max(0.0));
+                    let old = g.source_clone_for_swap();
+                    g.hot_swap_memory_source(source, live_sec);
+                    old
+                } else {
+                    let old = g.clear_source();
+                    let _ = g.load_source(source, will_play, req.start_sec.max(0.0), None, None);
+                    old
+                }
+            } else {
+                None
+            };
+            if let Some(old) = prev_src {
+                old.release_file_handle();
+            }
+
+            ctx.active_display_path = req.display_path;
+            ctx.signals.ended.store(false, Ordering::Release);
+            ctx.signals.looped.store(false, Ordering::Release);
+            ctx.signals.became_paused.store(false, Ordering::Release);
+            ctx.last_active_audio = Instant::now();
+            ctx.last_heartbeat = Instant::now();
+
+            let payload = if let Some(err) = stream_err {
+                ctx.emit_sync("error", Some(err))
+            } else {
+                ctx.emit_sync(if will_play { "playing" } else { "loaded" }, None)
+            };
+            if let Some(r) = reply {
+                let _ = r.send(Ok(payload));
+            }
+        }
+
         EngineCmd::Play => {
             if let Err(err) = ctx.ensure_stream() {
                 ctx.emit_sync("error", Some(err));
@@ -390,6 +470,7 @@ fn handle_cmd(ctx: &mut ControllerCtx, cmd: EngineCmd, latest_load_seq: &AtomicU
         } => {
             if let Some(target) = target_path_norm.as_deref() {
                 ctx.decode_cache.evict_path(target);
+                crate::audio::evict_layer_pcm_cache_path(target);
             }
             let should_clear = if let Ok(g) = ctx.dsp.lock() {
                 match (g.active_path_norm(), target_path_norm.as_deref()) {
@@ -416,6 +497,7 @@ fn handle_cmd(ctx: &mut ControllerCtx, cmd: EngineCmd, latest_load_seq: &AtomicU
 
         EngineCmd::TrimCaches => {
             ctx.decode_cache.clear();
+            crate::audio::clear_layer_pcm_cache();
         }
     }
 }

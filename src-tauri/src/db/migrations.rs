@@ -569,6 +569,13 @@ pub(crate) fn run_schema_migrations(conn: &Connection) -> Result<(), String> {
         super::migration_v19::run_v19_genre_recovery_migration(conn)?;
     }
 
+    let ver_v20: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap_or(0);
+    if ver_v20 < 20 {
+        super::migration_v20::run_v20_layer_history_migration(conn)?;
+    }
+
     Ok(())
 }
 
@@ -648,12 +655,12 @@ mod tests {
         )
         .expect("seed v1 db");
 
-        init_schema_on_conn(&conn).expect("migrate v1 schema to v19");
+        init_schema_on_conn(&conn).expect("migrate v1 schema to v20");
 
         let user_version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("read user_version");
-        assert_eq!(user_version, 19);
+        assert_eq!(user_version, 20);
 
         let migrated_fav_count: i64 = conn
             .query_row(
@@ -852,12 +859,12 @@ mod tests {
         )
         .expect("downgrade to v12 state");
 
-        run_schema_migrations(&conn).expect("migrate v12 -> v19");
+        run_schema_migrations(&conn).expect("migrate v12 -> v20");
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 19);
+        assert_eq!(version, 20);
 
         for dropped in ["idx_samples_file_path_nocase", "idx_samples_library_id"] {
             let exists: i64 = conn
@@ -943,12 +950,12 @@ mod tests {
         )
         .expect("seed v16 data");
 
-        run_schema_migrations(&conn).expect("migrate v16 -> v19");
+        run_schema_migrations(&conn).expect("migrate v16 -> v20");
 
         let ver: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(ver, 19);
+        assert_eq!(ver, 20);
 
         // Manual custom tag preserved intact
         let custom_kept: i64 = conn
@@ -1068,12 +1075,12 @@ mod tests {
         )
         .expect("simulate v17 state");
 
-        run_schema_migrations(&conn).expect("migrate v17 -> v19");
+        run_schema_migrations(&conn).expect("migrate v17 -> v20");
 
         let ver: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(ver, 19);
+        assert_eq!(ver, 20);
 
         let check = |slug: &str| -> (String, i64) {
             conn.query_row(
@@ -1112,12 +1119,12 @@ mod tests {
         )
         .expect("seed v18 orphaned genre state");
 
-        run_schema_migrations(&conn).expect("migrate v18 -> v19");
+        run_schema_migrations(&conn).expect("migrate v18 -> v20");
 
         let ver: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(ver, 19);
+        assert_eq!(ver, 20);
 
         // Orphaned sample 1 ('Acoustic') recovered into Genre facet with source='auto_genre'
         let (acoustic_facet, acoustic_source): (i64, String) = conn
@@ -1142,5 +1149,35 @@ mod tests {
             )
             .unwrap();
         assert_eq!(synth_source, "auto_genre");
+    }
+
+    #[test]
+    fn migrates_v19_to_v20_creating_layer_history_table_and_indexes() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        init_schema_on_conn(&conn).expect("init baseline schema");
+        conn.execute_batch(
+            "
+            DROP TABLE IF EXISTS layer_history;
+            PRAGMA user_version = 19;
+            ",
+        )
+        .expect("simulate v19 state");
+
+        run_schema_migrations(&conn).expect("migrate v19 -> v20");
+
+        let ver: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ver, 20);
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'layer_history'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(exists, 1);
+        assert!(has_column(&conn, "layer_history", "recipe_json"));
+        assert!(has_column(&conn, "layer_history", "is_trashed"));
     }
 }

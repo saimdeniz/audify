@@ -98,11 +98,17 @@ export function clearPeaksCache() {
   emit();
 }
 
-function subscribe(cb: () => void) {
+export function subscribePeaksCache(cb: () => void) {
   listeners.add(cb);
   return () => {
     listeners.delete(cb);
   };
+}
+
+/** Synchronous cache lookup for canvas renderers (call `requestPeaks(id)` when empty). */
+export function getCachedPeaksJson(id: number | null | undefined): string {
+  if (id == null) return "";
+  return cache.get(id) ?? "";
 }
 
 /**
@@ -113,11 +119,11 @@ export function usePeaksJson(
   id: number | null | undefined,
   inline?: string
 ): string {
-  const cached = useSyncExternalStore(subscribe, () =>
+  const cached = useSyncExternalStore(subscribePeaksCache, () =>
     id == null ? undefined : cache.get(id)
   );
   // Track cache resets so rows whose initial request was cancelled by clearPeaksCache() re-request immediately.
-  const clearEpoch = useSyncExternalStore(subscribe, () => generation);
+  const clearEpoch = useSyncExternalStore(subscribePeaksCache, () => generation);
 
   useEffect(() => {
     if (id != null && !inline && cached === undefined) {

@@ -257,6 +257,83 @@ pub fn open_directory_in_shell(dir_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Validates and opens an HTTPS URL in the user's default web browser.
+/// Callers must additionally enforce domain allowlisting before invoking this helper.
+pub fn open_https_url_in_browser(url: &str) -> Result<(), String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 512
+        || !trimmed.starts_with("https://")
+        || trimmed
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace() || c == '"' || c == '\'' || c == '\\')
+    {
+        return Err("Invalid or unsafe external URL".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::ffi::c_void;
+        use std::os::windows::ffi::OsStrExt;
+
+        #[link(name = "shell32")]
+        extern "system" {
+            fn ShellExecuteW(
+                hwnd: *mut c_void,
+                lp_operation: *const u16,
+                lp_file: *const u16,
+                lp_parameters: *const u16,
+                lp_directory: *const u16,
+                n_show_cmd: i32,
+            ) -> isize;
+        }
+
+        const SW_SHOWNORMAL: i32 = 1;
+        let verb_wide: Vec<u16> = std::ffi::OsStr::new("open")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let url_wide: Vec<u16> = std::ffi::OsStr::new(trimmed)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        run_on_sta_thread("audify-shell-open-url", move || {
+            let code = unsafe {
+                ShellExecuteW(
+                    std::ptr::null_mut(),
+                    verb_wide.as_ptr(),
+                    url_wide.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    SW_SHOWNORMAL,
+                )
+            };
+            if code <= 32 {
+                Err(format!(
+                    "Failed to open URL in default browser (ShellExecuteW code {})",
+                    code
+                ))
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        #[cfg(target_os = "macos")]
+        let opener = "/usr/bin/open";
+        #[cfg(not(target_os = "macos"))]
+        let opener = "xdg-open";
+        std::process::Command::new(opener)
+            .arg(trimmed)
+            .spawn()
+            .map_err(|e| format!("Failed to open browser URL: {}", e))?;
+        Ok(())
+    }
+}
+
 /// Moves one or more quarantined files to the operating system Recycle Bin / Trash
 /// using modern COM `IFileOperation` (`FOF_ALLOWUNDO | FOFX_RECYCLEONDELETE`) on Windows,
 /// supporting paths beyond legacy `SHFileOperationW`'s 248-char limit while ensuring

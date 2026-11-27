@@ -381,6 +381,21 @@ export interface AudifyCommandMap {
     args: { sliceIds: number[] | null };
     result: SliceTrashSummary;
   };
+  check_app_update: {
+    args: Record<string, never>;
+    result: {
+      current_version: string;
+      latest_version: string;
+      has_update: boolean;
+      release_url: string;
+      release_name: string;
+      published_at: string;
+    };
+  };
+  open_github_url: {
+    args: { url?: string | null };
+    result: void;
+  };
 }
 
 /**

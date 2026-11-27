@@ -45,7 +45,20 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 }) => {
   const isMiniOverlay = mode === "mini-overlay";
   const libraries = useSampleStore((s) => s.libraries);
-  const totalFavoritesCount = useSampleStore((s) => s.favoritesCount);
+  const trackFavoritesCount = useSampleStore((s) => s.favoritesCount);
+  const sliceHistory = useSampleStore((s) => s.sliceHistory);
+  const layerHistory = useSampleStore((s) => s.layerHistory);
+  const totalFavoritesCount = useMemo(() => {
+    let sliceFavs = 0;
+    for (const s of sliceHistory) {
+      if (s.is_favorite) sliceFavs++;
+    }
+    let layerFavs = 0;
+    for (const l of layerHistory) {
+      if (l.is_favorite) layerFavs++;
+    }
+    return trackFavoritesCount + sliceFavs + layerFavs;
+  }, [trackFavoritesCount, sliceHistory, layerHistory]);
   const knownSampleIds = useSampleStore((s) => s.knownSampleIds);
   const enableLicensesSystem = useSampleStore((s) => s.enableLicensesSystem);
   const folderFilter = useSampleStore((s) => s.folderFilter);
@@ -55,6 +68,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
     (s) => s.duplicatesFilterActive
   );
   const slicesFilterActive = useSampleStore((s) => s.slicesFilterActive);
+  const layersFilterActive = useSampleStore((s) => s.layersFilterActive);
   const recentSampleIds = useSampleStore((s) => s.recentSampleIds);
   const selectedTagIds = useSampleStore((s) => s.selectedTagIds);
   const selectedGenre = useSampleStore((s) => s.selectedGenre);
@@ -68,7 +82,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   const trashFilterActive = useSampleStore((s) => s.trashFilterActive);
   const trashedCount = useSampleStore((s) => s.trashedCount);
   const trashedSliceCount = useSampleStore((s) => s.trashedSliceCount);
-  const totalTrashedCount = trashedCount + trashedSliceCount;
+  const trashedLayerCount = useSampleStore((s) => s.trashedLayerCount);
+  const totalTrashedCount = trashedCount + trashedSliceCount + trashedLayerCount;
   const enableAdvancedFileOps = useSampleStore((s) => s.enableAdvancedFileOps);
 
   const isDraggingInApp = useSampleStore((s) => s.inAppDragSample !== null);
@@ -106,6 +121,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
     bin: binFilterActive,
     trash: trashFilterActive,
     slices: slicesFilterActive,
+    layers: layersFilterActive,
     duplicates: duplicatesFilterActive,
   });
   const {
@@ -145,6 +161,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 
     if (
       (slicesFilterActive && !prev.slices) ||
+      (layersFilterActive && !prev.layers) ||
       (duplicatesFilterActive && !prev.duplicates)
     ) {
       setActiveTab("folders");
@@ -154,12 +171,14 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
       bin: binFilterActive,
       trash: trashFilterActive,
       slices: slicesFilterActive,
+      layers: layersFilterActive,
       duplicates: duplicatesFilterActive,
     };
   }, [
     binFilterActive,
     trashFilterActive,
     slicesFilterActive,
+    layersFilterActive,
     duplicatesFilterActive,
   ]);
 
@@ -235,6 +254,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
     !recentOnly &&
     !duplicatesFilterActive &&
     !slicesFilterActive &&
+    !layersFilterActive &&
     !folderFilter &&
     selectedCollectionId === null &&
     selectedLicenseGroupId === null &&
@@ -251,6 +271,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
       !binFilterActive &&
       !trashFilterActive &&
       !slicesFilterActive &&
+      !layersFilterActive &&
       !duplicatesFilterActive) ||
     activeTab === "collections" ||
     activeTab === "tags" ||

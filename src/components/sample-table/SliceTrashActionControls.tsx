@@ -12,7 +12,7 @@ export interface TrashActionToolbarStripProps {
   trashedTotalBytes: number;
   selectedIds: number[];
   trashOpStatus: TrashOpStatus | null;
-  itemNoun: "file" | "slice";
+  itemNoun: "file" | "slice" | "layer";
   preservedSummarySuffix: string;
   restoreSelectedTitle: string;
   restoreAllTitle: string;
@@ -56,8 +56,8 @@ export const TrashActionToolbarStrip: React.FC<
 
   return (
     <div
-      className={`border-t border-line-subtle flex items-center flex-wrap w-full ${
-        compact ? "pt-1 gap-1" : "pt-1.5 gap-1.5"
+      className={`border-t border-line flex items-center flex-wrap w-full ${
+        compact ? "pt-1.5 mt-0.5 gap-1" : "pt-2 mt-0.5 gap-1.5"
       }`}
     >
       {selectedIds.length > 0 && (

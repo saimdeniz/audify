@@ -65,10 +65,26 @@ pub struct LoadTrackRequest {
     pub skip_leading_silence: bool,
 }
 
+pub struct LoadMemoryPcmRequest {
+    pub display_path: String,
+    pub samples: Vec<f32>,
+    pub sample_rate: u32,
+    pub autoplay: bool,
+    pub start_sec: f64,
+    pub volume: f32,
+    pub looping: bool,
+    pub normalize_preview: bool,
+}
+
 pub(super) enum EngineCmd {
     Load {
         load_seq: u64,
         req: LoadTrackRequest,
+        reply: Option<mpsc::Sender<Result<AudioSyncPayload, String>>>,
+    },
+    LoadMemoryPcm {
+        load_seq: u64,
+        req: LoadMemoryPcmRequest,
         reply: Option<mpsc::Sender<Result<AudioSyncPayload, String>>>,
     },
     Play,
@@ -139,6 +155,19 @@ impl AudioEngineState {
         reply_rx
             .recv_timeout(Duration::from_secs(10))
             .map_err(|_| "Audio decode timed out".to_string())?
+    }
+
+    pub fn load_memory_pcm(&self, req: LoadMemoryPcmRequest) -> Result<AudioSyncPayload, String> {
+        let load_seq = self.latest_load_seq.fetch_add(1, Ordering::AcqRel) + 1;
+        let (reply_tx, reply_rx) = mpsc::channel();
+        self.send(EngineCmd::LoadMemoryPcm {
+            load_seq,
+            req,
+            reply: Some(reply_tx),
+        })?;
+        reply_rx
+            .recv_timeout(Duration::from_secs(10))
+            .map_err(|_| "Layer memory audio load timed out".to_string())?
     }
 
     pub fn play(&self) -> Result<(), String> {

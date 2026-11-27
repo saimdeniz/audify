@@ -217,7 +217,7 @@ export interface SliceTrashSummary {
   total_bytes: number;
 }
 
-export type TrashViewTab = "tracks" | "slices";
+export type TrashViewTab = "tracks" | "slices" | "layers";
 
 export interface SliceRenameOutcome {
   old_record: SliceHistoryEntry;

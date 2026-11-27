@@ -79,6 +79,9 @@ export function buildProfileStoragePairs(
     | "autoCreateCollectionSubfolders"
     | "autoRouteCollectionDrops"
     | "customSliceExportPath"
+    | "customLayerExportPath"
+    | "autoSaveLayerOnNleDrag"
+    | "layerTopDeckView"
     | "sliceMicroFade"
     | "exportAudioPreset"
     | "exportLoudnessMode"
@@ -153,6 +156,12 @@ export function buildProfileStoragePairs(
       String(resolvedFields.autoRouteCollectionDrops),
     ],
     [AUDIFY_STORAGE_KEYS.customSliceExportPath, resolvedFields.customSliceExportPath],
+    [AUDIFY_STORAGE_KEYS.customLayerExportPath, resolvedFields.customLayerExportPath],
+    [
+      AUDIFY_STORAGE_KEYS.autoSaveLayerOnNleDrag,
+      String(resolvedFields.autoSaveLayerOnNleDrag),
+    ],
+    [AUDIFY_STORAGE_KEYS.layerTopDeckView, resolvedFields.layerTopDeckView],
     [AUDIFY_STORAGE_KEYS.sliceMicroFade, String(resolvedFields.sliceMicroFade)],
     [AUDIFY_STORAGE_KEYS.exportAudioPreset, resolvedFields.exportAudioPreset],
     [AUDIFY_STORAGE_KEYS.exportLoudnessMode, resolvedFields.exportLoudnessMode],
@@ -286,6 +295,9 @@ export function buildProfileSettingsJsonFromStore(get: StoreGet): string {
     autoCreateCollectionSubfolders: s.autoCreateCollectionSubfolders,
     autoRouteCollectionDrops: s.autoRouteCollectionDrops,
     customSliceExportPath: s.customSliceExportPath,
+    customLayerExportPath: s.customLayerExportPath,
+    autoSaveLayerOnNleDrag: s.autoSaveLayerOnNleDrag,
+    layerTopDeckView: s.layerTopDeckView,
     enableAdvancedFileOps: s.enableAdvancedFileOps,
     confirmBeforeTrash: s.confirmBeforeTrash,
     enableLiveFolderWatch: s.enableLiveFolderWatch,

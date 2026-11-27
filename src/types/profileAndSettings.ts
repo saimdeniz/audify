@@ -1,4 +1,5 @@
 import type { AiSimilarityScope, AiTaggingMode } from "./aiAndSearch";
+import type { LayerTopDeckView } from "./layers";
 
 export type BuiltInFacetSlug = "category" | "genre" | "mood" | "source";
 export type TaxonomyFacetSlug = BuiltInFacetSlug | (string & {});
@@ -322,6 +323,9 @@ export interface ProfileSettings {
   autoCreateCollectionSubfolders?: boolean;
   autoRouteCollectionDrops?: boolean;
   customSliceExportPath?: string;
+  customLayerExportPath?: string;
+  autoSaveLayerOnNleDrag?: boolean;
+  layerTopDeckView?: LayerTopDeckView;
   enableAdvancedFileOps?: boolean;
   confirmBeforeTrash?: boolean;
   enableLiveFolderWatch?: boolean;

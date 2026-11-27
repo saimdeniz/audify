@@ -18,14 +18,16 @@ pub use json_io::{
     MAX_SNAPSHOT_ARCHIVE_BYTES,
 };
 pub use os_shell::{
-    move_files_to_os_recycle_bin, open_directory_in_shell, reveal_file_in_explorer,
+    move_files_to_os_recycle_bin, open_directory_in_shell, open_https_url_in_browser,
+    reveal_file_in_explorer,
 };
 pub(crate) use path_guards::reject_symlink_ancestors;
 pub use path_guards::{
-    collect_profile_slice_dirs, display_leaf, ensure_inside, ensure_not_inside_user_dir,
-    ensure_safe_export_dir, has_ntfs_ads_colon, is_forbidden_os_or_root_path, is_safe_library_dir,
-    is_unc_or_network_path, normalize_clean_path, sanitize_err, strip_verbatim_prefix,
-    validate_audio_path_in_scope, validate_path_in_libraries_or_cache, AuthorizedAudioScope,
+    collect_profile_layer_dirs, collect_profile_slice_dirs, display_leaf, ensure_inside,
+    ensure_not_inside_user_dir, ensure_safe_export_dir, has_ntfs_ads_colon,
+    is_forbidden_os_or_root_path, is_safe_library_dir, is_unc_or_network_path,
+    normalize_clean_path, sanitize_err, strip_verbatim_prefix, validate_audio_path_in_scope,
+    validate_path_in_libraries_or_cache, AuthorizedAudioScope,
 };
 
 #[cfg(test)]

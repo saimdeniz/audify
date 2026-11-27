@@ -1,14 +1,21 @@
 mod decode;
 mod export;
+pub mod layer_mixer;
 mod loudness;
 mod metadata;
 mod pcm_ops;
+mod pitch_shift;
 mod transcode;
 
 pub(crate) use decode::{copy_packet_samples, open_audio_decoder, OpenedAudioDecoder};
 pub use decode::{
     compute_bins_from_blocks, compute_hires_peaks, compute_preview_norm_gain,
     decode_audio_and_peaks, fallback_lofty_props,
+};
+pub use layer_mixer::{
+    clear_layer_pcm_cache, evict_layer_pcm_cache_path, export_rendered_layer_wav,
+    render_layer_mix, validate_and_normalize_recipe, LanePeaksPreview, LayerClipSpec,
+    LayerLaneSpec, LayerRecipe, RenderedLayerMix, LAYER_MIX_SAMPLE_RATE,
 };
 #[cfg(test)]
 pub use export::{export_wav_slice, export_wav_slice_with_options, export_wav_slice_with_preset};

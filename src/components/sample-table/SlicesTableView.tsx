@@ -16,7 +16,7 @@ import { SlicesTableEmptyState } from "./SlicesTableEmptyState";
 import { SliceColWidths, SliceTableRow } from "./SliceTableRow";
 import { FIXED_WAVEFORM_WIDTH } from "./tableLayout";
 
-const SLICE_ROW_HEIGHT = 32;
+const SLICE_ROW_HEIGHT = 34;
 
 const DEFAULT_SLICE_COL_WIDTHS: SliceColWidths = {
   name: 240,
@@ -65,6 +65,8 @@ export const SlicesTableView: React.FC = () => {
   const sliceHideMissing = useSampleStore((s) => s.sliceHideMissing);
   const sliceFavoriteOnly = useSampleStore((s) => s.sliceFavoriteOnly);
   const slicePitchOnly = useSampleStore((s) => s.slicePitchOnly);
+  const favoriteOnly = useSampleStore((s) => s.favoriteOnly);
+  const favoritesViewTab = useSampleStore((s) => s.favoritesViewTab);
   const trashFilterActive = useSampleStore((s) => s.trashFilterActive);
   const trashViewTab = useSampleStore((s) => s.trashViewTab);
   const trashedCount = useSampleStore((s) => s.trashedCount);
@@ -78,6 +80,7 @@ export const SlicesTableView: React.FC = () => {
   const isPlaying = useSampleStore((s) => s.isPlaying);
 
   const isSliceTrashMode = trashFilterActive && trashViewTab === "slices";
+  const isSliceFavMode = favoriteOnly && favoritesViewTab === "slices";
 
   const accentColor = useSampleStore((s) => s.accentColor);
   const themeMode = useSampleStore((s) => s.themeMode);
@@ -185,14 +188,17 @@ export const SlicesTableView: React.FC = () => {
         searchQuery,
         folderFilter,
         sliceHideMissing: isSliceTrashMode ? false : sliceHideMissing,
-        sliceFavoriteOnly: isSliceTrashMode ? false : sliceFavoriteOnly,
-        slicePitchOnly: isSliceTrashMode ? false : slicePitchOnly,
+        sliceFavoriteOnly: isSliceTrashMode
+          ? false
+          : isSliceFavMode || sliceFavoriteOnly,
+        slicePitchOnly: isSliceTrashMode || isSliceFavMode ? false : slicePitchOnly,
         sliceSortKey,
         sliceSortDir,
       }),
     [
       activeSourceList,
       isSliceTrashMode,
+      isSliceFavMode,
       searchQuery,
       folderFilter,
       sliceHideMissing,
@@ -525,6 +531,7 @@ export const SlicesTableView: React.FC = () => {
           {visibleSlices.length === 0 ? (
             <SlicesTableEmptyState
               isSliceTrashMode={isSliceTrashMode}
+              isSliceFavMode={isSliceFavMode}
               isLoadingSliceHistory={isLoadingSliceHistory}
               searchQuery={searchQuery}
               sliceFavoriteOnly={sliceFavoriteOnly}

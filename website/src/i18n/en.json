@@ -58,6 +58,7 @@
       "WASAPI Shared & Exclusive",
       "SQLite FTS5 + WAL",
       "Offline YAMNet ONNX AI",
+      "Multi-Track Layers SFX Editor",
       "Win32 Edge-Peek Mini Dock"
     ]
   },
@@ -131,8 +132,21 @@
         ]
       },
       {
-        "id": "search",
+        "id": "layers",
         "code": "02",
+        "title": "Layers — Multi-Track SFX Timeline",
+        "shortDesc": "Stack multiple sounds on an NLE-style timeline to design composite SFX, mix live, and save or drag directly into your project.",
+        "detail": "Design custom layered impacts, risers, and ambiences right inside Audify without opening a full DAW. Stack unlimited color-coded lanes with per-lane Solo/Mute/Gain, clip-level pitch, reverse, fade-in/out, split, live mix preview, and one-click Drag Mix or portable saving inside user/layers.",
+        "badge": "LAYERS · MULTI-TRACK TIMELINE",
+        "subModes": [
+          { "id": "editor", "label": "1. Waveform Clips" },
+          { "id": "stack", "label": "2. Multi-Lane Stack" },
+          { "id": "saved", "label": "3. Saved Layers" }
+        ]
+      },
+      {
+        "id": "search",
+        "code": "03",
         "title": "Instant FTS5 Search & Waveforms",
         "shortDesc": "Filter 50,000+ samples at 60fps with virtualized mini waveforms and quick tag chips.",
         "detail": "Powered by SQLite FTS5 + WAL in Rust. Search across file names, folders, genres, BPM, keys, and custom tags while virtualized 34px rows stream precomputed waveform envelopes with zero UI stutter.",
@@ -144,7 +158,7 @@
       },
       {
         "id": "similarity",
-        "code": "03",
+        "code": "04",
         "title": "Offline AI Acoustic Similarity",
         "shortDesc": "Drop any audio clip onto the window to rank acoustically similar hits in 0.2 ms — 100% locally.",
         "detail": "Audify runs an optional local YAMNet ONNX embedding model right on your CPU with zero cloud calls. Drop an external reference sound or trigger similarity from any row to surface matching impacts, swooshes, or textures in fractions of a millisecond.",
@@ -156,7 +170,7 @@
       },
       {
         "id": "taxonomy",
-        "code": "04",
+        "code": "05",
         "title": "Faceted Tags & Genre Taxonomy",
         "shortDesc": "Organize SFX and music with color-coded facets, rule-based auto-tagging, and instant filter drawers.",
         "detail": "Keep massive libraries tidy with structured tag facets (Action & Combat, Voice & Music, Nature & Ambience) and Genre/Mood drawers. Every color swatch follows a unified studio palette across Dark, Light, and Contrast themes.",
@@ -168,7 +182,7 @@
       },
       {
         "id": "minidock",
-        "code": "05",
+        "code": "06",
         "title": "Mini Dock & Edge-Peek Companion",
         "shortDesc": "Collapse Audify into a compact always-on-top dock (Ctrl+M) or let it rest silently at the edge of your monitor.",
         "detail": "Built for single- and dual-monitor editors alike. Use Mini Dock standalone over DaVinci Resolve or Premiere Pro, or enable the optional Win32 Edge-Peek strip so it rests unobtrusively at your screen edge and expands on hover.",
@@ -180,7 +194,7 @@
       },
       {
         "id": "settings",
-        "code": "06",
+        "code": "07",
         "title": "WASAPI Audio & Deep Control",
         "shortDesc": "Output device routing, normalization, loudness targets, custom themes, and Protected Vault safety.",
         "detail": "Choose your exact Windows audio output device, configure LUFS loudness normalization, sync multi-window themes seamlessly, and enable Protected Vault locks so your master archive can never be renamed or deleted by mistake.",

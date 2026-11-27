@@ -181,6 +181,34 @@ impl PlaybackDsp {
         pending_seek
     }
 
+    pub fn source_clone_for_swap(&self) -> Option<AudioSource> {
+        self.source.clone()
+    }
+
+    /// Seamlessly swaps an in-memory PCM source (e.g., live Layers Editor mixdown)
+    /// while playback is active, preserving the live playhead without dipping to silence.
+    pub fn hot_swap_memory_source(&mut self, source: AudioSource, start_sec: f64) {
+        let sr = source.sample_rate().max(1) as f64;
+        let max_frame = source.total_frames() as f64;
+        let clamped_frame = (start_sec.max(0.0) * sr).min(max_frame);
+        if self.last_out_l.abs() > 1e-4 || self.last_out_r.abs() > 1e-4 {
+            self.declick_l = self.last_out_l;
+            self.declick_r = self.last_out_r;
+            self.declick_env = 1.0;
+        }
+        self.slice_start_sec = None;
+        self.slice_end_sec = None;
+        self.respect_slice_bounds = true;
+        self.loop_post_tail_active = false;
+        self.did_head_xfade = false;
+        self.source = Some(source);
+        self.playhead_frame = clamped_frame;
+        self.gain_smooth = self.target_gain();
+        self.playing = true;
+        self.fade_env = 1.0;
+        self.fade_mode = FadeMode::Steady;
+    }
+
     pub fn clear_source(&mut self) -> Option<AudioSource> {
         if self.playing && (self.last_out_l.abs() > 1e-4 || self.last_out_r.abs() > 1e-4) {
             self.declick_l = self.last_out_l;
@@ -324,6 +352,21 @@ impl PlaybackDsp {
     }
 
     pub fn seek_sec(&mut self, target_sec: f64) -> Option<(AudioSource, u64)> {
+        if matches!(
+            self.fade_mode,
+            FadeMode::FadeOutToPause | FadeMode::FadeOutToStop
+        ) {
+            if self.last_out_l.abs() > 1e-4 || self.last_out_r.abs() > 1e-4 {
+                self.declick_l = self.last_out_l;
+                self.declick_r = self.last_out_r;
+                self.declick_env = 1.0;
+            }
+            self.playing = false;
+            self.fade_env = 0.0;
+            self.fade_mode = FadeMode::Steady;
+            self.loop_post_tail_active = false;
+            self.did_head_xfade = false;
+        }
         let src = self.source.as_ref()?;
         self.loop_post_tail_active = false;
         self.did_head_xfade = false;
@@ -835,5 +878,46 @@ mod tests {
                 frame
             );
         }
+    }
+
+    #[test]
+    fn pause_then_immediate_seek_stays_paused_at_target() {
+        let mut dsp = PlaybackDsp::new(48_000);
+        dsp.set_params(Some(1.0), Some(0.0), Some(false), Some(false), None);
+        dsp.load_source(make_sine_source(48_000, 96_000, 440.0), true, 0.0, None, None);
+
+        let mut buf = vec![0.0_f32; 4_800 * 2];
+        dsp.render_into(&mut buf, 2);
+        assert!(dsp.is_playing());
+
+        // Emulate Stop button: pause() enters FadeOutToPause, followed immediately by seek(0.0)
+        dsp.pause();
+        dsp.seek_sec(0.0);
+        assert!(!dsp.is_playing(), "seek during FadeOutToPause must not resume playback");
+        assert!(!dsp.is_rendering_audio());
+        assert!((dsp.position_sec() - 0.0).abs() < 0.001);
+
+        buf.fill(0.0);
+        dsp.render_into(&mut buf, 2);
+        assert!(!dsp.is_playing());
+        assert!((dsp.position_sec() - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn hot_swap_memory_source_keeps_playing_at_live_position() {
+        let mut dsp = PlaybackDsp::new(48_000);
+        dsp.set_params(Some(1.0), Some(0.0), Some(false), Some(false), None);
+        dsp.load_source(make_sine_source(48_000, 96_000, 440.0), true, 0.0, None, None);
+
+        let mut buf = vec![0.0_f32; 4_800 * 2];
+        dsp.render_into(&mut buf, 2);
+        let live_sec = dsp.position_sec();
+        assert!((live_sec - 0.1).abs() < 0.002);
+
+        dsp.hot_swap_memory_source(make_sine_source(48_000, 96_000, 880.0), live_sec);
+        assert!(dsp.is_playing());
+        assert!((dsp.position_sec() - live_sec).abs() < 0.002);
+        dsp.render_into(&mut buf, 2);
+        assert!((dsp.position_sec() - (live_sec + 0.1)).abs() < 0.003);
     }
 }

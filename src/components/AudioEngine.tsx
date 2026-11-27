@@ -30,6 +30,7 @@ import {
   isViewportRenderActive,
   subscribeAppActivity,
 } from "../utils/appFocusMonitor";
+import { isLayerDraftSample } from "../utils/layerHelpers";
 import { normalizePathForMatch } from "../utils/pathHelpers";
 
 const LazyHtmlAudioFallbackEngine = lazy(() =>
@@ -276,6 +277,26 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
       triggerSeq: playTriggerSeq,
       isPlaying: state.isPlaying,
     };
+
+    if (isLayerDraftSample(activeSample)) {
+      // Live Layers Editor drafts are loaded straight into native WASAPI RAM via `preview_layer_mix`.
+      loadedSampleRef.current = {
+        id: activeSample.id,
+        path: activeSample.file_path,
+      };
+      loadingSampleRef.current = null;
+      pendingSeekDuringLoadRef.current = null;
+      if (hasUnappliedSeek) {
+        void nativeAudioSeek(startSec).catch(() => {});
+        if (state.isPlaying) {
+          void nativeAudioPlay().catch(() => {
+            lastEngineForcedPlayingRef.current = false;
+            useSampleStore.getState().setIsPlaying(false);
+          });
+        }
+      }
+      return;
+    }
 
     if (sameTrackAlreadyLoaded && hasUnappliedSeek) {
       void nativeAudioSeek(startSec).catch(() => {});

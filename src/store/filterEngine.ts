@@ -17,6 +17,25 @@ export interface ReconciledSelection {
 }
 
 /**
+ * Returns true when background table filtering / tab switching must keep the
+ * currently loaded top-deck sample untouched:
+ * - Any actively playing track/mix/slice (`isPlaying === true`) must never be cut
+ *   or replaced by an unrelated track when browsing other tabs/folders/filters.
+ * - Virtual Layers deck items (`id < 0`: live draft `-999999` or saved-layer preview)
+ *   must stay pinned while inside the Layers workspace even when paused, preventing
+ *   a 1-frame library fallback flash when toggling Saved ↔ Editor or searching.
+ */
+export function shouldPreserveDeckSelection(state: {
+  isPlaying: boolean;
+  selectedSample: SampleItem | null;
+  layersFilterActive?: boolean;
+}): boolean {
+  if (!state.selectedSample) return false;
+  if (state.isPlaying) return true;
+  return state.selectedSample.id < 0 && Boolean(state.layersFilterActive);
+}
+
+/**
  * Reconciles primary selection, multi-selection, and Shift-anchor index after any
  * filter, search, sort, or view switch.
  *
@@ -25,14 +44,24 @@ export interface ReconciledSelection {
  *   (`preserveMultiSelect: false`), while keeping visible multi-selections intact
  *   when refining within the current view (`preserveMultiSelect: true`).
  * - Always recomputes `lastSelectedIndex` against the new `filtered` list.
+ * - When `preserveCurrentSelection` is true, keeps `currentSelected` loaded on the
+ *   top deck even if it does not belong to `filtered` (clearing off-view row IDs).
  */
 export function reconcileSelectionAfterFilter(
   filtered: SampleItem[],
   currentSelected: SampleItem | null,
   currentSelectedIds: number[],
-  preserveMultiSelect: boolean
+  preserveMultiSelect: boolean,
+  preserveCurrentSelection = false
 ): ReconciledSelection {
   if (filtered.length === 0) {
+    if (preserveCurrentSelection && currentSelected) {
+      return {
+        nextSelected: currentSelected,
+        nextSelectedIds: [],
+        nextSelectedIndex: null,
+      };
+    }
     return {
       nextSelected: null,
       nextSelectedIds: [],
@@ -55,6 +84,9 @@ export function reconcileSelectionAfterFilter(
     if (curIdx !== undefined) {
       nextSelected = filtered[curIdx];
       nextSelectedIndex = curIdx;
+    } else if (preserveCurrentSelection) {
+      nextSelected = currentSelected;
+      nextSelectedIndex = -1;
     }
   }
 
@@ -87,6 +119,7 @@ export function reconcileSelectionAfterFilter(
   }
 
   // 4. Prune multi-selection strictly to visible rows (eliminating Ghost Multi-Selection)
+  const isSelectedVisible = indexById.has(nextSelected.id);
   let nextSelectedIds: number[];
   if (preserveMultiSelect && currentSelectedIds.length > 1) {
     const visibleSelected = currentSelectedIds.filter((id) =>
@@ -94,16 +127,19 @@ export function reconcileSelectionAfterFilter(
     );
     if (visibleSelected.length > 0) {
       nextSelectedIds = visibleSelected;
-      if (!indexById.has(nextSelected.id) || !visibleSelected.includes(nextSelected.id)) {
+      if (
+        !preserveCurrentSelection &&
+        (!isSelectedVisible || !visibleSelected.includes(nextSelected.id))
+      ) {
         const firstVisIdx = indexById.get(visibleSelected[0])!;
         nextSelected = filtered[firstVisIdx];
         nextSelectedIndex = firstVisIdx;
       }
     } else {
-      nextSelectedIds = [nextSelected.id];
+      nextSelectedIds = isSelectedVisible ? [nextSelected.id] : [];
     }
   } else {
-    nextSelectedIds = [nextSelected.id];
+    nextSelectedIds = isSelectedVisible ? [nextSelected.id] : [];
   }
 
   return {

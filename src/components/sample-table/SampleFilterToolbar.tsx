@@ -22,6 +22,11 @@ const SliceToolbarChips = lazy(() =>
 const TrashToolbarChips = lazy(() =>
   import("./TrashToolbarChips").then((m) => ({ default: m.TrashToolbarChips }))
 );
+const FavoritesToolbarChips = lazy(() =>
+  import("./FavoritesToolbarChips").then((m) => ({
+    default: m.FavoritesToolbarChips,
+  }))
+);
 
 interface SampleFilterToolbarProps {
   searchInputRef: React.RefObject<HTMLInputElement>;
@@ -34,10 +39,22 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> =
     const searchQuery = useSampleStore((s) => s.searchQuery);
     const smartSearchSynonyms = useSampleStore((s) => s.smartSearchSynonyms);
     const slicesFilterActive = useSampleStore((s) => s.slicesFilterActive);
+    const layersFilterActive = useSampleStore((s) => s.layersFilterActive);
+    const layersWorkspaceTab = useSampleStore((s) => s.layersWorkspaceTab);
+    const favoriteOnly = useSampleStore((s) => s.favoriteOnly);
+    const favoritesViewTab = useSampleStore((s) => s.favoritesViewTab);
     const trashFilterActive = useSampleStore((s) => s.trashFilterActive);
     const trashViewTab = useSampleStore((s) => s.trashViewTab);
     const isShowingSlices =
-      slicesFilterActive || (trashFilterActive && trashViewTab === "slices");
+      slicesFilterActive ||
+      (trashFilterActive && trashViewTab === "slices") ||
+      (favoriteOnly && favoritesViewTab === "slices");
+    const isShowingLayersSaved =
+      (layersFilterActive && layersWorkspaceTab === "saved") ||
+      (trashFilterActive && trashViewTab === "layers") ||
+      (favoriteOnly && favoritesViewTab === "layers");
+    const isSpecialList =
+      isShowingSlices || isShowingLayersSaved || trashFilterActive;
     const tags = useSampleStore((s) => s.tags);
     const genres = useSampleStore((s) => s.genres);
 
@@ -56,7 +73,7 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> =
     const searchBoxRef = useRef<HTMLDivElement | null>(null);
 
     const autocomplete = useSearchAutocomplete({
-      enabled: !showSearchHelper && !slicesFilterActive && !trashFilterActive,
+      enabled: !showSearchHelper && !isSpecialList,
       searchQuery,
       tags,
       genres,
@@ -69,7 +86,7 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> =
         <div
           ref={searchBoxRef}
           data-search-keep-focus="true"
-          className="relative flex items-center w-[340px] min-w-[260px] sm:min-w-[300px] lg:min-w-[350px] max-w-[440px] flex-1 bg-surface-3 border border-line rounded-sm focus-within:border-accent h-[25px] pl-2.5 pr-1 shrink-0"
+          className="relative flex items-center flex-1 min-w-[160px] max-w-[420px] bg-surface-3 border border-line rounded-sm focus-within:border-accent h-[25px] pl-2.5 pr-1"
         >
           <Search className="w-3.5 h-3.5 text-fg-head mr-2 shrink-0" />
           <input
@@ -119,9 +136,17 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> =
               }
             }}
             placeholder={
-              isShowingSlices
+              isShowingLayersSaved
+                ? trashFilterActive
+                  ? "Search trashed layers..."
+                  : favoriteOnly
+                  ? "Search favorite layers..."
+                  : "Search saved layers..."
+                : isShowingSlices
                 ? trashFilterActive
                   ? "Search trashed slices by name or source track..."
+                  : favoriteOnly
+                  ? "Search favorite slices..."
                   : "Search slices by name or source track..."
                 : trashFilterActive
                   ? "Search trashed files..."
@@ -143,7 +168,7 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> =
               <X className="w-3.5 h-3.5" />
             </button>
           )}
-          {searchQuery.trim() && !slicesFilterActive && !trashFilterActive && (
+          {searchQuery.trim() && !isSpecialList && (
             <QuickCreatePopover
               title="Save as Smart Collection"
               placeholder="Collection name..."
@@ -167,7 +192,7 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> =
               }}
             />
           )}
-          {!slicesFilterActive && !trashFilterActive && (
+          {!isSpecialList && (
             <>
               <button
                 type="button"
@@ -235,8 +260,19 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> =
           )}
         </div>
 
-        {!slicesFilterActive &&
-          !trashFilterActive &&
+        {/* Search-adjacent compact category tabs for Favorites & Trash (preserves Tag Suggestions on the right) */}
+        {favoriteOnly && (
+          <Suspense fallback={null}>
+            <FavoritesToolbarChips />
+          </Suspense>
+        )}
+        {trashFilterActive && !favoriteOnly && (
+          <Suspense fallback={null}>
+            <TrashToolbarChips />
+          </Suspense>
+        )}
+
+        {!isSpecialList &&
           synonymHints.length > 0 && (
             <div className="hidden 2xl:flex items-center space-x-1 min-w-0 overflow-hidden font-mono text-[10px] shrink-0">
               <span
@@ -263,10 +299,10 @@ export const SampleFilterToolbar: React.FC<SampleFilterToolbarProps> =
           <Suspense fallback={null}>
             <SliceToolbarChips />
           </Suspense>
-        ) : trashFilterActive ? (
-          <Suspense fallback={null}>
-            <TrashToolbarChips />
-          </Suspense>
+        ) : isShowingLayersSaved ||
+          (favoriteOnly && favoritesViewTab !== "tracks") ||
+          trashFilterActive ? (
+          <div className="flex-1 min-w-0" />
         ) : (
           <ToolbarQuickTagCloud />
         )}

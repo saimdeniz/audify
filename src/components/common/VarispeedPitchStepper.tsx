@@ -4,14 +4,15 @@ export interface VarispeedPitchStepperProps {
   pitchSemitones: number;
   onChange: (nextPitch: number) => void;
   variant?: "compact" | "dock";
+  titleOverride?: string;
 }
 
 /**
- * Shared ±24 semitone varispeed pitch stepper supporting click (±1st),
+ * Shared ±24 semitone pitch stepper supporting click (±1st),
  * Shift+click (±12st), mouse wheel, and click-center reset to 0st.
  */
 export const VarispeedPitchStepper: React.FC<VarispeedPitchStepperProps> =
-  React.memo(({ pitchSemitones, onChange, variant = "compact" }) => {
+  React.memo(({ pitchSemitones, onChange, variant = "compact", titleOverride }) => {
     const pitchDisplay =
       pitchSemitones > 0 ? `+${pitchSemitones}st` : `${pitchSemitones}st`;
     const isDock = variant === "dock";
@@ -38,9 +39,10 @@ export const VarispeedPitchStepper: React.FC<VarispeedPitchStepperProps> =
               }`
         }
         title={
-          isDock
+          titleOverride ??
+          (isDock
             ? "Varispeed Pitch (±24st) — Click/scroll ±1st, Shift ±12st, click center to reset"
-            : "Varispeed Pitch (±24st — click/scroll ±1st, Shift ±12st, click center to reset, drags pitched WAV to NLE)"
+            : "Varispeed Pitch (±24st — click/scroll ±1st, Shift ±12st, click center to reset, drags pitched WAV to NLE)")
         }
       >
         <button

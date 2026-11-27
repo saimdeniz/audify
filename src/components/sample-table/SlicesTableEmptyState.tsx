@@ -4,6 +4,7 @@ import { useSampleStore } from "../../store/useSampleStore";
 
 interface SlicesTableEmptyStateProps {
   isSliceTrashMode: boolean;
+  isSliceFavMode?: boolean;
   isLoadingSliceHistory: boolean;
   searchQuery: string;
   sliceFavoriteOnly: boolean;
@@ -14,6 +15,7 @@ interface SlicesTableEmptyStateProps {
 
 export const SlicesTableEmptyState: React.FC<SlicesTableEmptyStateProps> = ({
   isSliceTrashMode,
+  isSliceFavMode = false,
   isLoadingSliceHistory,
   searchQuery,
   sliceFavoriteOnly,
@@ -22,19 +24,20 @@ export const SlicesTableEmptyState: React.FC<SlicesTableEmptyStateProps> = ({
   trashedCount,
 }) => {
   const hasSearch = searchQuery.trim() !== "";
-  const hasActiveFilter =
-    sliceFavoriteOnly || slicePitchOnly || sliceHideMissing || hasSearch;
+  const hasSubFilter = isSliceFavMode
+    ? hasSearch
+    : sliceFavoriteOnly || slicePitchOnly || sliceHideMissing || hasSearch;
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
-      <div className="w-10 h-10 rounded-full bg-surface-2 border border-line flex items-center justify-center mb-2 text-fg-3">
+    <div className="flex-1 flex flex-col items-center justify-center p-6 text-center gap-2 text-fg-3">
+      <div className="w-10 h-10 rounded-md bg-surface-2 border border-line flex items-center justify-center text-accent-fg">
         {isSliceTrashMode ? (
-          <Trash2 className="w-4 h-4" />
+          <Trash2 className="w-5 h-5" />
         ) : (
-          <Scissors className="w-4 h-4" />
+          <Scissors className="w-5 h-5" />
         )}
       </div>
-      <div className="text-[12px] font-medium text-fg-2">
+      <div className="text-[13px] font-medium text-fg">
         {isLoadingSliceHistory
           ? isSliceTrashMode
             ? "Loading trashed slices..."
@@ -42,18 +45,24 @@ export const SlicesTableEmptyState: React.FC<SlicesTableEmptyStateProps> = ({
           : isSliceTrashMode
             ? hasSearch
               ? "No trashed slices match your search"
-              : "Slice Trash is empty"
-            : hasActiveFilter
-              ? "No saved slices match your filter"
-              : "No saved slices yet"}
+              : "No trashed slices"
+            : isSliceFavMode
+              ? hasSearch
+                ? "No favorite slices match your search"
+                : "No favorite slices yet"
+              : hasSubFilter
+                ? "No saved slices match your filter"
+                : "No saved slices yet"}
       </div>
-      <p className="text-[11px] text-fg-3 mt-1 max-w-[380px]">
+      <p className="text-[11.5px] text-fg-2 max-w-[380px]">
         {isSliceTrashMode ? (
-          "Slices moved to Trash are kept safely here until you restore them or send them to the OS Recycle Bin."
+          "Trashed slices stay safely quarantined here until restored or emptied."
+        ) : isSliceFavMode ? (
+          "Star your favorite waveform slices to find them instantly here."
         ) : (
           <>
             Drag a selection on the top waveform and click{" "}
-            <span className="font-mono text-fg-2">Save Slice</span> or drag the
+            <span className="font-mono text-fg">Save Slice</span> or drag the
             slice directly into your DAW / video editor.
           </>
         )}
@@ -63,7 +72,7 @@ export const SlicesTableEmptyState: React.FC<SlicesTableEmptyStateProps> = ({
           <button
             type="button"
             onClick={() => useSampleStore.getState().setSearchQuery("")}
-            className="mt-3 px-2.5 h-[26px] rounded-xs bg-surface-2 hover:bg-surface-3 border border-line hover:border-accent text-fg-2 hover:text-accent-fg text-[11px] font-medium transition-colors cursor-pointer"
+            className="mt-1 px-2.5 h-[24px] rounded-[3px] bg-surface-3 hover:bg-accent-soft border border-line hover:border-accent text-fg-2 hover:text-accent-fg text-[11px] font-medium transition-colors cursor-pointer"
           >
             Clear Search
           </button>
@@ -72,28 +81,30 @@ export const SlicesTableEmptyState: React.FC<SlicesTableEmptyStateProps> = ({
             <button
               type="button"
               onClick={() => useSampleStore.getState().setTrashViewTab("tracks")}
-              className="mt-3 px-2.5 h-[26px] rounded-xs bg-surface-2 hover:bg-surface-3 border border-line hover:border-accent text-fg-2 hover:text-accent-fg text-[11px] font-medium transition-colors cursor-pointer"
+              className="mt-1 px-2.5 h-[24px] rounded-[3px] bg-surface-3 hover:bg-accent-soft border border-line hover:border-accent text-fg-2 hover:text-accent-fg text-[11px] font-medium transition-colors cursor-pointer"
             >
               View Trashed Tracks
             </button>
           )
         )
       ) : (
-        hasActiveFilter && (
+        hasSubFilter && (
           <button
             type="button"
             onClick={() => {
               const st = useSampleStore.getState();
-              st.setSliceFavoriteOnly(false);
-              st.setSlicePitchOnly(false);
-              st.setSliceHideMissing(false);
+              if (!isSliceFavMode) {
+                st.setSliceFavoriteOnly(false);
+                st.setSlicePitchOnly(false);
+                st.setSliceHideMissing(false);
+              }
               if (st.searchQuery.trim() !== "") {
                 st.setSearchQuery("");
               }
             }}
-            className="mt-3 px-2.5 h-[26px] rounded-xs bg-surface-2 hover:bg-surface-3 border border-line hover:border-accent text-fg-2 hover:text-accent-fg text-[11px] font-medium transition-colors cursor-pointer"
+            className="mt-1 px-2.5 h-[24px] rounded-[3px] bg-surface-3 hover:bg-accent-soft border border-line hover:border-accent text-fg-2 hover:text-accent-fg text-[11px] font-medium transition-colors cursor-pointer"
           >
-            Reset Slice Filters
+            {isSliceFavMode ? "Clear Search" : "Reset Slice Filters"}
           </button>
         )
       )}

@@ -1,5 +1,6 @@
 import { Profile } from "../types";
 import type { AiSliceActions } from "./slices/aiSlice";
+import type { LayerSliceActions } from "./slices/layerSlice";
 import type {
   SampleCatalogAndFileActions,
   SampleProfileAndLicenseActions,
@@ -27,7 +28,8 @@ export interface SampleStoreState
     SampleCatalogAndFileActions,
     SampleProfileAndLicenseActions,
     SampleSettingsAndMutationActions,
-    AiSliceActions {}
+    AiSliceActions,
+    LayerSliceActions {}
 
 export type StoreSet = (
   partial:

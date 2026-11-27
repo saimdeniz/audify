@@ -40,6 +40,9 @@ pub const ALLOWED_PROFILE_SETTINGS_KEYS: &[&str] = &[
     "autoCreateCollectionSubfolders",
     "autoRouteCollectionDrops",
     "customSliceExportPath",
+    "customLayerExportPath",
+    "autoSaveLayerOnNleDrag",
+    "layerTopDeckView",
     "playheadLatencyMs",
     "smartSearchSynonyms",
     "autoBinOnNleDrag",
@@ -131,27 +134,29 @@ pub fn sanitize_settings_paths(settings: &mut serde_json::Value, is_import: bool
         return;
     };
 
-    if let Some(slice_path) = obj
-        .get("customSliceExportPath")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-    {
-        let trimmed = slice_path.trim();
-        let strip = if trimmed.is_empty() {
-            false
-        } else if is_unc_or_network_path(trimmed) || has_ntfs_ads_colon(trimmed) {
-            true
-        } else if is_import {
-            is_safe_library_dir(trimmed).is_err()
-        } else {
-            is_forbidden_os_or_root_normalized(&normalize_clean_path(trimmed))
-        };
+    for export_key in ["customSliceExportPath", "customLayerExportPath"] {
+        if let Some(export_path) = obj
+            .get(export_key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+        {
+            let trimmed = export_path.trim();
+            let strip = if trimmed.is_empty() {
+                false
+            } else if is_unc_or_network_path(trimmed) || has_ntfs_ads_colon(trimmed) {
+                true
+            } else if is_import {
+                is_safe_library_dir(trimmed).is_err()
+            } else {
+                is_forbidden_os_or_root_normalized(&normalize_clean_path(trimmed))
+            };
 
-        if strip {
-            obj.insert(
-                "customSliceExportPath".to_string(),
-                serde_json::Value::String(String::new()),
-            );
+            if strip {
+                obj.insert(
+                    export_key.to_string(),
+                    serde_json::Value::String(String::new()),
+                );
+            }
         }
     }
 

@@ -9,7 +9,7 @@ interface EmptyTrashConfirmModalProps {
   isOpen: boolean;
   trashedCount: number;
   trashedTotalBytes: number;
-  itemNoun?: "file" | "slice";
+  itemNoun?: "file" | "slice" | "layer";
   onConfirm: () => void;
   onCancel: () => void;
 }

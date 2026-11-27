@@ -5,6 +5,7 @@ import {
   Folder,
   History,
   Inbox,
+  Layers,
   LayoutGrid,
   Loader2,
   Scissors,
@@ -47,6 +48,7 @@ export const ActiveFilterBanner: React.FC = () => {
   );
   const licenseGroups = useSampleStore((s) => s.licenseGroups);
   const favoriteOnly = useSampleStore((s) => s.favoriteOnly);
+  const favoritesViewTab = useSampleStore((s) => s.favoritesViewTab);
   const recentOnly = useSampleStore((s) => s.recentOnly);
   const binFilterActive = useSampleStore((s) => s.binFilterActive);
   const trashFilterActive = useSampleStore((s) => s.trashFilterActive);
@@ -55,6 +57,8 @@ export const ActiveFilterBanner: React.FC = () => {
     (s) => s.duplicatesFilterActive
   );
   const slicesFilterActive = useSampleStore((s) => s.slicesFilterActive);
+  const layersFilterActive = useSampleStore((s) => s.layersFilterActive);
+  const layerHistoryCount = useSampleStore((s) => s.layerHistory.length);
   const sliceHistoryCount = useSampleStore((s) => s.sliceHistory.length);
   const sliceFavoriteOnly = useSampleStore((s) => s.sliceFavoriteOnly);
   const slicePitchOnly = useSampleStore((s) => s.slicePitchOnly);
@@ -71,6 +75,10 @@ export const ActiveFilterBanner: React.FC = () => {
   const trashedSliceCount = useSampleStore((s) => s.trashedSliceCount);
   const trashedSliceTotalBytes = useSampleStore(
     (s) => s.trashedSliceTotalBytes
+  );
+  const trashedLayerCount = useSampleStore((s) => s.trashedLayerCount);
+  const trashedLayerTotalBytes = useSampleStore(
+    (s) => s.trashedLayerTotalBytes
   );
   const trashOpStatus = useSampleStore((s) => s.trashOpStatus);
   const typeFilter = useSampleStore((s) => s.typeFilter);
@@ -99,6 +107,9 @@ export const ActiveFilterBanner: React.FC = () => {
   );
   const setSlicesFilterActive = useSampleStore(
     (s) => s.setSlicesFilterActive
+  );
+  const setLayersFilterActive = useSampleStore(
+    (s) => s.setLayersFilterActive
   );
   const setTrashFilterActive = useSampleStore((s) => s.setTrashFilterActive);
   const setTypeFilter = useSampleStore((s) => s.setTypeFilter);
@@ -180,6 +191,7 @@ export const ActiveFilterBanner: React.FC = () => {
     recentOnly ||
     binFilterActive ||
     slicesFilterActive ||
+    layersFilterActive ||
     duplicatesFilterActive ||
     trashFilterActive ||
     Boolean(trashOpStatus) ||
@@ -288,7 +300,13 @@ export const ActiveFilterBanner: React.FC = () => {
           {favoriteOnly && (
             <span className="inline-flex items-center gap-1.5 h-[20px] pl-1.5 pr-1 rounded-[3px] border border-accent/50 bg-accent-soft text-accent-fg text-[11px]">
               <Star className="w-3 h-3 fill-current shrink-0" />
-              <span>Favorites</span>
+              <span>
+                {favoritesViewTab === "slices"
+                  ? "Favorites · Slices"
+                  : favoritesViewTab === "layers"
+                  ? "Favorites · Layers"
+                  : "Favorites"}
+              </span>
               <button
                 type="button"
                 onClick={() => setFavoriteOnly(false)}
@@ -347,9 +365,13 @@ export const ActiveFilterBanner: React.FC = () => {
                     ? `Trash · Slices · ${trashedSliceCount.toLocaleString()} ${
                         trashedSliceCount === 1 ? "slice" : "slices"
                       } · ${formatBytesCompact(trashedSliceTotalBytes)}`
-                    : `Trash · ${trashedCount.toLocaleString()} ${
-                        trashedCount === 1 ? "file" : "files"
-                      } · ${formatBytesCompact(trashedTotalBytes)}`}
+                    : trashViewTab === "layers"
+                      ? `Trash · Layers · ${trashedLayerCount.toLocaleString()} ${
+                          trashedLayerCount === 1 ? "layer" : "layers"
+                        } · ${formatBytesCompact(trashedLayerTotalBytes)}`
+                      : `Trash · ${trashedCount.toLocaleString()} ${
+                          trashedCount === 1 ? "file" : "files"
+                        } · ${formatBytesCompact(trashedTotalBytes)}`}
               </span>
               {!trashOpStatus && (
                 <button
@@ -369,6 +391,26 @@ export const ActiveFilterBanner: React.FC = () => {
                 <span>{formatTrashOpLabel(trashOpStatus)}</span>
               </span>
             )
+          )}
+
+          {layersFilterActive && (
+            <span
+              className="inline-flex items-center gap-1.5 h-[20px] pl-1.5 pr-1 rounded-[3px] border border-accent bg-accent-soft text-accent-fg text-[11px]"
+              title="Layers Multi-Track SFX Studio"
+            >
+              <Layers className="w-3 h-3 shrink-0" />
+              <span>
+                Layers · {layerHistoryCount.toLocaleString()} saved
+              </span>
+              <button
+                type="button"
+                onClick={() => setLayersFilterActive(false)}
+                className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-fg hover:bg-surface-3"
+                title="Exit Layers Studio"
+              >
+                <X className="w-2.5 h-2.5" />
+              </button>
+            </span>
           )}
 
           {slicesFilterActive && (

@@ -14,7 +14,11 @@ import {
   resolveDuplicateScopeLabel,
 } from "../store/slices/duplicateSlice";
 import { useSampleStore } from "../store/useSampleStore";
+import { AUDIFY_STORAGE_KEYS } from "../constants/storageKeys";
+import { Z_INDEX } from "../constants/zIndex";
+import { safeSetItem } from "../store/storageHelpers";
 import { SampleItem } from "../types";
+import { safeGetItem } from "../utils/localStorageSafe";
 import { buildCollectionHierarchy } from "../utils/collectionTree";
 import {
   EMPTY_SAMPLE_MAP,
@@ -74,6 +78,11 @@ const SlicesTableView = lazy(() =>
     default: m.SlicesTableView,
   }))
 );
+const LazyLayersStudio = lazy(() =>
+  import("./layers/LayersStudio").then((m) => ({
+    default: m.LayersStudio,
+  }))
+);
 
 export const SampleTable: React.FC = () => {
   const hasInitialized = useSampleStore((s) => s.hasInitialized);
@@ -93,10 +102,30 @@ export const SampleTable: React.FC = () => {
     (s) => s.duplicatesFilterActive
   );
   const slicesFilterActive = useSampleStore((s) => s.slicesFilterActive);
+  const layersFilterActive = useSampleStore((s) => s.layersFilterActive);
+  const layersWorkspaceTab = useSampleStore((s) => s.layersWorkspaceTab);
+  const layersSplitLibraryOpen = useSampleStore((s) => s.layersSplitLibraryOpen);
+  const favoriteOnly = useSampleStore((s) => s.favoriteOnly);
+  const favoritesViewTab = useSampleStore((s) => s.favoritesViewTab);
   const trashFilterActive = useSampleStore((s) => s.trashFilterActive);
   const trashViewTab = useSampleStore((s) => s.trashViewTab);
   const showSlicesTable =
-    slicesFilterActive || (trashFilterActive && trashViewTab === "slices");
+    slicesFilterActive ||
+    (trashFilterActive && trashViewTab === "slices") ||
+    (favoriteOnly && favoritesViewTab === "slices");
+  const showLayersStudio =
+    layersFilterActive ||
+    (trashFilterActive && trashViewTab === "layers") ||
+    (favoriteOnly && favoritesViewTab === "layers");
+  const isLayersEditorSplit =
+    layersFilterActive &&
+    layersWorkspaceTab === "editor" &&
+    !showSlicesTable &&
+    !(trashFilterActive && trashViewTab === "layers") &&
+    !(favoriteOnly && favoritesViewTab === "layers");
+  const showRealSampleTable =
+    !showSlicesTable &&
+    (!showLayersStudio || (isLayersEditorSplit && layersSplitLibraryOpen));
   const hasActiveFilterBanner = useSampleStore((s) =>
     Boolean(
       s.similaritySession ||
@@ -107,6 +136,7 @@ export const SampleTable: React.FC = () => {
         s.recentOnly ||
         s.binFilterActive ||
         s.slicesFilterActive ||
+        s.layersFilterActive ||
         s.duplicatesFilterActive ||
         s.trashFilterActive ||
         s.trashOpStatus ||
@@ -188,6 +218,41 @@ export const SampleTable: React.FC = () => {
   const parentRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const splitStageRef = useRef<HTMLDivElement>(null);
+  const [librarySplitPct, setLibrarySplitPct] = useState<number>(() => {
+    const raw = safeGetItem(AUDIFY_STORAGE_KEYS.layerSplitRatioV1);
+    const parsed = raw ? Number(raw) : NaN;
+    return Number.isFinite(parsed)
+      ? Math.max(18, Math.min(68, Math.round(parsed)))
+      : 36;
+  });
+
+  const [isResizingSplit, setIsResizingSplit] = useState(false);
+
+  const handleStartSplitResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const stage = splitStageRef.current;
+    if (!stage) return;
+    const rect = stage.getBoundingClientRect();
+    if (rect.height < 160) return;
+    let latestPct = librarySplitPct;
+    setIsResizingSplit(true);
+    const onMove = (ev: MouseEvent) => {
+      const rel = ((ev.clientY - rect.top) / rect.height) * 100;
+      latestPct = Math.max(18, Math.min(68, Math.round(rel)));
+      setLibrarySplitPct(latestPct);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      setIsResizingSplit(false);
+      safeSetItem(AUDIFY_STORAGE_KEYS.layerSplitRatioV1, String(latestPct));
+    };
+    document.body.style.cursor = "row-resize";
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [librarySplitPct]);
 
   const [rowTagPopover, setRowTagPopover] = useState<RowPopoverPosition | null>(
     null
@@ -220,7 +285,7 @@ export const SampleTable: React.FC = () => {
     parentRef,
     headerRef,
     sampleCount: samples.length,
-    showSlicesTable,
+    showSlicesTable: !showRealSampleTable,
     isSimilarityMode,
   });
 
@@ -350,85 +415,133 @@ export const SampleTable: React.FC = () => {
         <Suspense fallback={null}>
           <SlicesTableView />
         </Suspense>
+      ) : showLayersStudio && !isLayersEditorSplit ? (
+        <Suspense fallback={<div className="flex-1 bg-surface-0" />}>
+          <LazyLayersStudio />
+        </Suspense>
       ) : (
-        <>
-          <SampleTableHeader
-            headerRef={headerRef}
-            columnsContentWidth={columnsContentWidth}
-            scrollbarGutterWidth={verticalScrollbarWidth}
-            isSimilarityMode={isSimilarityMode}
-            columnOrder={columnOrder}
-            setColumnOrder={setColumnOrder}
-            visibleCols={visibleCols}
-            toggleVisibleCol={toggleVisibleCol}
-            applyVisibleColsPreset={applyVisibleColsPreset}
-            colWidths={colWidths}
-            setColWidths={setColWidths}
-            resetTableLayout={resetTableLayout}
-            showColumnPicker={showColumnPicker}
-            setShowColumnPicker={setShowColumnPicker}
-          />
-
-          {!hasInitialized || libraries.length === 0 || samples.length === 0 ? (
-            <Suspense fallback={<div className="flex-1" />}>
-              <SampleTableEmptyState
-                hasLibraries={libraries.length > 0}
-                isInitializing={!hasInitialized}
-                isScanning={isScanning}
-                isScanningDuplicates={
-                  duplicatesFilterActive && isScanningDuplicates
-                }
-                duplicatesFilterActive={duplicatesFilterActive}
-                duplicateHasResult={duplicateHasResult}
-                duplicateScopeLabel={duplicateScopeLabel}
-                duplicateScanModeLabel={duplicateScanModeLabel}
-                onScanDuplicates={handleScanDuplicates}
-                onAddFolder={handleAddFolder}
-                onResetFilters={resetAllFilters}
+        <div
+          ref={splitStageRef}
+          className="flex-1 min-h-0 flex flex-col overflow-hidden"
+        >
+          {showRealSampleTable && (
+            <div
+              style={
+                isLayersEditorSplit
+                  ? { height: `${librarySplitPct}%` }
+                  : undefined
+              }
+              className={
+                isLayersEditorSplit
+                  ? "min-h-[96px] flex flex-col overflow-hidden shrink-0"
+                  : "flex-1 min-h-0 flex flex-col overflow-hidden"
+              }
+            >
+              <SampleTableHeader
+                headerRef={headerRef}
+                columnsContentWidth={columnsContentWidth}
+                scrollbarGutterWidth={verticalScrollbarWidth}
+                isSimilarityMode={isSimilarityMode}
+                columnOrder={columnOrder}
+                setColumnOrder={setColumnOrder}
+                visibleCols={visibleCols}
+                toggleVisibleCol={toggleVisibleCol}
+                applyVisibleColsPreset={applyVisibleColsPreset}
+                colWidths={colWidths}
+                setColWidths={setColWidths}
+                resetTableLayout={resetTableLayout}
+                showColumnPicker={showColumnPicker}
+                setShowColumnPicker={setShowColumnPicker}
               />
-            </Suspense>
-          ) : (
-            <SampleTableRowsPane
-              parentRef={parentRef}
-              headerRef={headerRef}
-              samples={samples}
-              selectedSample={selectedSample}
-              selectedIdSet={selectedIdSet}
-              selectedTagSet={selectedTagSet}
-              selectedCollectionId={selectedCollectionId}
-              isSmartCollectionActive={isSmartCollectionActive}
-              selectedGenre={selectedGenre}
-              similaritySession={similaritySession}
-              isSimilarityMode={isSimilarityMode}
-              duplicateMetaBySampleId={duplicateMetaBySampleId}
-              aiSuggestionsBySampleId={aiSuggestionsBySampleId}
-              activeTagPopoverSampleId={rowTagPopover?.sampleId ?? null}
-              activeGenrePopoverSampleId={rowGenrePopover?.sampleId ?? null}
-              setHoverOverflowTags={setHoverOverflowTags}
-              onTableScroll={handleTableScroll}
-              columnOrder={columnOrder}
-              visibleCols={visibleCols}
-              colWidths={colWidths}
-              totalTableWidth={totalTableWidth}
-              genreColorMap={genreColorMap}
-              taxonomyIndex={taxonomyIndex}
-              waveformDisplay={waveformDisplay}
-              favoriteShortcutLabel={favoriteShortcutLabel}
-              onRowClick={handleRowClick}
-              onRowBodyMouseDown={handleRowBodyMouseDown}
-              onRowContextMenu={handleRowContextMenu}
-              openRowTagPopover={openRowTagPopover}
-              openRowGenrePopover={openRowGenrePopover}
+
+              {!hasInitialized || libraries.length === 0 || samples.length === 0 ? (
+                <Suspense fallback={<div className="flex-1" />}>
+                  <SampleTableEmptyState
+                    hasLibraries={libraries.length > 0}
+                    isInitializing={!hasInitialized}
+                    isScanning={isScanning}
+                    isScanningDuplicates={
+                      duplicatesFilterActive && isScanningDuplicates
+                    }
+                    duplicatesFilterActive={duplicatesFilterActive}
+                    duplicateHasResult={duplicateHasResult}
+                    duplicateScopeLabel={duplicateScopeLabel}
+                    duplicateScanModeLabel={duplicateScanModeLabel}
+                    onScanDuplicates={handleScanDuplicates}
+                    onAddFolder={handleAddFolder}
+                    onResetFilters={resetAllFilters}
+                  />
+                </Suspense>
+              ) : (
+                <SampleTableRowsPane
+                  parentRef={parentRef}
+                  headerRef={headerRef}
+                  samples={samples}
+                  selectedSample={selectedSample}
+                  selectedIdSet={selectedIdSet}
+                  selectedTagSet={selectedTagSet}
+                  selectedCollectionId={selectedCollectionId}
+                  isSmartCollectionActive={isSmartCollectionActive}
+                  selectedGenre={selectedGenre}
+                  similaritySession={similaritySession}
+                  isSimilarityMode={isSimilarityMode}
+                  duplicateMetaBySampleId={duplicateMetaBySampleId}
+                  aiSuggestionsBySampleId={aiSuggestionsBySampleId}
+                  activeTagPopoverSampleId={rowTagPopover?.sampleId ?? null}
+                  activeGenrePopoverSampleId={rowGenrePopover?.sampleId ?? null}
+                  setHoverOverflowTags={setHoverOverflowTags}
+                  onTableScroll={handleTableScroll}
+                  columnOrder={columnOrder}
+                  visibleCols={visibleCols}
+                  colWidths={colWidths}
+                  totalTableWidth={totalTableWidth}
+                  genreColorMap={genreColorMap}
+                  taxonomyIndex={taxonomyIndex}
+                  waveformDisplay={waveformDisplay}
+                  favoriteShortcutLabel={favoriteShortcutLabel}
+                  onRowClick={handleRowClick}
+                  onRowBodyMouseDown={handleRowBodyMouseDown}
+                  onRowContextMenu={handleRowContextMenu}
+                  openRowTagPopover={openRowTagPopover}
+                  openRowGenrePopover={openRowGenrePopover}
+                />
+              )}
+            </div>
+          )}
+
+          {isLayersEditorSplit && layersSplitLibraryOpen && (
+            <div
+              onMouseDown={handleStartSplitResize}
+              title="Drag up/down to resize Sample Library vs Layers Timeline"
+              className="h-[6px] bg-surface-1 border-y border-line hover:bg-accent/50 cursor-row-resize flex items-center justify-center shrink-0 transition-colors"
+            >
+              <span className="w-10 h-[2px] rounded-[1px] bg-line-strong" />
+            </div>
+          )}
+
+          {isResizingSplit && (
+            <div
+              aria-hidden="true"
+              style={{ zIndex: Z_INDEX.floatingMenu }}
+              className="fixed inset-0 cursor-row-resize select-none"
             />
           )}
-        </>
+
+          {isLayersEditorSplit && (
+            <div className="flex-1 min-h-[180px] flex flex-col overflow-hidden">
+              <Suspense fallback={<div className="flex-1 bg-surface-0" />}>
+                <LazyLayersStudio />
+              </Suspense>
+            </div>
+          )}
+        </div>
       )}
 
       <Suspense fallback={null}>
         <LazyDragDropFeedbackOverlay />
       </Suspense>
 
-      {selectedSampleIds.length > 1 && !showSlicesTable && (
+      {selectedSampleIds.length > 1 && showRealSampleTable && (
         <Suspense fallback={null}>
           <LazySampleBatchActionBar
             selectedSampleIds={selectedSampleIds}

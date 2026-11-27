@@ -14,6 +14,7 @@ import {
   AsciiPresetId,
   ExportAudioPreset,
   ExportLoudnessMode,
+  LayerTopDeckView,
   MiniDockEdgeSide,
   ProfileSettings,
   ThemeMode,
@@ -97,6 +98,9 @@ export interface BootSettingsSnapshot extends AiBootSettingsSnapshot {
   enableLicenses: boolean;
   autoBinOnNleDrag: boolean;
   customSliceExportPath: string;
+  customLayerExportPath: string;
+  autoSaveLayerOnNleDrag: boolean;
+  layerTopDeckView: LayerTopDeckView;
   smartSearchSynonyms: boolean;
   autoPreview: boolean;
   isLooping: boolean;
@@ -216,6 +220,13 @@ export function loadBootSettings(): BootSettingsSnapshot {
     safeGetItem(AUDIFY_STORAGE_KEYS.autoBinOnNleDrag) === "true";
   const customSliceExportPath =
     safeGetItem(AUDIFY_STORAGE_KEYS.customSliceExportPath) || "";
+  const customLayerExportPath =
+    safeGetItem(AUDIFY_STORAGE_KEYS.customLayerExportPath) || "";
+  const autoSaveLayerOnNleDrag =
+    safeGetItem(AUDIFY_STORAGE_KEYS.autoSaveLayerOnNleDrag) === "true";
+  const rawLayerDeckView = safeGetItem(AUDIFY_STORAGE_KEYS.layerTopDeckView);
+  const layerTopDeckView: LayerTopDeckView =
+    rawLayerDeckView === "lanes" ? "lanes" : "sum";
   const smartSearchSynonyms =
     safeGetItem(AUDIFY_STORAGE_KEYS.smartSearchSynonyms) !== "false";
 
@@ -286,6 +297,9 @@ export function loadBootSettings(): BootSettingsSnapshot {
     enableLicenses,
     autoBinOnNleDrag,
     customSliceExportPath,
+    customLayerExportPath,
+    autoSaveLayerOnNleDrag,
+    layerTopDeckView,
     smartSearchSynonyms,
     autoPreview,
     isLooping,
@@ -367,6 +381,13 @@ function sanitizeParsedProfileSettings(
   ) {
     delete out.miniDockEdgeSide;
   }
+  if (
+    out.layerTopDeckView !== undefined &&
+    out.layerTopDeckView !== "sum" &&
+    out.layerTopDeckView !== "lanes"
+  ) {
+    delete out.layerTopDeckView;
+  }
 
   for (const numKey of [
     "volume",
@@ -405,6 +426,7 @@ function sanitizeParsedProfileSettings(
     "enableLiveFolderWatch",
     "autoCreateCollectionSubfolders",
     "autoRouteCollectionDrops",
+    "autoSaveLayerOnNleDrag",
   ]) {
     if (out[boolKey] !== undefined && typeof out[boolKey] !== "boolean") {
       delete out[boolKey];

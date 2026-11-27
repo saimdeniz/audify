@@ -2,17 +2,17 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArchiveRestore,
-  ChevronRight,
   Copy,
   ExternalLink,
   FileCheck2,
   FolderOpen,
   Hash,
+  History,
   Inbox,
+  Layers,
   LayoutGrid,
   Music,
   Pencil,
-  RotateCcw,
   Sparkles,
   Star,
   Trash2,
@@ -22,8 +22,20 @@ import { Z_INDEX } from "../../constants/zIndex";
 import { useSampleStore } from "../../store/useSampleStore";
 import { SampleItem } from "../../types";
 import { formatShortcutDisplay } from "../../utils/shortcuts";
-import { handleContextMenuKeyDown, MenuItem } from "../common/MenuItem";
-import { TaxonomyPicker } from "../taxonomy/TaxonomyPicker";
+import {
+  handleContextMenuKeyDown,
+  MenuItem,
+  SubmenuTriggerItem,
+} from "../common/MenuItem";
+import {
+  fetchSampleRenameHistory,
+  SampleRenameHistoryItem,
+} from "../common/RenameHistoryList";
+import {
+  MiniDockContextSubmenu,
+  MiniDockSubmenuAnchor,
+  MiniDockSubmenuKind,
+} from "./MiniDockContextSubmenu";
 
 export interface MiniContextMenuState {
   sample: SampleItem;
@@ -54,6 +66,7 @@ export const MiniDockContextMenu: React.FC<MiniDockContextMenuProps> = ({
   const toggleFavorite = useSampleStore((s) => s.toggleFavorite);
   const addSamplesToBin = useSampleStore((s) => s.addSamplesToBin);
   const removeSamplesFromBin = useSampleStore((s) => s.removeSamplesFromBin);
+  const sendSamplesToLayers = useSampleStore((s) => s.sendSamplesToLayers);
   const findSimilarSamples = useSampleStore((s) => s.findSimilarSamples);
   const addSamplesToCollectionBatch = useSampleStore(
     (s) => s.addSamplesToCollectionBatch
@@ -64,7 +77,6 @@ export const MiniDockContextMenu: React.FC<MiniDockContextMenuProps> = ({
   const copySamplePaths = useSampleStore((s) => s.copySamplePaths);
   const showInFolder = useSampleStore((s) => s.showInFolder);
   const openBatchRenameModal = useSampleStore((s) => s.openBatchRenameModal);
-  const undoRenameSampleFile = useSampleStore((s) => s.undoRenameSampleFile);
   const requestMoveSamplesToTrash = useSampleStore(
     (s) => s.requestMoveSamplesToTrash
   );
@@ -74,24 +86,71 @@ export const MiniDockContextMenu: React.FC<MiniDockContextMenuProps> = ({
   const emptyAudifyTrash = useSampleStore((s) => s.emptyAudifyTrash);
 
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const [expandedSub, setExpandedSub] = useState<
-    "collection" | "tag" | "genre" | null
-  >(null);
+  const closeSubTimerRef = useRef<number | null>(null);
+  const [subAnchor, setSubAnchor] = useState<MiniDockSubmenuAnchor | null>(
+    null
+  );
+  const [renameHistoryItems, setRenameHistoryItems] = useState<
+    SampleRenameHistoryItem[]
+  >(() =>
+    menu.sample.previous_file_name
+      ? [{ name: menu.sample.previous_file_name, created_at: "" }]
+      : []
+  );
   const [pos, setPos] = useState<{ x: number; y: number }>({
     x: menu.x,
     y: menu.y,
   });
 
   useEffect(() => {
+    if (trashFilterActive || selectedSampleIds.length > 1 || menu.sample.id <= 0) {
+      return;
+    }
+    let alive = true;
+    void fetchSampleRenameHistory(menu.sample.id, 10).then((rows) => {
+      if (!alive) return;
+      if (rows.length > 0) setRenameHistoryItems(rows);
+      else if (menu.sample.previous_file_name) {
+        setRenameHistoryItems([
+          { name: menu.sample.previous_file_name, created_at: "" },
+        ]);
+      } else {
+        setRenameHistoryItems([]);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [menu.sample.id, menu.sample.previous_file_name, trashFilterActive, selectedSampleIds.length]);
+
+  const cancelSubClose = () => {
+    if (closeSubTimerRef.current !== null) {
+      window.clearTimeout(closeSubTimerRef.current);
+      closeSubTimerRef.current = null;
+    }
+  };
+
+  const scheduleSubClose = () => {
+    cancelSubClose();
+    closeSubTimerRef.current = window.setTimeout(() => {
+      setSubAnchor(null);
+      closeSubTimerRef.current = null;
+    }, 140);
+  };
+
+  useEffect(() => () => cancelSubClose(), []);
+
+  useEffect(() => {
     menuRef.current?.focus();
+    setSubAnchor(null);
   }, [menu.sample.id, menu.x, menu.y]);
 
   const manualCollections = collections.filter((c) => !c.smart_query?.trim());
 
   useLayoutEffect(() => {
     const el = menuRef.current;
-    const menuWidth = el?.offsetWidth || 210;
-    const menuHeight = el?.offsetHeight || 200;
+    const menuWidth = el?.offsetWidth || 216;
+    const menuHeight = el?.offsetHeight || 220;
     const margin = 6;
     const clampedX = Math.max(
       margin,
@@ -109,12 +168,42 @@ export const MiniDockContextMenu: React.FC<MiniDockContextMenuProps> = ({
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
-        onClose();
+        if (subAnchor) {
+          setSubAnchor(null);
+        } else {
+          onClose();
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [onClose]);
+  }, [onClose, subAnchor]);
+
+  const openSubmenu = (
+    kind: MiniDockSubmenuKind,
+    triggerEl: HTMLElement | null
+  ) => {
+    cancelSubClose();
+    const menuEl = menuRef.current;
+    if (!menuEl || !triggerEl) return;
+    const mRect = menuEl.getBoundingClientRect();
+    const rRect = triggerEl.getBoundingClientRect();
+    setSubAnchor({
+      kind,
+      menuRect: {
+        left: mRect.left,
+        right: mRect.right,
+        top: mRect.top,
+        bottom: mRect.bottom,
+      },
+      rowTop: rRect.top,
+    });
+  };
+
+  const clearSubmenuNow = () => {
+    cancelSubClose();
+    setSubAnchor(null);
+  };
 
   const targetIds =
     selectedSampleIds.length > 1 ? selectedSampleIds : [menu.sample.id];
@@ -127,322 +216,328 @@ export const MiniDockContextMenu: React.FC<MiniDockContextMenuProps> = ({
     { compact: true }
   );
 
-  return createPortal(
-    <div
-      ref={menuRef}
-      tabIndex={-1}
-      role="menu"
-      aria-label="Sample actions"
-      data-context-menu-portal="true"
-      data-mica-overlay="true"
-      style={{ top: pos.y, left: pos.x, zIndex: Z_INDEX.floatingMenu }}
-      onClick={(e) => e.stopPropagation()}
-      onKeyDown={handleContextMenuKeyDown}
-      className="fixed w-[216px] max-h-[82vh] overflow-y-auto bg-surface-2 border border-line-strong rounded-md py-1 text-[11px] text-fg shadow-2xl focus:outline-none"
-    >
-      {!trashFilterActive && menu.sample.id > 0 && (
-        <MenuItem
-          tone="accent"
-          compactHeight
-          icon={<Sparkles className="w-3.5 h-3.5 text-accent-fg" />}
-          label="Find Similar Audio (AI)"
-          onClick={() => {
-            const sample = menu.sample;
-            onClose();
-            void findSimilarSamples(sample);
-          }}
-        />
-      )}
+  const handleAddToLayer = (mode: "current" | "new") => {
+    const targetSet = new Set(targetIds);
+    const list =
+      targetIds.length > 1
+        ? samples.filter((s) => targetSet.has(s.id))
+        : [menu.sample];
+    onClose();
+    void sendSamplesToLayers(list.length > 0 ? list : [menu.sample], mode);
+  };
 
-      <MenuItem
-        tone="accent"
-        compactHeight
-        icon={<Inbox className="w-3.5 h-3.5 text-accent-fg" />}
-        label={
-          binFilterActive ? "Remove from Session Bin" : "Add to Session Bin"
-        }
-        onClick={() => {
-          if (binFilterActive) {
-            removeSamplesFromBin(targetIds);
-          } else {
-            addSamplesToBin(targetIds);
-          }
-          onClose();
-        }}
-      />
+  return (
+    <>
+      {createPortal(
+        <div
+          ref={menuRef}
+          tabIndex={-1}
+          role="menu"
+          aria-label="Sample actions"
+          data-context-menu-portal="true"
+          data-mica-overlay="true"
+          style={{ top: pos.y, left: pos.x, zIndex: Z_INDEX.floatingMenu }}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={handleContextMenuKeyDown}
+          className="fixed w-[216px] max-h-[82vh] overflow-y-auto bg-surface-2 border border-line-strong rounded-md py-1 text-[11px] text-fg shadow-2xl focus:outline-none"
+        >
+          {!trashFilterActive && menu.sample.id > 0 && (
+            <MenuItem
+              tone="accent"
+              compactHeight
+              icon={<Sparkles className="w-3.5 h-3.5 text-accent-fg" />}
+              label="Find Similar Audio (AI)"
+              onMouseEnter={clearSubmenuNow}
+              onClick={() => {
+                const sample = menu.sample;
+                onClose();
+                void findSimilarSamples(sample);
+              }}
+            />
+          )}
 
-      {!trashFilterActive && manualCollections.length > 0 && (
-        <div>
+          {!trashFilterActive && menu.sample.id > 0 && (
+            <div
+              onClick={(e) => openSubmenu("layers", e.currentTarget)}
+              onMouseEnter={(e) => openSubmenu("layers", e.currentTarget)}
+              onMouseLeave={scheduleSubClose}
+            >
+              <SubmenuTriggerItem
+                isOpen={subAnchor?.kind === "layers"}
+                onOpen={() => {}}
+                icon={<Layers className="w-3.5 h-3.5 text-accent-fg" />}
+                label={
+                  targetIds.length > 1
+                    ? `Layers (${targetIds.length})`
+                    : "Layers"
+                }
+              />
+            </div>
+          )}
+
           <MenuItem
             tone="accent"
             compactHeight
-            icon={<LayoutGrid className="w-3.5 h-3.5 text-accent-fg" />}
-            label="Add to Collection"
-            rightSlot={
-              <ChevronRight
-                className={`w-3 h-3 text-fg-3 transition-transform ${
-                  expandedSub === "collection" ? "rotate-90" : ""
+            icon={<Inbox className="w-3.5 h-3.5 text-accent-fg" />}
+            label={
+              binFilterActive
+                ? "Remove from Session Bin"
+                : "Add to Session Bin"
+            }
+            onMouseEnter={clearSubmenuNow}
+            onClick={() => {
+              if (binFilterActive) {
+                removeSamplesFromBin(targetIds);
+              } else {
+                addSamplesToBin(targetIds);
+              }
+              onClose();
+            }}
+          />
+
+          {!trashFilterActive && manualCollections.length > 0 && (
+            <div
+              onClick={(e) => openSubmenu("collection", e.currentTarget)}
+              onMouseEnter={(e) => openSubmenu("collection", e.currentTarget)}
+              onMouseLeave={scheduleSubClose}
+            >
+              <SubmenuTriggerItem
+                isOpen={subAnchor?.kind === "collection"}
+                onOpen={() => {}}
+                icon={<LayoutGrid className="w-3.5 h-3.5 text-accent-fg" />}
+                label="Add to Collection"
+              />
+            </div>
+          )}
+
+          {!trashFilterActive && tags.length > 0 && (
+            <div
+              onClick={(e) => openSubmenu("tag", e.currentTarget)}
+              onMouseEnter={(e) => openSubmenu("tag", e.currentTarget)}
+              onMouseLeave={scheduleSubClose}
+            >
+              <SubmenuTriggerItem
+                isOpen={subAnchor?.kind === "tag"}
+                onOpen={() => {}}
+                icon={<Hash className="w-3.5 h-3.5 text-accent-fg" />}
+                label="Assign Tag"
+              />
+            </div>
+          )}
+
+          {!trashFilterActive && genres.length > 0 && (
+            <div
+              onClick={(e) => openSubmenu("genre", e.currentTarget)}
+              onMouseEnter={(e) => openSubmenu("genre", e.currentTarget)}
+              onMouseLeave={scheduleSubClose}
+            >
+              <SubmenuTriggerItem
+                isOpen={subAnchor?.kind === "genre"}
+                onOpen={() => {}}
+                icon={<Music className="w-3.5 h-3.5 text-accent-fg" />}
+                label="Genres & Moods"
+              />
+            </div>
+          )}
+
+          {enableLicensesSystem && (
+            <MenuItem
+              tone="accent"
+              compactHeight
+              icon={<FileCheck2 className="w-3.5 h-3.5 text-accent-fg" />}
+              label="Copy Credits"
+              onMouseEnter={clearSubmenuNow}
+              onClick={() => {
+                void copyAttributionForSamples([menu.sample]);
+                onClose();
+              }}
+            />
+          )}
+
+          <MenuItem
+            tone="accent"
+            compactHeight
+            icon={
+              <Star
+                className={`w-3.5 h-3.5 text-accent-fg ${
+                  menu.sample.is_favorite ? "fill-current" : ""
                 }`}
               />
             }
-            onClick={() =>
-              setExpandedSub((prev) =>
-                prev === "collection" ? null : "collection"
+            label={menu.sample.is_favorite ? "Remove Favorite" : "Add Favorite"}
+            onMouseEnter={clearSubmenuNow}
+            onClick={() => {
+              void toggleFavorite(menu.sample.id);
+              onClose();
+            }}
+          />
+
+          <div className="my-0.5 border-t border-line" />
+
+          <MenuItem
+            tone="accent"
+            compactHeight
+            icon={<Copy className="w-3.5 h-3.5 text-accent-fg" />}
+            label={
+              targetIds.length > 1
+                ? `Copy File Paths (${targetIds.length})`
+                : "Copy File Path"
+            }
+            rightSlot={
+              copyPathShortcutLabel ? (
+                <span className="font-mono text-[9.5px] text-fg-3">
+                  {copyPathShortcutLabel}
+                </span>
+              ) : undefined
+            }
+            onMouseEnter={clearSubmenuNow}
+            onClick={() => {
+              const sample = menu.sample;
+              onClose();
+              void copySamplePaths(targetIds.length > 1 ? undefined : [sample]);
+            }}
+          />
+
+          <MenuItem
+            tone="accent"
+            compactHeight
+            icon={<FolderOpen className="w-3.5 h-3.5 text-accent-fg" />}
+            label="Show in Explorer"
+            rightSlot={
+              showInFolderShortcutLabel ? (
+                <span className="font-mono text-[9.5px] text-fg-3">
+                  {showInFolderShortcutLabel}
+                </span>
+              ) : (
+                <ExternalLink className="w-3 h-3 text-fg-3" />
               )
             }
+            onMouseEnter={clearSubmenuNow}
+            onClick={() => {
+              const path = menu.sample.file_path;
+              onClose();
+              void showInFolder(path);
+            }}
           />
-          {expandedSub === "collection" && (
-            <div className="mx-1.5 my-0.5 py-0.5 rounded-xs bg-surface-1 border border-line max-h-[120px] overflow-y-auto">
-              {manualCollections.map((col) => (
-                <button
-                  key={col.id}
-                  type="button"
+
+          {trashFilterActive ? (
+            <>
+              <div className="my-0.5 border-t border-line" />
+              <MenuItem
+                tone="accent"
+                compactHeight
+                icon={<ArchiveRestore className="w-3.5 h-3.5 text-accent-fg" />}
+                label="Restore from Trash"
+                onMouseEnter={clearSubmenuNow}
+                onClick={() => {
+                  onClose();
+                  void restoreSamplesFromTrash(targetIds);
+                }}
+              />
+              <MenuItem
+                tone="accent"
+                compactHeight
+                icon={<Trash2 className="w-3.5 h-3.5 text-accent-fg" />}
+                label="Send to Recycle Bin"
+                onMouseEnter={clearSubmenuNow}
+                onClick={() => {
+                  onClose();
+                  void emptyAudifyTrash(targetIds);
+                }}
+              />
+            </>
+          ) : enableAdvancedFileOps ? (
+            <>
+              <div className="my-0.5 border-t border-line" />
+              {targetIds.length > 1 ? (
+                <MenuItem
+                  tone="accent"
+                  compactHeight
+                  icon={<Pencil className="w-3.5 h-3.5 text-accent-fg" />}
+                  label={`Batch Rename (${targetIds.length})...`}
+                  onMouseEnter={clearSubmenuNow}
                   onClick={() => {
-                    void addSamplesToCollectionBatch(col.id, targetIds);
+                    const ids = [...targetIds];
                     onClose();
+                    openBatchRenameModal(ids);
                   }}
-                  className="w-full h-[22px] px-2 flex items-center gap-1.5 text-left text-[10.5px] text-fg-2 hover:text-fg hover:bg-accent-soft transition-colors truncate"
+                />
+              ) : (
+                <MenuItem
+                  tone="accent"
+                  compactHeight
+                  icon={<Pencil className="w-3.5 h-3.5 text-accent-fg" />}
+                  label="Rename File..."
+                  rightSlot={
+                    <span className="font-mono text-[9.5px] text-fg-3">F2</span>
+                  }
+                  onMouseEnter={clearSubmenuNow}
+                  onClick={() => {
+                    const id = menu.sample.id;
+                    onClose();
+                    openBatchRenameModal([id]);
+                  }}
+                />
+              )}
+              {targetIds.length === 1 && renameHistoryItems.length > 0 && (
+                <div
+                  onClick={(e) => openSubmenu("renameHistory", e.currentTarget)}
+                  onMouseEnter={(e) =>
+                    openSubmenu("renameHistory", e.currentTarget)
+                  }
+                  onMouseLeave={scheduleSubClose}
                 >
-                  <span
-                    className="w-2 h-2 rounded-[2px] shrink-0"
-                    style={{ backgroundColor: col.color || "var(--signal-accent)" }}
+                  <SubmenuTriggerItem
+                    isOpen={subAnchor?.kind === "renameHistory"}
+                    onOpen={() => {}}
+                    icon={<History className="w-3.5 h-3.5 text-accent-fg" />}
+                    label="Rename History"
+                    rightSlot={
+                      <span className="font-mono text-[9.5px] text-fg-3">
+                        {renameHistoryItems.length}
+                      </span>
+                    }
                   />
-                  <span className="truncate">{col.name}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {!trashFilterActive && tags.length > 0 && (
-        <div>
-          <MenuItem
-            tone="accent"
-            compactHeight
-            icon={<Hash className="w-3.5 h-3.5 text-accent-fg" />}
-            label="Assign Tag"
-            rightSlot={
-              <ChevronRight
-                className={`w-3 h-3 text-fg-3 transition-transform ${
-                  expandedSub === "tag" ? "rotate-90" : ""
-                }`}
-              />
-            }
-            onClick={() =>
-              setExpandedSub((prev) => (prev === "tag" ? null : "tag"))
-            }
-          />
-          {expandedSub === "tag" && (
-            <div className="mx-1.5 my-1 p-1.5 rounded-xs bg-surface-1 border border-line">
-              <TaxonomyPicker
-                mode="tags"
-                compact
-                allowCreate={false}
-                sampleIds={targetIds}
-                samples={
-                  targetIds.length > 1
-                    ? samples.filter((s) => targetIds.includes(s.id))
-                    : [samples.find((s) => s.id === menu.sample.id) ?? menu.sample]
+                </div>
+              )}
+              <MenuItem
+                tone="accent"
+                compactHeight
+                icon={<Trash2 className="w-3.5 h-3.5 text-accent-fg" />}
+                label="Move to Trash"
+                rightSlot={
+                  <span className="font-mono text-[9.5px] text-fg-3">Del</span>
                 }
+                onMouseEnter={clearSubmenuNow}
+                onClick={() => {
+                  onClose();
+                  void requestMoveSamplesToTrash(targetIds);
+                }}
               />
-            </div>
-          )}
-        </div>
+            </>
+          ) : null}
+        </div>,
+        document.body
       )}
 
-      {!trashFilterActive && genres.length > 0 && (
-        <div>
-          <MenuItem
-            tone="accent"
-            compactHeight
-            icon={<Music className="w-3.5 h-3.5 text-accent-fg" />}
-            label="Genres & Moods"
-            rightSlot={
-              <ChevronRight
-                className={`w-3 h-3 text-fg-3 transition-transform ${
-                  expandedSub === "genre" ? "rotate-90" : ""
-                }`}
-              />
-            }
-            onClick={() =>
-              setExpandedSub((prev) => (prev === "genre" ? null : "genre"))
-            }
-          />
-          {expandedSub === "genre" && (
-            <div className="mx-1.5 my-1 p-1.5 rounded-xs bg-surface-1 border border-line">
-              <TaxonomyPicker
-                mode="genres"
-                compact
-                allowCreate={false}
-                sampleIds={targetIds}
-                samples={
-                  targetIds.length > 1
-                    ? samples.filter((s) => targetIds.includes(s.id))
-                    : [samples.find((s) => s.id === menu.sample.id) ?? menu.sample]
-                }
-              />
-            </div>
-          )}
-        </div>
-      )}
-
-      {enableLicensesSystem && (
-        <MenuItem
-          tone="accent"
-          compactHeight
-          icon={<FileCheck2 className="w-3.5 h-3.5 text-accent-fg" />}
-          label="Copy Credits"
-          onClick={() => {
-            void copyAttributionForSamples([menu.sample]);
+      {subAnchor && (
+        <MiniDockContextSubmenu
+          anchor={subAnchor}
+          sample={menu.sample}
+          targetIds={targetIds}
+          samples={samples}
+          manualCollections={manualCollections}
+          renameHistoryItems={renameHistoryItems}
+          onCloseAll={onClose}
+          onMouseEnter={cancelSubClose}
+          onMouseLeave={scheduleSubClose}
+          onAddToLayer={handleAddToLayer}
+          onAddToCollection={(colId) => {
+            void addSamplesToCollectionBatch(colId, targetIds);
             onClose();
           }}
         />
       )}
-
-      <MenuItem
-        tone="accent"
-        compactHeight
-        icon={
-          <Star
-            className={`w-3.5 h-3.5 text-accent-fg ${
-              menu.sample.is_favorite ? "fill-current" : ""
-            }`}
-          />
-        }
-        label={menu.sample.is_favorite ? "Remove Favorite" : "Add Favorite"}
-        onClick={() => {
-          void toggleFavorite(menu.sample.id);
-          onClose();
-        }}
-      />
-
-      <div className="my-0.5 border-t border-line" />
-
-      <MenuItem
-        tone="accent"
-        compactHeight
-        icon={<Copy className="w-3.5 h-3.5 text-accent-fg" />}
-        label={
-          targetIds.length > 1
-            ? `Copy File Paths (${targetIds.length})`
-            : "Copy File Path"
-        }
-        rightSlot={
-          copyPathShortcutLabel ? (
-            <span className="font-mono text-[9.5px] text-fg-3">
-              {copyPathShortcutLabel}
-            </span>
-          ) : undefined
-        }
-        onClick={() => {
-          const sample = menu.sample;
-          onClose();
-          void copySamplePaths(targetIds.length > 1 ? undefined : [sample]);
-        }}
-      />
-
-      <MenuItem
-        tone="accent"
-        compactHeight
-        icon={<FolderOpen className="w-3.5 h-3.5 text-accent-fg" />}
-        label="Show in Explorer"
-        rightSlot={
-          showInFolderShortcutLabel ? (
-            <span className="font-mono text-[9.5px] text-fg-3">
-              {showInFolderShortcutLabel}
-            </span>
-          ) : (
-            <ExternalLink className="w-3 h-3 text-fg-3" />
-          )
-        }
-        onClick={() => {
-          const path = menu.sample.file_path;
-          onClose();
-          void showInFolder(path);
-        }}
-      />
-
-      {trashFilterActive ? (
-        <>
-          <div className="my-0.5 border-t border-line" />
-          <MenuItem
-            tone="accent"
-            compactHeight
-            icon={<ArchiveRestore className="w-3.5 h-3.5 text-accent-fg" />}
-            label="Restore from Trash"
-            onClick={() => {
-              onClose();
-              void restoreSamplesFromTrash(targetIds);
-            }}
-          />
-          <MenuItem
-            tone="accent"
-            compactHeight
-            icon={<Trash2 className="w-3.5 h-3.5 text-accent-fg" />}
-            label="Send to Recycle Bin"
-            onClick={() => {
-              onClose();
-              void emptyAudifyTrash(targetIds);
-            }}
-          />
-        </>
-      ) : enableAdvancedFileOps ? (
-        <>
-          <div className="my-0.5 border-t border-line" />
-          {targetIds.length > 1 ? (
-            <MenuItem
-              tone="accent"
-              compactHeight
-              icon={<Pencil className="w-3.5 h-3.5 text-accent-fg" />}
-              label={`Batch Rename (${targetIds.length})...`}
-              onClick={() => {
-                const ids = [...targetIds];
-                onClose();
-                openBatchRenameModal(ids);
-              }}
-            />
-          ) : (
-            <MenuItem
-              tone="accent"
-              compactHeight
-              icon={<Pencil className="w-3.5 h-3.5 text-accent-fg" />}
-              label="Rename File..."
-              rightSlot={<span className="font-mono text-[9.5px] text-fg-3">F2</span>}
-              onClick={() => {
-                const id = menu.sample.id;
-                onClose();
-                openBatchRenameModal([id]);
-              }}
-            />
-          )}
-          {menu.sample.previous_file_name && (
-            <MenuItem
-              tone="accent"
-              compactHeight
-              icon={<RotateCcw className="w-3.5 h-3.5 text-accent-fg" />}
-              label="Undo Rename"
-              onClick={() => {
-                const id = menu.sample.id;
-                onClose();
-                void undoRenameSampleFile(id);
-              }}
-            />
-          )}
-          <MenuItem
-            tone="accent"
-            compactHeight
-            icon={<Trash2 className="w-3.5 h-3.5 text-accent-fg" />}
-            label="Move to Trash"
-            rightSlot={<span className="font-mono text-[9.5px] text-fg-3">Del</span>}
-            onClick={() => {
-              onClose();
-              void requestMoveSamplesToTrash(targetIds);
-            }}
-          />
-        </>
-      ) : null}
-    </div>,
-    document.body
+    </>
   );
 };

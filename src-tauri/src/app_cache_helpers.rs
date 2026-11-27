@@ -15,6 +15,7 @@ struct AssetScopeMemo {
     user_dir: PathBuf,
     libs: BTreeSet<PathBuf>,
     slices: BTreeSet<PathBuf>,
+    layers: BTreeSet<PathBuf>,
 }
 
 static LAST_ASSET_SCOPE: Mutex<Option<AssetScopeMemo>> = Mutex::new(None);
@@ -95,11 +96,16 @@ pub fn reconcile_library_asset_scopes(
         .into_iter()
         .filter(|d| security::ensure_not_inside_user_dir(&state.user_dir, d).is_ok())
         .collect();
+    let current_layers: BTreeSet<PathBuf> = security::collect_profile_layer_dirs(conn, true)
+        .into_iter()
+        .filter(|d| security::ensure_not_inside_user_dir(&state.user_dir, d).is_ok())
+        .collect();
 
     let next_memo = AssetScopeMemo {
         user_dir: state.user_dir.clone(),
         libs: current_libs,
         slices: current_slices,
+        layers: current_layers,
     };
 
     {
@@ -115,9 +121,12 @@ pub fn reconcile_library_asset_scopes(
     for safe_sub in [
         state.user_dir.join("images"),
         state.user_dir.join("slices"),
+        state.user_dir.join("layers"),
         state.user_dir.join("trash"),
         state.user_dir.join("cache").join("slices"),
         state.user_dir.join("cache").join("slice_trash"),
+        state.user_dir.join("cache").join("layer_preview"),
+        state.user_dir.join("cache").join("layer_trash"),
         state.user_dir.join("cache").join("playback_fallback"),
     ] {
         if !security::is_unc_or_network_path(&safe_sub.to_string_lossy()) {
@@ -131,6 +140,9 @@ pub fn reconcile_library_asset_scopes(
     }
     for slice_dir in &next_memo.slices {
         let _ = scope.allow_directory(slice_dir, true);
+    }
+    for layer_dir in &next_memo.layers {
+        let _ = scope.allow_directory(layer_dir, true);
     }
 }
 

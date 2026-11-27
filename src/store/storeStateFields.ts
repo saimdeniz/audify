@@ -22,11 +22,19 @@ import {
   DuplicateScanResult,
   ExportAudioPreset,
   ExportLoudnessMode,
+  FavoritesViewTab,
   FileOpJournalEntry,
   TrashOpStatus,
   FolderStat,
   Genre,
   KeyboardShortcuts,
+  LayerClipSpec,
+  LayerHistoryEntry,
+  LayerPreviewState,
+  LayerRecipe,
+  LayerSortKey,
+  LayerTopDeckView,
+  LayersWorkspaceTab,
   Library,
   LicenseGroup,
   MiniDockEdgeSide,
@@ -87,6 +95,7 @@ export interface SampleStoreDataState {
   smartSearchSynonyms: boolean;
   folderFilter: string | null;
   favoriteOnly: boolean;
+  favoritesViewTab: FavoritesViewTab;
   recentOnly: boolean;
   recentSampleIds: number[];
   selectedTagIds: number[];
@@ -113,6 +122,8 @@ export interface SampleStoreDataState {
   trashedTotalBytes: number;
   trashedSliceCount: number;
   trashedSliceTotalBytes: number;
+  trashedLayerCount: number;
+  trashedLayerTotalBytes: number;
   trashViewTab: TrashViewTab;
   trashOpStatus: TrashOpStatus | null;
   fileOpJournal: FileOpJournalEntry[];
@@ -149,6 +160,35 @@ export interface SampleStoreDataState {
   batchRenameSliceIds: number[] | null;
   sliceOpUndoStack: SliceOpHistoryItem[];
   sliceOpRedoStack: SliceOpHistoryItem[];
+
+  // Layers Multi-Track SFX Studio
+  customLayerExportPath: string;
+  autoSaveLayerOnNleDrag: boolean;
+  layerTopDeckView: LayerTopDeckView;
+  layersFilterActive: boolean;
+  layersWorkspaceTab: LayersWorkspaceTab;
+  layersSplitLibraryOpen: boolean;
+  layerHideMissing: boolean;
+  layerHistory: LayerHistoryEntry[];
+  trashedLayerHistory: LayerHistoryEntry[];
+  isLoadingLayerHistory: boolean;
+  layerSortKey: LayerSortKey | null;
+  layerSortDir: SortDir;
+  selectedLayerIds: number[];
+  activeLayerId: number | null;
+  batchRenameLayerIds: number[] | null;
+  layerDraftName: string;
+  layerDraftEditingId: number | null;
+  layerDraftRecipe: LayerRecipe;
+  layerDraftDirty: boolean;
+  layerDraftSelectedClipIds: string[];
+  layerDraftMissingClipIds: string[];
+  layerDraftClipboardClips: LayerClipSpec[];
+  layerDraftUndoStack: LayerRecipe[];
+  layerDraftRedoStack: LayerRecipe[];
+  layerDraftPreview: LayerPreviewState | null;
+  isRenderingLayerPreview: boolean;
+  isSavingLayer: boolean;
 
   // Playback, Multi-Select & Deck state
   selectedSample: SampleItem | null;
@@ -260,7 +300,8 @@ export interface SampleFilterAndPlaybackActions {
   setSearchQuery: (q: string) => void;
   setSmartSearchSynonyms: (enabled: boolean) => void;
   setFolderFilter: (folder: string | null) => void;
-  setFavoriteOnly: (fav: boolean) => void;
+  setFavoriteOnly: (fav: boolean, tabOverride?: FavoritesViewTab) => void;
+  setFavoritesViewTab: (tab: FavoritesViewTab) => void;
   setRecentOnly: (recent: boolean) => void;
   clearRecentSamples: () => void;
   toggleTagFilter: (tagId: number) => void;

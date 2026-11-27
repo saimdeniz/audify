@@ -62,8 +62,8 @@ describe("License artist matching, clickable Artist column, and artist: autocomp
     vi.clearAllMocks();
   });
 
-  it("reports APP_VERSION as 1.0.3", () => {
-    expect(APP_VERSION).toBe("1.0.3");
+  it("reports APP_VERSION as 1.0.4", () => {
+    expect(APP_VERSION).toBe("1.0.4");
   });
 
   it("matches licenses by folder first and falls back to exact case-insensitive scanned artist metadata", () => {

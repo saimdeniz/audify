@@ -219,7 +219,8 @@ input[type="range"].studio-slider::-moz-range-thumb {
 }
 .reveal-item[data-visible="true"] {
   opacity: 1;
-  transform: translateY(0);
+  transform: none;
+  will-change: auto;
 }
 @media (prefers-reduced-motion: reduce) {
   .reveal-item {

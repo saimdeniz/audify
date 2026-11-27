@@ -329,6 +329,29 @@ pub fn init_schema_on_conn(conn: &Connection) -> Result<(), String> {
             FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE,
             UNIQUE(profile_id, slice_path)
         );
+
+        CREATE TABLE IF NOT EXISTS layer_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id INTEGER NOT NULL DEFAULT 1,
+            layer_path TEXT NOT NULL,
+            layer_name TEXT NOT NULL,
+            recipe_json TEXT NOT NULL,
+            lane_count INTEGER NOT NULL DEFAULT 1,
+            clip_count INTEGER NOT NULL DEFAULT 0,
+            duration_ms INTEGER NOT NULL DEFAULT 0,
+            is_favorite BOOLEAN NOT NULL DEFAULT 0,
+            peaks_json TEXT NOT NULL DEFAULT '[]',
+            sample_rate INTEGER NOT NULL DEFAULT 48000,
+            channels INTEGER NOT NULL DEFAULT 2,
+            bit_depth INTEGER NOT NULL DEFAULT 24,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            is_trashed BOOLEAN NOT NULL DEFAULT 0,
+            trash_file_path TEXT DEFAULT NULL,
+            trashed_at TEXT DEFAULT NULL,
+            FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE,
+            UNIQUE(profile_id, layer_path)
+        );
         ",
     )
     .map_err(|e| format!("Failed to initialize database schema: {}", e))?;
@@ -397,6 +420,10 @@ pub fn init_schema_on_conn(conn: &Connection) -> Result<(), String> {
             ON sample_slices(profile_id, created_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_sample_slices_profile_trashed
             ON sample_slices(profile_id, is_trashed, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_layer_history_profile_created
+            ON layer_history(profile_id, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_layer_history_profile_trashed
+            ON layer_history(profile_id, is_trashed, created_at DESC, id DESC);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_unique_sibling
             ON collections(profile_id, COALESCE(parent_id, 0), name);
         CREATE INDEX IF NOT EXISTS idx_collections_parent_id

@@ -199,6 +199,7 @@ export function createBinAndMiniDockActions(ctx: StoreSliceContext) {
               trashFilterActive: false,
               duplicatesFilterActive: false,
               slicesFilterActive: false,
+              layersFilterActive: false,
               selectedCollectionId: null,
             }
           : {}),

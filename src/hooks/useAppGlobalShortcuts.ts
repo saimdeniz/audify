@@ -147,25 +147,29 @@ function handleTransportShortcuts(
   return false;
 }
 
-function handleUndoRedoShortcut(
-  e: KeyboardEvent,
-  state: AppStoreState
-): boolean {
-  if (!state.enableAdvancedFileOps || !(e.ctrlKey || e.metaKey) || e.altKey) {
-    return false;
-  }
-  const lowerKey = e.key.toLowerCase();
-  if (!e.shiftKey && lowerKey === "z") {
+function handleUndoRedoShortcut(e: KeyboardEvent, state: AppStoreState): boolean {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return false;
+  const k = e.key.toLowerCase();
+  const isUndo = !e.shiftKey && k === "z";
+  const isRedo = (!e.shiftKey && k === "y") || (e.shiftKey && k === "z");
+  if (!isUndo && !isRedo) return false;
+
+  const inLayersEditor =
+    state.layersFilterActive &&
+    state.layersWorkspaceTab === "editor" &&
+    !state.slicesFilterActive &&
+    !(state.favoriteOnly && state.favoritesViewTab === "layers") &&
+    !(state.trashFilterActive && state.trashViewTab === "layers");
+
+  if (inLayersEditor) {
     e.preventDefault();
-    if (!e.repeat) void state.undoLastFileOp();
+    if (!e.repeat) (isUndo ? state.undoLayerDraft : state.redoLayerDraft)();
     return true;
   }
-  if ((!e.shiftKey && lowerKey === "y") || (e.shiftKey && lowerKey === "z")) {
-    e.preventDefault();
-    if (!e.repeat) void state.redoLastFileOp();
-    return true;
-  }
-  return false;
+  if (!state.enableAdvancedFileOps) return false;
+  e.preventDefault();
+  if (!e.repeat) void (isUndo ? state.undoLastFileOp : state.redoLastFileOp)();
+  return true;
 }
 
 function handleCollectionOrTrashDelete(
@@ -295,6 +299,7 @@ export function useAppGlobalShortcuts(): void {
         isRecordingShortcut ||
         state.batchRenameSampleIds !== null ||
         state.batchRenameSliceIds !== null ||
+        state.batchRenameLayerIds !== null ||
         document.querySelector('[data-modal-portal="true"]') !== null;
 
       if (!hasBlockingModal && (e.ctrlKey || e.metaKey) && e.key === ",") {

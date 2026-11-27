@@ -16,6 +16,7 @@ pub mod taxonomy_catalog;
 pub mod win_drag;
 pub mod win_edge_peek;
 pub mod win_memory;
+pub mod win_sysmenu;
 
 pub use app_helpers::{prune_audio_cache_dirs, reconcile_library_asset_scopes};
 use app_helpers::{
@@ -123,10 +124,12 @@ pub fn run() {
                 main_builder = main_builder.additional_browser_args(AUDIFY_WEBVIEW_ARGS);
             }
 
-            main_builder.build()?;
+            let main_win = main_builder.build()?;
+            win_sysmenu::install_sysmenu_guard(&main_win);
 
             let cache_dirs = vec![
                 state.user_dir.join("cache").join("slices"),
+                state.user_dir.join("cache").join("layer_preview"),
                 state.user_dir.join("cache").join("playback_fallback"),
             ];
             let sim_probe_user_dir = state.user_dir.clone();
@@ -236,6 +239,7 @@ pub fn run() {
             commands::rename_sample_file,
             commands::batch_rename_samples,
             commands::undo_rename_sample_file,
+            commands::get_sample_rename_history,
             commands::move_samples_to_trash,
             commands::restore_samples_from_trash,
             commands::empty_audify_trash,
@@ -305,6 +309,21 @@ pub fn run() {
             commands::get_slice_trash_status,
             commands::list_trashed_slices,
             commands::empty_trashed_slices,
+            commands::preview_layer_mix,
+            commands::save_layer_mix,
+            commands::prepare_layer_drag_wav,
+            commands::validate_layer_recipe_sources,
+            commands::list_layer_history,
+            commands::toggle_layer_favorite,
+            commands::toggle_layer_favorites_batch,
+            commands::rename_layer_item,
+            commands::clear_missing_layers,
+            commands::trash_layer_files,
+            commands::restore_trashed_layer_files,
+            commands::get_layer_trash_status,
+            commands::list_trashed_layers,
+            commands::empty_trashed_layers,
+            commands::open_layers_folder,
             commands::get_audio_preview_gain,
             commands::audio_engine_load,
             commands::audio_engine_play,
@@ -327,6 +346,8 @@ pub fn run() {
             commands::get_custom_backgrounds,
             commands::delete_custom_background,
             commands::open_custom_backgrounds_folder,
+            commands::check_app_update,
+            commands::open_github_url,
             commands::get_ascii_magic_state,
             commands::sync_ascii_magic_catalog,
             commands::install_ascii_magic_piece,

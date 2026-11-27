@@ -2,7 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { SampleBpmKeyPatch, SampleItem } from "../../types";
 import { clearSmartSearchCache } from "../../utils/smartSearch";
 import { invokeCommand } from "../../utils/tauriCommands";
-import { reconcileSelectionAfterFilter } from "../filterEngine";
+import {
+  reconcileSelectionAfterFilter,
+  shouldPreserveDeckSelection,
+} from "../filterEngine";
 import { resetPlayheadClock } from "../playheadClock";
 import { AUDIFY_STORAGE_KEYS, safeSetItem } from "../storageHelpers";
 import { SampleStoreState, StoreSliceContext } from "../types";
@@ -128,7 +131,12 @@ export function createCatalogMutationSlice(
               nextSamples,
               candidateSelected,
               state.selectedSampleIds,
-              true
+              true,
+              shouldPreserveDeckSelection({
+                isPlaying: state.isPlaying,
+                selectedSample: candidateSelected,
+                layersFilterActive: state.layersFilterActive,
+              })
             );
             const selectionChanged =
               (reconciled.nextSelected?.id ?? null) !==
@@ -200,7 +208,12 @@ export function createCatalogMutationSlice(
               nextSamples,
               candidateSelected,
               state.selectedSampleIds,
-              true
+              true,
+              shouldPreserveDeckSelection({
+                isPlaying: state.isPlaying,
+                selectedSample: candidateSelected,
+                layersFilterActive: state.layersFilterActive,
+              })
             );
             const selectionChanged =
               (reconciled.nextSelected?.id ?? null) !==
@@ -286,7 +299,12 @@ export function createCatalogMutationSlice(
               nextSamples,
               candidateSelected,
               state.selectedSampleIds,
-              true
+              true,
+              shouldPreserveDeckSelection({
+                isPlaying: state.isPlaying,
+                selectedSample: candidateSelected,
+                layersFilterActive: state.layersFilterActive,
+              })
             );
             const selectionChanged =
               (reconciled.nextSelected?.id ?? null) !==

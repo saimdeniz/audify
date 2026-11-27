@@ -2,13 +2,22 @@ import React, { useEffect, useState } from "react";
 import {
   AlertTriangle,
   ArchiveRestore,
+  ArrowUpRight,
   Lock,
   Redo2,
+  RefreshCw,
   RotateCcw,
   Trash2,
   Undo2,
   Unlock,
 } from "lucide-react";
+import { APP_VERSION } from "../../constants/appInfo";
+import { useAppUpdate } from "../../hooks/useAppUpdate";
+import {
+  checkForAppUpdates,
+  openAudifyReleasesPage,
+  setAutoCheckUpdates,
+} from "../../services/updateCheckService";
 import { useSampleStore } from "../../store/useSampleStore";
 import {
   formatBytesCompact,
@@ -45,6 +54,7 @@ export const AdvancedTab: React.FC = () => {
   const [showRiskConfirmModal, setShowRiskConfirmModal] = useState(false);
   const [confirmEmptyTrash, setConfirmEmptyTrash] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const appUpdate = useAppUpdate();
 
   useEffect(() => {
     void refreshTrashStatus();
@@ -220,7 +230,81 @@ export const AdvancedTab: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. LIBRARY WRITE ACCESS (COMPACT) */}
+      {/* 2. APP UPDATES */}
+      <div className="bg-surface-1 border border-line rounded-md overflow-hidden shrink-0">
+        <div className="h-[32px] px-3 bg-surface-2 border-b border-line flex items-center justify-between">
+          <span className="font-mono text-[10.5px] font-semibold uppercase tracking-wider text-fg">
+            APP UPDATES
+          </span>
+          <span
+            className={`text-[9.5px] font-mono px-1.5 py-0.5 rounded-xs border font-semibold tabular-nums ${
+              appUpdate.info?.has_update
+                ? "bg-accent-soft border-accent text-accent-fg"
+                : "bg-surface-1 border-line text-fg-2"
+            }`}
+          >
+            {appUpdate.info?.has_update
+              ? `v${appUpdate.info.latest_version} available`
+              : `v${APP_VERSION}`}
+          </span>
+        </div>
+
+        <div className="divide-y divide-line">
+          <ToggleRow
+            compact
+            label="Auto-check for updates on startup"
+            checked={appUpdate.autoCheckEnabled}
+            onChange={setAutoCheckUpdates}
+            title="Silently check GitHub Releases once every 6 hours when Audify launches"
+          />
+
+          <div className="h-[36px] px-3 flex items-center justify-between gap-3">
+            <span className="font-mono text-[10.5px] text-fg-2 truncate">
+              {appUpdate.status === "checking"
+                ? "Checking GitHub Releases..."
+                : appUpdate.status === "error"
+                ? "Could not reach GitHub Releases"
+                : appUpdate.info?.has_update
+                ? `New version v${appUpdate.info.latest_version} is ready on GitHub`
+                : appUpdate.lastCheckedAt
+                ? `You're up to date (v${APP_VERSION})`
+                : `Current version v${APP_VERSION}`}
+            </span>
+
+            <div className="flex items-center space-x-1.5 shrink-0">
+              {appUpdate.info?.has_update && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void openAudifyReleasesPage(appUpdate.info?.release_url)
+                  }
+                  className="h-[22px] px-2 bg-accent-soft hover:bg-accent border border-accent rounded-xs text-[10.5px] font-semibold text-accent-fg hover:text-accent-on inline-flex items-center space-x-1 transition-colors cursor-pointer"
+                  title={`Open Audify v${appUpdate.info.latest_version} on GitHub Releases`}
+                >
+                  <ArrowUpRight className="w-3 h-3 shrink-0" />
+                  <span>Download</span>
+                </button>
+              )}
+              <button
+                type="button"
+                disabled={appUpdate.status === "checking"}
+                onClick={() => void checkForAppUpdates({ force: true })}
+                className="h-[22px] px-2 bg-surface-2 hover:bg-surface-3 border border-line hover:border-accent rounded-xs text-[10.5px] font-medium text-fg-2 hover:text-fg inline-flex items-center space-x-1 transition-colors cursor-pointer disabled:opacity-45 disabled:pointer-events-none"
+                title="Check GitHub Releases for a newer version now"
+              >
+                <RefreshCw
+                  className={`w-3 h-3 shrink-0 ${
+                    appUpdate.status === "checking" ? "animate-spin" : ""
+                  }`}
+                />
+                <span>Check Now</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 3. LIBRARY WRITE ACCESS (COMPACT) */}
       <div className="bg-surface-1 border border-line rounded-md overflow-hidden shrink-0">
         <div className="h-[32px] px-3 bg-surface-2 border-b border-line flex items-center justify-between">
           <span className="font-mono text-[10.5px] font-semibold uppercase tracking-wider text-fg">

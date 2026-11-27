@@ -1,7 +1,7 @@
 mod scope;
 pub use scope::{
-    collect_profile_slice_dirs, sanitize_err, validate_audio_path_in_scope,
-    validate_path_in_libraries_or_cache, AuthorizedAudioScope,
+    collect_profile_layer_dirs, collect_profile_slice_dirs, sanitize_err,
+    validate_audio_path_in_scope, validate_path_in_libraries_or_cache, AuthorizedAudioScope,
 };
 
 use std::fs;

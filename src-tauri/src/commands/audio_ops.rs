@@ -18,10 +18,16 @@ pub(crate) fn resolve_slice_cache_dir(user_dir: &Path) -> PathBuf {
     user_dir.join("cache").join("slices")
 }
 
-pub(crate) fn resolve_slice_export_dir(
+pub(crate) fn resolve_layer_preview_cache_dir(user_dir: &Path) -> PathBuf {
+    user_dir.join("cache").join("layer_preview")
+}
+
+fn resolve_profile_export_dir(
     conn: &Connection,
     user_dir: &Path,
     custom_dir: Option<&str>,
+    settings_key: &str,
+    default_leaf: &str,
 ) -> Result<PathBuf, String> {
     if let Some(dir) = custom_dir {
         let trimmed = dir.trim();
@@ -41,10 +47,7 @@ pub(crate) fn resolve_slice_export_dir(
         |row| row.get::<_, String>(0),
     ) {
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&settings_json) {
-            if let Some(custom_path) = parsed
-                .get("customSliceExportPath")
-                .and_then(|v| v.as_str())
-            {
+            if let Some(custom_path) = parsed.get(settings_key).and_then(|v| v.as_str()) {
                 let trimmed = custom_path.trim();
                 if !trimmed.is_empty()
                     && ensure_not_inside_user_dir(user_dir, Path::new(trimmed)).is_ok()
@@ -64,7 +67,23 @@ pub(crate) fn resolve_slice_export_dir(
         }
     }
 
-    Ok(user_dir.join("slices"))
+    Ok(user_dir.join(default_leaf))
+}
+
+pub(crate) fn resolve_slice_export_dir(
+    conn: &Connection,
+    user_dir: &Path,
+    custom_dir: Option<&str>,
+) -> Result<PathBuf, String> {
+    resolve_profile_export_dir(conn, user_dir, custom_dir, "customSliceExportPath", "slices")
+}
+
+pub(crate) fn resolve_layer_export_dir(
+    conn: &Connection,
+    user_dir: &Path,
+    custom_dir: Option<&str>,
+) -> Result<PathBuf, String> {
+    resolve_profile_export_dir(conn, user_dir, custom_dir, "customLayerExportPath", "layers")
 }
 
 pub(crate) fn resolve_active_export_preset(
@@ -227,6 +246,29 @@ pub async fn open_slices_folder(
     })
     .await
     .map_err(|e| sanitize_err(&user_dir_err, &format!("Open slices folder failed: {}", e)))?
+}
+
+#[tauri::command]
+pub async fn open_layers_folder(
+    state: State<'_, AppState>,
+    custom_dir: Option<String>,
+) -> Result<(), String> {
+    let state_owned = state.inner().clone();
+    let user_dir_err = state.user_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let layers_dir = with_read_conn(&state_owned, |conn| {
+            resolve_layer_export_dir(conn, &state_owned.user_dir, custom_dir.as_deref())
+        })?;
+        fs::create_dir_all(&layers_dir).map_err(|e| {
+            format!(
+                "Failed to create layers folder: {}",
+                sanitize_err(&state_owned.user_dir, &e.to_string())
+            )
+        })?;
+        open_directory_in_shell(&layers_dir)
+    })
+    .await
+    .map_err(|e| sanitize_err(&user_dir_err, &format!("Open layers folder failed: {}", e)))?
 }
 
 #[tauri::command]

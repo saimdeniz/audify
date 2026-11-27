@@ -7,8 +7,7 @@ use rusqlite::Connection;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Collects valid `customSliceExportPath` directories across all profiles (or active profile).
-pub fn collect_profile_slice_dirs(conn: &Connection, active_only: bool) -> Vec<PathBuf> {
+fn collect_profile_export_dirs(conn: &Connection, active_only: bool, key: &str) -> Vec<PathBuf> {
     let sql = if active_only {
         "SELECT settings_json FROM profiles WHERE is_active = 1"
     } else {
@@ -19,7 +18,7 @@ pub fn collect_profile_slice_dirs(conn: &Connection, active_only: bool) -> Vec<P
         if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
             for json_str in rows.flatten() {
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
-                    if let Some(raw) = val.get("customSliceExportPath").and_then(|v| v.as_str()) {
+                    if let Some(raw) = val.get(key).and_then(|v| v.as_str()) {
                         let trimmed = raw.trim();
                         if !trimmed.is_empty() {
                             if let Ok(safe_dir) = is_safe_library_dir(trimmed) {
@@ -34,6 +33,16 @@ pub fn collect_profile_slice_dirs(conn: &Connection, active_only: bool) -> Vec<P
         }
     }
     dirs
+}
+
+/// Collects valid `customSliceExportPath` directories across all profiles (or active profile).
+pub fn collect_profile_slice_dirs(conn: &Connection, active_only: bool) -> Vec<PathBuf> {
+    collect_profile_export_dirs(conn, active_only, "customSliceExportPath")
+}
+
+/// Collects valid `customLayerExportPath` directories across all profiles (or active profile).
+pub fn collect_profile_layer_dirs(conn: &Connection, active_only: bool) -> Vec<PathBuf> {
+    collect_profile_export_dirs(conn, active_only, "customLayerExportPath")
 }
 
 /// Validates that `raw_path` is non-UNC, non-symlink, canonicalizes cleanly, and resides inside
@@ -77,11 +86,14 @@ pub fn validate_path_in_libraries_or_cache(
         return Err("Symbolic links pointing to network/UNC paths are not allowed".to_string());
     }
 
-    // 1. Built-in audio cache, permanent slice store & quarantine trash directories
+    // 1. Built-in audio cache, permanent slice/layer stores & quarantine trash directories
     for cache_sub in [
         user_dir.join("slices"),
+        user_dir.join("layers"),
         user_dir.join("cache").join("slices"),
         user_dir.join("cache").join("slice_trash"),
+        user_dir.join("cache").join("layer_preview"),
+        user_dir.join("cache").join("layer_trash"),
         user_dir.join("cache").join("playback_fallback"),
         user_dir.join("trash"),
     ] {
@@ -124,12 +136,15 @@ pub fn validate_path_in_libraries_or_cache(
         }
     }
 
-    // 3. Active profile's valid customSliceExportPath (must never overlap user_dir)
-    for slice_dir in collect_profile_slice_dirs(conn, true) {
-        if ensure_not_inside_user_dir(user_dir, &slice_dir).is_err() {
+    // 3. Active profile's valid customSliceExportPath & customLayerExportPath (must never overlap user_dir)
+    for export_dir in collect_profile_slice_dirs(conn, true)
+        .into_iter()
+        .chain(collect_profile_layer_dirs(conn, true))
+    {
+        if ensure_not_inside_user_dir(user_dir, &export_dir).is_err() {
             continue;
         }
-        if let Ok(base_canon) = slice_dir.canonicalize() {
+        if let Ok(base_canon) = export_dir.canonicalize() {
             if target_canon.starts_with(&base_canon) {
                 return Ok(strip_verbatim_prefix(&target_canon));
             }
@@ -197,8 +212,11 @@ impl AuthorizedAudioScope {
 
         for cache_sub in [
             user_dir.join("slices"),
+            user_dir.join("layers"),
             user_dir.join("cache").join("slices"),
             user_dir.join("cache").join("slice_trash"),
+            user_dir.join("cache").join("layer_preview"),
+            user_dir.join("cache").join("layer_trash"),
             user_dir.join("cache").join("playback_fallback"),
             user_dir.join("trash"),
         ] {
@@ -228,9 +246,12 @@ impl AuthorizedAudioScope {
             }
         }
 
-        for slice_dir in collect_profile_slice_dirs(conn, true) {
-            if ensure_not_inside_user_dir(user_dir, &slice_dir).is_ok() {
-                push_dir(&slice_dir);
+        for export_dir in collect_profile_slice_dirs(conn, true)
+            .into_iter()
+            .chain(collect_profile_layer_dirs(conn, true))
+        {
+            if ensure_not_inside_user_dir(user_dir, &export_dir).is_ok() {
+                push_dir(&export_dir);
             }
         }
 

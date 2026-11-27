@@ -1,18 +1,26 @@
 import React, { useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  ArrowUpRight,
   Hash,
   HelpCircle,
   PanelLeft,
   PanelLeftClose,
   PictureInPicture2,
   Star,
+  X,
 } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
+import { useAppUpdate } from "../hooks/useAppUpdate";
+import {
+  dismissUpdateBanner,
+  openAudifyReleasesPage,
+} from "../services/updateCheckService";
 import { useSampleStore } from "../store/useSampleStore";
 import { resolveActiveBackgroundJob } from "../utils/activeBackgroundJob";
 import { beginWindowTitlebarDrag } from "../utils/drag";
 import { CollectionIcon } from "./CollectionIcon";
+import { NavHistoryButtons } from "./common/NavHistoryButtons";
 import { StatusBarAudioDeviceButton } from "./StatusBarAudioDeviceButton";
 import { WindowCaptionControls } from "./WindowCaptionControls";
 
@@ -143,11 +151,11 @@ export const TopHeaderBar: React.FC = React.memo(() => {
       onDoubleClick={handleTitlebarDoubleClick}
       className="h-[32px] bg-surface-1 border-b border-line flex items-center justify-between pl-2.5 pr-0 shrink-0 select-none cursor-default relative z-30"
     >
-      {/* Left: Brand Logo + Compact Sidebar Toggle */}
-      <div className="flex items-center space-x-2.5">
+      {/* Left: Brand Logo + Compact Sidebar Toggle + Navigation History */}
+      <div className="flex items-center space-x-2">
         <div
           data-tauri-drag-region
-          className="flex items-center space-x-1.5 pointer-events-none"
+          className="flex items-center space-x-1.5 pointer-events-none mr-0.5"
         >
           <AudifyLogoIcon className="w-[18px] h-[18px]" />
           <span className="text-[12px] font-semibold tracking-wide text-fg">
@@ -182,6 +190,8 @@ export const TopHeaderBar: React.FC = React.memo(() => {
             <PanelLeftClose className="w-3.5 h-3.5 shrink-0" />
           )}
         </button>
+
+        <NavHistoryButtons />
       </div>
 
       {/* Right: Sample Counter + Window Controls */}
@@ -250,6 +260,7 @@ export const BottomStatusBar: React.FC = React.memo(() => {
   const inAppDragSample = useSampleStore((s) => s.inAppDragSample);
   const inAppDragCount = useSampleStore((s) => s.inAppDragSamples.length);
   const setStatusMessage = useSampleStore((s) => s.setStatusMessage);
+  const appUpdate = useAppUpdate();
 
   const hasActiveJob = activeJob !== null;
   useEffect(() => {
@@ -380,6 +391,32 @@ export const BottomStatusBar: React.FC = React.memo(() => {
           <span className="text-fg-3">
             {(selectedSampleSize / 1024).toFixed(0)} KB
           </span>
+        )}
+        {appUpdate.isBannerVisible && appUpdate.info && (
+          <div className="h-[18px] inline-flex items-center rounded-[3px] bg-accent-soft border border-accent text-accent-fg overflow-hidden shrink-0">
+            <button
+              type="button"
+              onClick={() =>
+                void openAudifyReleasesPage(appUpdate.info?.release_url)
+              }
+              title={`Audify v${appUpdate.info.latest_version} is available — click to open GitHub Releases`}
+              className="h-full px-1.5 inline-flex items-center gap-0.5 font-mono text-[9.5px] font-semibold hover:bg-accent hover:text-accent-on transition-colors cursor-pointer"
+            >
+              <ArrowUpRight className="w-2.5 h-2.5 shrink-0" />
+              <span>Update v{appUpdate.info.latest_version}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                dismissUpdateBanner(appUpdate.info!.latest_version)
+              }
+              title="Dismiss update notice for this version"
+              aria-label="Dismiss update notice"
+              className="h-full w-[16px] border-l border-accent flex items-center justify-center hover:bg-accent hover:text-accent-on transition-colors cursor-pointer"
+            >
+              <X className="w-2.5 h-2.5 shrink-0" />
+            </button>
+          </div>
         )}
         <StatusBarAudioDeviceButton />
         <button

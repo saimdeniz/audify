@@ -46,6 +46,7 @@
 | :--- | :--- |
 | ⚡ **Built for Massive Libraries** | 60 FPS virtualized browser across 100k+ tracks with `.wav`, `.mp3`, `.flac`, `.ogg`, `.aif`, `.aiff`, `.m4a`, `.opus`, and `.aac` support |
 | 🎛️ **Native Audio & Slicing** | Low-latency Rust playback, varispeed pitch (`-12` to `+12 st`), waveform `In`/`Out` slicing, and direct drag-to-timeline |
+| 🎚️ **Layers SFX Timeline** | Built-in multi-track timeline editor to stack clips across lanes, tweak gain/pitch/reverse/fades, preview live mixes, and save or drag directly to your NLE |
 | 🏷️ **Deep Taxonomy & Rules** | Hierarchical faceted Tags, Genres & Moods, automatic parent-hue color harmony, and Auto-Tag Rules with live preview & Undo |
 | 🧠 **100% Offline AI & DSP** | Multi-threaded Rust BPM & Camelot key detection, optional local YAMNet auto-tagging, 128-D acoustic similarity, and k-NN tag learning |
 | 🎨 **Customizable Studio UI** | Dark, Light & High Contrast modes, Windows Mica glass, Mini Dock companion mode, and 108 built-in procedural ASCII backdrops |
@@ -94,12 +95,27 @@
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/assets/images/Tools%20Menu.png" alt="Tools Menu for Slices and Duplicate Finder" width="100%" /><br />
-      <sub><strong>Tools Drawer</strong> — Instant access to Slices &amp; Duplicate Finder</sub>
+      <img src="docs/assets/images/Tools%20Menu.png" alt="Tools Menu for Slices, Layers and Duplicate Finder" width="100%" /><br />
+      <sub><strong>Tools Drawer</strong> — Instant access to Slices, Layers &amp; Duplicate Finder</sub>
     </td>
     <td align="center" width="50%">
       <img src="docs/assets/images/Similarity%20Search.png" alt="128-D Offline Acoustic Similarity Search" width="100%" /><br />
       <sub><strong>Similarity Search</strong> — Find acoustically similar sounds offline (<code>Shift+Enter</code>)</sub>
+    </td>
+  </tr>
+</table>
+
+### Layers — Multi-Track SFX Timeline Editor
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/assets/images/editor2-editorpanel2.png" alt="Layers Multi-Track Timeline Editor with Clip Waveforms" width="100%" /><br />
+      <sub><strong>Layers Timeline Editor</strong> — Stack clips with waveforms, lane Solo/Mute/Gain, clip Pitch/Reverse/Split &amp; Drag Mix</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/assets/images/editor1-savedtracks.png" alt="Saved Layers Library View" width="100%" /><br />
+      <sub><strong>Saved Layers Vault</strong> — Browse, replay &amp; reopen rendered composite mixes saved in <code>user/layers</code></sub>
     </td>
   </tr>
 </table>
@@ -139,6 +155,8 @@
   Scroll massive catalogs at 60 FPS with customizable, resizable, and reorderable columns (inline mini waveforms, BPM, Camelot key, genre, tags, format, and dates). Powered by a low-latency native Rust audio engine featuring varispeed pitch shifting, loop & shuffle modes, leading-silence skipping, and loudness normalization.
 - **Interactive Waveform Deck & Slices Manager**
   Zoom and scrub on a high-resolution waveform with draggable `In` / `Out` region handles. Drag any track, pitched sample, or selected region straight onto an NLE or DAW timeline to export a clean, micro-faded WAV slice automatically. Browse, replay, favorite, rename, or jump back to the source of exported clips in the dedicated **Slices** view.
+- **Layers — Multi-Track SFX Timeline Editor**
+  Design composite sound effects right inside Audify without opening a full DAW. Drag library samples onto color-coded timeline lanes with snap grid, lane **Solo / Mute / Gain**, marquee selection, and per-clip **Gain, Pitch, Reverse (`REV`), Fade In/Out, Split (`S`), and Duplicate** controls. Audition the combined result in real time with the top-deck **Layer Mix Preview** & clipping indicator, drag the rendered mix straight into your NLE (**Drag Mix**), or save and reopen editable mixes inside your portable `user/layers` folder.
 - **Mini Dock Companion Mode (`Ctrl+M`)**
   Collapse Audify into a compact, always-on-top floating strip beside your full-screen video editor or DAW — complete with optional screen-edge auto-peek, search, resizable filters drawer, mini waveforms, transport controls, and direct drag-to-timeline.
 
@@ -189,6 +207,7 @@
           <tr><td>Tempo (BPM)</td><td><code>bpm:120</code>, <code>bpm:90-130</code></td></tr>
           <tr><td>Key &amp; Harmonic</td><td><code>key:Am</code>, <code>key:8A</code>, <code>key:~8A</code></td></tr>
           <tr><td>Taxonomy</td><td><code>tag:impact</code>, <code>genre:electronic</code>, <code>mood:dark</code></td></tr>
+          <tr><td>Artist</td><td><code>artist:"Kevin MacLeod"</code>, <code>artist:"Alexander Nakarada"</code></td></tr>
           <tr><td>Custom Facets</td><td><code>source:pack</code>, <code>material:steel</code></td></tr>
           <tr><td>State &amp; Exclude</td><td><code>is:fav</code>, <code>is:loop</code>, <code>-tag:ui</code>, <code>ext:wav</code></td></tr>
         </tbody>
@@ -220,7 +239,7 @@
 ## 🔒 Privacy & Portability
 
 > [!TIP]
-> **Portable Mode:** Drop `Audify.exe` into any writable folder. Your SQLite database, profile backups, custom backdrops, and optional AI models are stored neatly inside `./user/` right next to the executable.
+> **Portable Mode:** Drop `Audify.exe` into any writable folder. Your SQLite database, saved layers, profile backups, custom backdrops, and optional AI models are stored neatly inside `./user/` right next to the executable.
 
 > [!NOTE]
 > **100% Offline & Zero Telemetry:** Audify has no accounts, analytics, or background network activity. Outbound connections occur only when you explicitly download the optional local AI model or sync the ASCII Magic catalog. Share-safe exports automatically scrub personal local directory paths.

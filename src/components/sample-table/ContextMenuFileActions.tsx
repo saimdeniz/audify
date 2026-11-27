@@ -1,8 +1,13 @@
-import React from "react";
-import { ArchiveRestore, Lock, Pencil, RotateCcw, Trash2 } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { ArchiveRestore, History, Lock, Pencil, Trash2 } from "lucide-react";
 import { useSampleStore } from "../../store/useSampleStore";
 import { SampleItem } from "../../types";
-import { MenuItem } from "../common/MenuItem";
+import { MenuItem, SubmenuTriggerItem } from "../common/MenuItem";
+import {
+  fetchSampleRenameHistory,
+  RenameHistoryList,
+  SampleRenameHistoryItem,
+} from "../common/RenameHistoryList";
 import { ContextMenuState } from "./tableLayout";
 
 interface ContextMenuFileActionsProps {
@@ -13,6 +18,17 @@ interface ContextMenuFileActionsProps {
   isVaultLocked: boolean;
   vaultName?: string;
   selectedCollectionId: number | null;
+  activeSubMenu: ContextMenuState["subMenu"];
+  submenuPositionClass: string;
+  setSubmenuHover: (
+    subMenu:
+      | "collection"
+      | "tag"
+      | "genre"
+      | "bpmKey"
+      | "layers"
+      | "renameHistory"
+  ) => void;
   clearSubmenuHover: () => void;
   setContextMenu: React.Dispatch<React.SetStateAction<ContextMenuState | null>>;
 }
@@ -25,11 +41,13 @@ export const ContextMenuFileActions: React.FC<ContextMenuFileActionsProps> = ({
   isVaultLocked,
   vaultName,
   selectedCollectionId,
+  activeSubMenu,
+  submenuPositionClass,
+  setSubmenuHover,
   clearSubmenuHover,
   setContextMenu,
 }) => {
   const openBatchRenameModal = useSampleStore((s) => s.openBatchRenameModal);
-  const undoRenameSampleFile = useSampleStore((s) => s.undoRenameSampleFile);
   const requestMoveSamplesToTrash = useSampleStore(
     (s) => s.requestMoveSamplesToTrash
   );
@@ -37,6 +55,39 @@ export const ContextMenuFileActions: React.FC<ContextMenuFileActionsProps> = ({
     (s) => s.restoreSamplesFromTrash
   );
   const emptyAudifyTrash = useSampleStore((s) => s.emptyAudifyTrash);
+
+  const [historyItems, setHistoryItems] = useState<SampleRenameHistoryItem[]>(
+    () =>
+      activeContextSample.previous_file_name
+        ? [{ name: activeContextSample.previous_file_name, created_at: "" }]
+        : []
+  );
+
+  useEffect(() => {
+    if (trashFilterActive || isMultiContext || isVaultLocked) return;
+    let alive = true;
+    void fetchSampleRenameHistory(activeContextSample.id, 10).then((rows) => {
+      if (!alive) return;
+      if (rows.length > 0) {
+        setHistoryItems(rows);
+      } else if (activeContextSample.previous_file_name) {
+        setHistoryItems([
+          { name: activeContextSample.previous_file_name, created_at: "" },
+        ]);
+      } else {
+        setHistoryItems([]);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [
+    activeContextSample.id,
+    activeContextSample.previous_file_name,
+    trashFilterActive,
+    isMultiContext,
+    isVaultLocked,
+  ]);
 
   if (trashFilterActive) {
     return (
@@ -79,6 +130,9 @@ export const ContextMenuFileActions: React.FC<ContextMenuFileActionsProps> = ({
       </>
     );
   }
+
+  const showRenameHistory =
+    !isMultiContext && !isVaultLocked && historyItems.length > 0;
 
   return (
     <>
@@ -146,23 +200,32 @@ export const ContextMenuFileActions: React.FC<ContextMenuFileActionsProps> = ({
         />
       )}
 
-      {!isMultiContext &&
-        Boolean(activeContextSample.previous_file_name) &&
-        !isVaultLocked && (
-          <MenuItem
-            compactHeight
-            tone="accent"
-            onMouseEnter={clearSubmenuHover}
-            onClick={async () => {
-              const id = activeContextSample.id;
-              setContextMenu(null);
-              await undoRenameSampleFile(id);
-            }}
-            title={`Restore previous file name "${activeContextSample.previous_file_name}"`}
-            icon={<RotateCcw className="w-3.5 h-3.5 text-accent-fg" />}
-            label={`Undo Rename (${activeContextSample.previous_file_name})`}
-          />
-        )}
+      {showRenameHistory && (
+        <SubmenuTriggerItem
+          isOpen={activeSubMenu === "renameHistory"}
+          onOpen={() => setSubmenuHover("renameHistory")}
+          icon={<History className="w-3.5 h-3.5 text-accent-fg" />}
+          label="Rename History"
+          rightSlot={
+            <span className="font-mono text-[9.5px] text-fg-3">
+              {historyItems.length}
+            </span>
+          }
+        >
+          <div
+            data-mica-overlay="true"
+            className={`absolute ${submenuPositionClass} w-[248px] bg-surface-2 border border-line-strong rounded-md shadow-2xl z-[1000]`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <RenameHistoryList
+              sampleId={activeContextSample.id}
+              fallbackPrevName={activeContextSample.previous_file_name}
+              preloadedItems={historyItems}
+              onRestored={() => setContextMenu(null)}
+            />
+          </div>
+        </SubmenuTriggerItem>
+      )}
 
       <MenuItem
         compactHeight

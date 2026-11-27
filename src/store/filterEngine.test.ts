@@ -6,6 +6,7 @@ import {
   doesSampleMatchInitialView,
   filterBaseSamplesInMemory,
   reconcileSelectionAfterFilter,
+  shouldPreserveDeckSelection,
 } from "./filterEngine";
 
 function makeSample(id: number, overrides: Partial<SampleItem> = {}): SampleItem {
@@ -212,11 +213,81 @@ describe("filterEngine in-memory filtering, sorting & selection reconciliation",
     expect(switched.nextSelectedIds).toEqual([3]);
     expect(switched.nextSelectedIndex).toBe(1);
 
-    // Empty result clears everything safely
+    // Empty result clears everything safely when idle
     const empty = reconcileSelectionAfterFilter([], s3, [2, 3], true);
     expect(empty.nextSelected).toBeNull();
     expect(empty.nextSelectedIds).toEqual([]);
     expect(empty.nextSelectedIndex).toBeNull();
+  });
+
+  it("preserves active playing or Layers virtual deck selection across off-view tab switches", () => {
+    const s1 = makeSample(1);
+    const s2 = makeSample(2);
+    const s3 = makeSample(3);
+    const layerDraft = makeSample(-999_999, {
+      file_name: "Layer_001.wav",
+      file_path: "layer://draft",
+    });
+
+    // Playing track absent from new tab stays loaded on deck; off-view row IDs are cleared
+    const playingTabSwitch = reconcileSelectionAfterFilter(
+      [s2, s3],
+      s1,
+      [1],
+      false,
+      true
+    );
+    expect(playingTabSwitch.nextSelected?.id).toBe(1);
+    expect(playingTabSwitch.nextSelectedIds).toEqual([]);
+    expect(playingTabSwitch.nextSelectedIndex).toBeNull();
+
+    // Playing track stays intact even when switching to an empty folder/tab
+    const playingEmptyTab = reconcileSelectionAfterFilter([], s1, [1], false, true);
+    expect(playingEmptyTab.nextSelected?.id).toBe(1);
+    expect(playingEmptyTab.nextSelectedIds).toEqual([]);
+    expect(playingEmptyTab.nextSelectedIndex).toBeNull();
+
+    // Refining inside view while playing keeps visible multi-select without hijacking primary deck
+    const playingRefine = reconcileSelectionAfterFilter(
+      [s2, s3],
+      s1,
+      [1, 2, 3],
+      true,
+      true
+    );
+    expect(playingRefine.nextSelected?.id).toBe(1);
+    expect(playingRefine.nextSelectedIds).toEqual([2, 3]);
+    expect(playingRefine.nextSelectedIndex).toBeNull();
+
+    // Helper rules: preserves any playing track OR virtual negative-ID sample inside Layers
+    expect(
+      shouldPreserveDeckSelection({
+        isPlaying: true,
+        selectedSample: s1,
+        layersFilterActive: false,
+      })
+    ).toBe(true);
+    expect(
+      shouldPreserveDeckSelection({
+        isPlaying: false,
+        selectedSample: s1,
+        layersFilterActive: false,
+      })
+    ).toBe(false);
+    expect(
+      shouldPreserveDeckSelection({
+        isPlaying: false,
+        selectedSample: layerDraft,
+        layersFilterActive: true,
+      })
+    ).toBe(true);
+    expect(
+      shouldPreserveDeckSelection({
+        isPlaying: false,
+        selectedSample: layerDraft,
+        layersFilterActive: false,
+      })
+    ).toBe(false);
   });
 
   it("sorts filenames with natural numeric order, case insensitivity, and non-ASCII fallback", () => {

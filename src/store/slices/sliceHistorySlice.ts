@@ -37,14 +37,17 @@ export function createSliceHistorySlice(ctx: StoreSliceContext) {
   const getCurrentVisibleSlices = () => {
     const st = get();
     const isTrashView = st.trashFilterActive && st.trashViewTab === "slices";
+    const isUnifiedFavSlices = st.favoriteOnly && st.favoritesViewTab === "slices";
     return getVisibleSortedSlices(
       isTrashView ? st.trashedSliceHistory : st.sliceHistory,
       {
         searchQuery: st.searchQuery,
         folderFilter: st.folderFilter,
         sliceHideMissing: isTrashView ? false : st.sliceHideMissing,
-        sliceFavoriteOnly: isTrashView ? false : st.sliceFavoriteOnly,
-        slicePitchOnly: isTrashView ? false : st.slicePitchOnly,
+        sliceFavoriteOnly: isTrashView
+          ? false
+          : isUnifiedFavSlices || st.sliceFavoriteOnly,
+        slicePitchOnly: isTrashView || isUnifiedFavSlices ? false : st.slicePitchOnly,
         sliceSortKey: st.sliceSortKey,
         sliceSortDir: st.sliceSortDir,
       }
@@ -71,11 +74,13 @@ export function createSliceHistorySlice(ctx: StoreSliceContext) {
         persistNavigationFilters(null, null, false, null);
         set({
           slicesFilterActive: true,
+          layersFilterActive: false,
           duplicatesFilterActive: false,
           trashFilterActive: false,
           trashViewTab: "tracks",
           binFilterActive: false,
           favoriteOnly: false,
+          favoritesViewTab: "tracks",
           recentOnly: false,
           selectedSliceIds: [],
           activeSliceId: null,

@@ -2,7 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { Collection, SampleItem } from "../../types";
 import { isPathInsideFolder } from "../../utils/format";
 import { invokeCommand } from "../../utils/tauriCommands";
-import { reconcileSelectionAfterFilter } from "../filterEngine";
+import {
+  reconcileSelectionAfterFilter,
+  shouldPreserveDeckSelection,
+} from "../filterEngine";
 import {
   deduplicateTemplates,
   persistNavigationFilters,
@@ -395,7 +398,8 @@ export function createCatalogCollectionActions(ctx: StoreSliceContext) {
           nextSamples,
           prevSelectedSample,
           prevSelectedIds,
-          true
+          true,
+          shouldPreserveDeckSelection(prevState)
         );
         set({
           collections: nextCollections,

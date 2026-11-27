@@ -182,7 +182,14 @@ export interface ContextMenuState {
   targetIds: number[];
   x: number;
   y: number;
-  subMenu: "collection" | "tag" | "genre" | "bpmKey" | null;
+  subMenu:
+    | "collection"
+    | "tag"
+    | "genre"
+    | "bpmKey"
+    | "layers"
+    | "renameHistory"
+    | null;
 }
 
 export interface RowPopoverPosition {

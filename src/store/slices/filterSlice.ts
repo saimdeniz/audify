@@ -1,4 +1,5 @@
 import {
+  FavoritesViewTab,
   SampleRateFilter,
   SortDir,
   SortKey,
@@ -7,7 +8,11 @@ import {
 import { resolveTagFacetSlug } from "../../utils/taxonomyTree";
 import { clearSmartSearchCache } from "../../utils/smartSearch";
 import { shouldUseCatalogWorker } from "../../workers/catalogWorkerClient";
-import { applyClientFacetFilters, reconcileSelectionAfterFilter } from "../filterEngine";
+import {
+  applyClientFacetFilters,
+  reconcileSelectionAfterFilter,
+  shouldPreserveDeckSelection,
+} from "../filterEngine";
 import { resetPlayheadClock } from "../playheadClock";
 import {
   AUDIFY_STORAGE_KEYS,
@@ -57,10 +62,12 @@ export function createFilterSlice(
       trashViewTab: "tracks",
       duplicatesFilterActive: false,
       slicesFilterActive: false,
+      layersFilterActive: false,
       sliceFavoriteOnly: false,
       slicePitchOnly: false,
       batchRenameSliceIds: null,
       favoriteOnly: false,
+      favoritesViewTab: "tracks",
       recentOnly: false,
       selectedTagIds: [],
       excludedTagIds: [],
@@ -102,6 +109,58 @@ export function createFilterSlice(
     return true;
   };
 
+  const applyFacetFilter = (patch: {
+    typeFilter?: TypeFilter;
+    srFilter?: SampleRateFilter;
+  }) => {
+    if (canOffloadFacetToWorker()) {
+      set(patch);
+      applyInstantMemoryFilter({ preserveMultiSelect: true });
+      return;
+    }
+    bumpMemoryFilterSeq();
+    opts.bumpFetchSeq();
+    const live = get();
+    const nextType = patch.typeFilter ?? live.typeFilter;
+    const nextSr = patch.srFilter !== undefined ? patch.srFilter : live.srFilter;
+    const filtered = applyClientFacetFilters(
+      live.rawSamples,
+      nextType,
+      nextSr,
+      live.sortKey,
+      live.sortDir,
+      live.similaritySession
+    );
+    const reconciled = reconcileSelectionAfterFilter(
+      filtered,
+      live.selectedSample,
+      live.selectedSampleIds,
+      true,
+      shouldPreserveDeckSelection(live)
+    );
+    const selectionChanged =
+      (reconciled.nextSelected?.id ?? null) !== (live.selectedSample?.id ?? null);
+    if (selectionChanged) {
+      resetPlayheadClock(0);
+    }
+    set({
+      ...patch,
+      samples: filtered,
+      selectedSample: reconciled.nextSelected,
+      selectedSampleIds: reconciled.nextSelectedIds,
+      lastSelectedIndex: reconciled.nextSelectedIndex,
+      ...(selectionChanged
+        ? {
+            sliceRange: null,
+            currentTimeSec: 0,
+            durationSec: reconciled.nextSelected
+              ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
+              : 0,
+          }
+        : {}),
+    });
+  };
+
   return {
     setSearchQuery: (q: string) => {
       set({ searchQuery: q });
@@ -109,7 +168,11 @@ export function createFilterSlice(
       const cur = get();
       if (
         cur.slicesFilterActive ||
-        (cur.trashFilterActive && cur.trashViewTab === "slices")
+        (cur.layersFilterActive && cur.layersWorkspaceTab === "saved") ||
+        (cur.trashFilterActive &&
+          (cur.trashViewTab === "slices" || cur.trashViewTab === "layers")) ||
+        (cur.favoriteOnly &&
+          (cur.favoritesViewTab === "slices" || cur.favoritesViewTab === "layers"))
       ) {
         return;
       }
@@ -179,6 +242,8 @@ export function createFilterSlice(
       const dups = st.duplicatesFilterActive;
       const trash = st.trashFilterActive;
       const slices = st.slicesFilterActive;
+      const keepLayersEditor =
+        st.layersFilterActive && st.layersWorkspaceTab === "editor";
       if (!trash && !bin && !slices && !dups) {
         persistNavigationFilters(folder, null, fav, null);
       }
@@ -189,6 +254,7 @@ export function createFilterSlice(
         trashFilterActive: trash,
         duplicatesFilterActive: dups,
         slicesFilterActive: slices,
+        layersFilterActive: keepLayersEditor,
         favoriteOnly: fav,
         recentOnly: false,
         selectedCollectionId: null,
@@ -201,13 +267,24 @@ export function createFilterSlice(
       }
     },
 
-    setFavoriteOnly: (fav: boolean) => {
+    setFavoriteOnly: (fav: boolean, tabOverride?: FavoritesViewTab) => {
+      const st = get();
       const restoreSort = restoredSortFromDuplicatesPatch();
+      const nextFavTab: FavoritesViewTab = fav
+        ? tabOverride ??
+          (st.slicesFilterActive
+            ? "slices"
+            : st.layersFilterActive
+            ? "layers"
+            : "tracks")
+        : "tracks";
       persistNavigationFilters(null, null, fav, null);
       set({
         favoriteOnly: fav,
+        favoritesViewTab: nextFavTab,
         duplicatesFilterActive: false,
         slicesFilterActive: false,
+        layersFilterActive: false,
         recentOnly: false,
         folderFilter: null,
         selectedLicenseGroupId: null,
@@ -219,7 +296,34 @@ export function createFilterSlice(
         selectedGenre: null,
         ...restoreSort,
       });
+      if (fav && nextFavTab === "slices") {
+        void get().fetchSliceHistory();
+        return;
+      }
+      if (fav && nextFavTab === "layers") {
+        void get().fetchLayerHistory();
+        return;
+      }
       if (!applyInstantMemoryFilter({ preserveMultiSelect: false })) {
+        void get().fetchSamples({ preserveMultiSelect: false });
+      }
+    },
+
+    setFavoritesViewTab: (favoritesViewTab: FavoritesViewTab) => {
+      set({
+        favoriteOnly: true,
+        favoritesViewTab,
+        selectedSampleIds: [],
+        selectedSliceIds: [],
+        selectedLayerIds: [],
+        activeSliceId: null,
+        activeLayerId: null,
+      });
+      if (favoritesViewTab === "slices") {
+        void get().fetchSliceHistory();
+      } else if (favoritesViewTab === "layers") {
+        void get().fetchLayerHistory();
+      } else if (!applyInstantMemoryFilter({ preserveMultiSelect: false })) {
         void get().fetchSamples({ preserveMultiSelect: false });
       }
     },
@@ -231,7 +335,9 @@ export function createFilterSlice(
         recentOnly: recent,
         duplicatesFilterActive: false,
         slicesFilterActive: false,
+        layersFilterActive: false,
         favoriteOnly: false,
+        favoritesViewTab: "tracks",
         folderFilter: null,
         selectedLicenseGroupId: null,
         binFilterActive: false,
@@ -273,6 +379,9 @@ export function createFilterSlice(
     },
 
     setCollectionFilter: (collectionId: number | null) => {
+      const st = get();
+      const keepLayersEditor =
+        st.layersFilterActive && st.layersWorkspaceTab === "editor";
       const restoreSort = restoredSortFromDuplicatesPatch();
       persistNavigationFilters(null, null, false, collectionId);
       set({
@@ -283,7 +392,9 @@ export function createFilterSlice(
         trashFilterActive: false,
         duplicatesFilterActive: false,
         slicesFilterActive: false,
+        layersFilterActive: keepLayersEditor,
         favoriteOnly: false,
+        favoritesViewTab: "tracks" as FavoritesViewTab,
         recentOnly: false,
         ...restoreSort,
       });
@@ -294,111 +405,11 @@ export function createFilterSlice(
     },
 
     setTypeFilter: (typeFilter: TypeFilter) => {
-      if (canOffloadFacetToWorker()) {
-        set({ typeFilter });
-        applyInstantMemoryFilter({ preserveMultiSelect: true });
-        return;
-      }
-      bumpMemoryFilterSeq();
-      opts.bumpFetchSeq();
-      const {
-        rawSamples,
-        srFilter,
-        sortKey,
-        sortDir,
-        similaritySession,
-        selectedSample,
-        selectedSampleIds,
-      } = get();
-      const filtered = applyClientFacetFilters(
-        rawSamples,
-        typeFilter,
-        srFilter,
-        sortKey,
-        sortDir,
-        similaritySession
-      );
-      const reconciled = reconcileSelectionAfterFilter(
-        filtered,
-        selectedSample,
-        selectedSampleIds,
-        true
-      );
-      const selectionChanged =
-        (reconciled.nextSelected?.id ?? null) !== (selectedSample?.id ?? null);
-      if (selectionChanged) {
-        resetPlayheadClock(0);
-      }
-      set({
-        typeFilter,
-        samples: filtered,
-        selectedSample: reconciled.nextSelected,
-        selectedSampleIds: reconciled.nextSelectedIds,
-        lastSelectedIndex: reconciled.nextSelectedIndex,
-        ...(selectionChanged
-          ? {
-              sliceRange: null,
-              currentTimeSec: 0,
-              durationSec: reconciled.nextSelected
-                ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
-                : 0,
-            }
-          : {}),
-      });
+      applyFacetFilter({ typeFilter });
     },
 
     setSrFilter: (srFilter: SampleRateFilter) => {
-      if (canOffloadFacetToWorker()) {
-        set({ srFilter });
-        applyInstantMemoryFilter({ preserveMultiSelect: true });
-        return;
-      }
-      bumpMemoryFilterSeq();
-      opts.bumpFetchSeq();
-      const {
-        rawSamples,
-        typeFilter,
-        sortKey,
-        sortDir,
-        similaritySession,
-        selectedSample,
-        selectedSampleIds,
-      } = get();
-      const filtered = applyClientFacetFilters(
-        rawSamples,
-        typeFilter,
-        srFilter,
-        sortKey,
-        sortDir,
-        similaritySession
-      );
-      const reconciled = reconcileSelectionAfterFilter(
-        filtered,
-        selectedSample,
-        selectedSampleIds,
-        true
-      );
-      const selectionChanged =
-        (reconciled.nextSelected?.id ?? null) !== (selectedSample?.id ?? null);
-      if (selectionChanged) {
-        resetPlayheadClock(0);
-      }
-      set({
-        srFilter,
-        samples: filtered,
-        selectedSample: reconciled.nextSelected,
-        selectedSampleIds: reconciled.nextSelectedIds,
-        lastSelectedIndex: reconciled.nextSelectedIndex,
-        ...(selectionChanged
-          ? {
-              sliceRange: null,
-              currentTimeSec: 0,
-              durationSec: reconciled.nextSelected
-                ? Math.max(0.01, reconciled.nextSelected.duration_ms / 1000)
-                : 0,
-            }
-          : {}),
-      });
+      applyFacetFilter({ srFilter });
     },
 
     // Header click cycles: asc -> desc -> default (or desc -> asc -> default for date columns).
@@ -494,7 +505,9 @@ export function createFilterSlice(
         trashFilterActive: false,
         duplicatesFilterActive: false,
         slicesFilterActive: false,
+        layersFilterActive: false,
         favoriteOnly: false,
+        favoritesViewTab: "tracks" as FavoritesViewTab,
         recentOnly: false,
         selectedTagIds: [] as number[],
         excludedTagIds: [] as number[],
