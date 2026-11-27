@@ -99,7 +99,7 @@ export const TagRuleTreeRow: React.FC<TagRuleTreeRowProps> = ({
           {rule.keywords?.length || 0} kw
         </span>
         <span
-          className={`text-[8.5px] font-mono px-1.5 py-0.2 rounded-xs border font-semibold ${
+          className={`text-[9.5px] font-mono px-1.5 py-0.2 rounded-xs border font-semibold ${
             rule.enabled
               ? "bg-accent-soft border-accent/50 text-accent-fg"
               : "bg-surface-2 border-line text-fg-3"

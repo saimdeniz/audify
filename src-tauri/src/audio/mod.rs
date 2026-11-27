@@ -1,6 +1,8 @@
 mod decode;
 mod export;
 pub mod layer_mixer;
+mod layer_pcm_cache;
+mod layer_recipe;
 mod loudness;
 mod metadata;
 mod pcm_ops;
@@ -14,8 +16,11 @@ pub use decode::{
 };
 pub use layer_mixer::{
     clear_layer_pcm_cache, evict_layer_pcm_cache_path, export_rendered_layer_wav,
-    render_layer_mix, validate_and_normalize_recipe, LanePeaksPreview, LayerClipSpec,
-    LayerLaneSpec, LayerRecipe, RenderedLayerMix, LAYER_MIX_SAMPLE_RATE,
+    render_layer_mix, render_layer_mix_cancellable, LAYER_RENDER_CANCELLED_ERR, MAX_LAYER_CLIPS,
+};
+pub use layer_recipe::{
+    validate_and_normalize_recipe, LanePeaksPreview, LayerClipSpec, LayerLaneSpec, LayerPitchMode,
+    LayerRecipe, RenderedLayerMix, LAYER_MIX_SAMPLE_RATE,
 };
 #[cfg(test)]
 pub use export::{export_wav_slice, export_wav_slice_with_options, export_wav_slice_with_preset};

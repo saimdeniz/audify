@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { AlertTriangle, FilePlus2, Save, Sparkles, X } from "lucide-react";
 import { Z_INDEX } from "../../constants/zIndex";
 import type { LayerHistoryEntry } from "../../types";
+import { useDialogFocusTrap } from "../../utils/modalFocus";
 
 interface SaveLayerModalProps {
   open: boolean;
@@ -11,7 +12,7 @@ interface SaveLayerModalProps {
   existingLayers: LayerHistoryEntry[];
   isSaving: boolean;
   onClose: () => void;
-  onConfirmSave: (name: string, overwrite: boolean) => Promise<void>;
+  onConfirmSave: (name: string, overwrite: boolean) => Promise<boolean>;
 }
 
 function normalizeLayerStem(raw: string): string {
@@ -33,7 +34,8 @@ function generateAutoLayerName(existingLayers: LayerHistoryEntry[]): string {
 
 /**
  * Portal-backed Save Layer dialog with manual naming, optional `Auto` unique name
- * generator, and live duplicate filename protection.
+ * generator, live duplicate filename protection, dialog focus trapping, and
+ * failure-preserving submit (keeps modal open on error so user never loses text).
  */
 export const SaveLayerModal: React.FC<SaveLayerModalProps> = ({
   open,
@@ -45,7 +47,10 @@ export const SaveLayerModal: React.FC<SaveLayerModalProps> = ({
   onConfirmSave,
 }) => {
   const [name, setName] = useState(initialName);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useDialogFocusTrap(open, dialogRef);
 
   useEffect(() => {
     if (!open) return;
@@ -63,12 +68,12 @@ export const SaveLayerModal: React.FC<SaveLayerModalProps> = ({
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
-        onClose();
+        if (!isSaving) onClose();
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [open, onClose]);
+  }, [open, isSaving, onClose]);
 
   const cleanStem = name.trim().replace(/\.wav$/i, "");
   const normalized = normalizeLayerStem(cleanStem);
@@ -102,8 +107,10 @@ export const SaveLayerModal: React.FC<SaveLayerModalProps> = ({
 
   const handleSubmit = async (overwrite: boolean) => {
     if (overwrite ? !canSavePrimary : !canSaveNewCopy) return;
-    await onConfirmSave(cleanStem, overwrite);
-    onClose();
+    const ok = await onConfirmSave(cleanStem, overwrite);
+    if (ok) {
+      onClose();
+    }
   };
 
   return createPortal(
@@ -116,12 +123,14 @@ export const SaveLayerModal: React.FC<SaveLayerModalProps> = ({
       className="fixed inset-0 audify-modal-backdrop flex items-center justify-center p-4 select-none"
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Save Layer Mix"
+        tabIndex={-1}
         data-mica-overlay="true"
         onClick={(e) => e.stopPropagation()}
-        className="w-[376px] max-w-full rounded-sm bg-surface-1 border border-line-strong shadow-2xl overflow-hidden text-[12px] text-fg"
+        className="w-[376px] max-w-full rounded-sm bg-surface-1 border border-line-strong shadow-2xl overflow-hidden text-[12px] text-fg outline-none"
       >
         <div className="h-[34px] px-3 bg-surface-1 border-b border-line flex items-center justify-between">
           <span className="font-mono text-[10.5px] font-semibold uppercase tracking-wider text-fg">
@@ -129,8 +138,12 @@ export const SaveLayerModal: React.FC<SaveLayerModalProps> = ({
           </span>
           <button
             type="button"
-            onClick={onClose}
-            className="w-[22px] h-[22px] rounded-[3px] text-fg-3 hover:text-fg hover:bg-surface-3 flex items-center justify-center cursor-pointer"
+            disabled={isSaving}
+            aria-label="Close save dialog"
+            onClick={() => {
+              if (!isSaving) onClose();
+            }}
+            className="w-[22px] h-[22px] rounded-[3px] text-fg-3 hover:text-fg hover:bg-surface-3 disabled:opacity-40 flex items-center justify-center cursor-pointer"
             title="Close (Esc)"
           >
             <X className="w-3.5 h-3.5" />
@@ -150,6 +163,7 @@ export const SaveLayerModal: React.FC<SaveLayerModalProps> = ({
                 id="save-layer-name-input"
                 ref={inputRef}
                 type="text"
+                disabled={isSaving}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 onKeyDown={(e) => {
@@ -163,8 +177,9 @@ export const SaveLayerModal: React.FC<SaveLayerModalProps> = ({
               />
               <button
                 type="button"
+                disabled={isSaving}
                 onClick={() => setName(generateAutoLayerName(existingLayers))}
-                className="h-[26px] px-2 rounded-[3px] bg-surface-3 hover:bg-accent-soft border border-line hover:border-accent text-fg-2 hover:text-accent-fg text-[11px] font-medium inline-flex items-center gap-1 shrink-0 transition-colors cursor-pointer"
+                className="h-[26px] px-2 rounded-[3px] bg-surface-3 hover:bg-accent-soft border border-line hover:border-accent text-fg-2 hover:text-accent-fg disabled:opacity-40 text-[11px] font-medium inline-flex items-center gap-1 shrink-0 transition-colors cursor-pointer"
                 title="Generate a clean unique automatic filename"
               >
                 <Sparkles className="w-3 h-3" />
@@ -186,8 +201,11 @@ export const SaveLayerModal: React.FC<SaveLayerModalProps> = ({
           <div className="pt-1 flex items-center justify-end gap-1.5">
             <button
               type="button"
-              onClick={onClose}
-              className="h-[24px] px-2.5 rounded-[3px] bg-surface-3 border border-line hover:border-line-strong text-fg-2 hover:text-fg text-[11px] cursor-pointer"
+              disabled={isSaving}
+              onClick={() => {
+                if (!isSaving) onClose();
+              }}
+              className="h-[24px] px-2.5 rounded-[3px] bg-surface-3 border border-line hover:border-line-strong text-fg-2 hover:text-fg disabled:opacity-40 text-[11px] cursor-pointer"
             >
               Cancel
             </button>

@@ -324,24 +324,34 @@ pub(crate) fn query_samples_with_conn_sorted(
         .filter(|f| !f.is_empty())
     {
         let norm_folder = normalize_path_str(folder);
-        let escaped = norm_folder
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_");
-        let like_pat = format!("{}/%", escaped);
-        params_vec.push(rusqlite::types::Value::Text(norm_folder));
+        // Index-friendly B-tree prefix range: in ASCII/UTF-8 `'/'` is 0x2F and `'0'` is 0x30,
+        // so `>= "{prefix}/" AND < "{prefix}0"` matches exact subtree via `idx_samples_file_path_lower`
+        // without LIKE full-table scans or wildcard escaping edge cases.
+        let base_cmp = if cfg!(windows) {
+            norm_folder.to_lowercase()
+        } else {
+            norm_folder
+        };
+        let (range_start, range_end) = if let Some(stripped) = base_cmp.strip_suffix('/') {
+            (base_cmp.clone(), format!("{}0", stripped))
+        } else {
+            (format!("{}/", base_cmp), format!("{}0", base_cmp))
+        };
+        params_vec.push(rusqlite::types::Value::Text(base_cmp));
         let idx1 = params_vec.len();
-        params_vec.push(rusqlite::types::Value::Text(like_pat));
+        params_vec.push(rusqlite::types::Value::Text(range_start));
         let idx2 = params_vec.len();
+        params_vec.push(rusqlite::types::Value::Text(range_end));
+        let idx3 = params_vec.len();
         if cfg!(windows) {
             where_clauses.push(format!(
-                "(LOWER(s.file_path) = LOWER(?{}) OR LOWER(s.file_path) LIKE LOWER(?{}) ESCAPE '\\')",
-                idx1, idx2
+                "(LOWER(s.file_path) = ?{} OR (LOWER(s.file_path) >= ?{} AND LOWER(s.file_path) < ?{}))",
+                idx1, idx2, idx3
             ));
         } else {
             where_clauses.push(format!(
-                "(s.file_path = ?{} OR s.file_path LIKE ?{} ESCAPE '\\')",
-                idx1, idx2
+                "(s.file_path = ?{} OR (s.file_path >= ?{} AND s.file_path < ?{}))",
+                idx1, idx2, idx3
             ));
         }
     }

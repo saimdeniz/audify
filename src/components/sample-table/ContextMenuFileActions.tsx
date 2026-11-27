@@ -214,7 +214,8 @@ export const ContextMenuFileActions: React.FC<ContextMenuFileActionsProps> = ({
         >
           <div
             data-mica-overlay="true"
-            className={`absolute ${submenuPositionClass} w-[248px] bg-surface-2 border border-line-strong rounded-md shadow-2xl z-[1000]`}
+            style={{ zIndex: 95 }}
+            className={`absolute ${submenuPositionClass} w-[248px] bg-surface-2 audify-overlay-surface border border-line-strong rounded-md shadow-2xl`}
             onClick={(e) => e.stopPropagation()}
           >
             <RenameHistoryList

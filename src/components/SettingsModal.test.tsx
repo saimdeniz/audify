@@ -211,7 +211,7 @@ describe("Settings open & standalone window flow", () => {
     expect(screen.getByText(/Solid Baseline · Natural/i)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /^Collections$/i }));
-    const templatesTabBtn = await screen.findByRole("button", {
+    const templatesTabBtn = await screen.findByRole("tab", {
       name: /Templates/i,
     });
     const collectionsSwitcher = templatesTabBtn.parentElement;
@@ -228,8 +228,8 @@ describe("Settings open & standalone window flow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /^Tags & Rules$/i }));
     expect(await screen.findByRole("heading", { name: "Tags & Rules" })).toBeTruthy();
-    const libraryTabBtn = screen.getByRole("button", { name: /^Library/i });
-    const rulesTabBtn = screen.getByRole("button", { name: /^Rules/i });
+    const libraryTabBtn = screen.getByRole("tab", { name: /^Library/i });
+    const rulesTabBtn = screen.getByRole("tab", { name: /^Rules/i });
     expect(
       libraryTabBtn.compareDocumentPosition(rulesTabBtn) &
         Node.DOCUMENT_POSITION_FOLLOWING

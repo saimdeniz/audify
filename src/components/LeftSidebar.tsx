@@ -281,6 +281,17 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
     ? isOverlayOpen
     : !sidebarCollapsed;
   const shouldRenderPanel = isHoverOverlayMode || !sidebarCollapsed;
+  const isOverlayPanelHidden = isHoverOverlayMode && !isOverlayOpen;
+
+  useEffect(() => {
+    const el = panelRef.current;
+    if (!el) return;
+    if (isOverlayPanelHidden) {
+      el.setAttribute("inert", "");
+    } else {
+      el.removeAttribute("inert");
+    }
+  }, [isOverlayPanelHidden, shouldRenderPanel]);
 
   const handlePrimaryTabSelect = useCallback(
     (tab: SidebarTab) => {

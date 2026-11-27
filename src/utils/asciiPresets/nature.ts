@@ -5,6 +5,9 @@ import {
   hash2,
   hexToRgb,
   mixRgb,
+  vnoise,
+} from "./blueprintGrid";
+import {
   paintGridCircleRing,
   paintGridCloud,
   paintGridLine,
@@ -13,8 +16,7 @@ import {
   paintGridPine,
   paintGridRidge,
   paintGridSun,
-  vnoise,
-} from "./blueprintGrid";
+} from "./blueprintShapes";
 import { AsciiRenderParams } from "./shared";
 
 export function renderNaturePreset(params: AsciiRenderParams): void {

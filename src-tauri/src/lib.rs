@@ -135,6 +135,7 @@ pub fn run() {
             let sim_probe_user_dir = state.user_dir.clone();
             std::thread::spawn(move || {
                 let _ = commands::clear_stale_sim_probe_dir(&sim_probe_user_dir);
+                commands::prune_stale_drop_staging_dirs(&sim_probe_user_dir, 0);
                 let _ = prune_audio_cache_dirs(
                     &cache_dirs,
                     CACHE_PRUNE_MAX_FILES,
@@ -248,6 +249,7 @@ pub fn run() {
             commands::trash_physical_subfolder,
             commands::move_samples_to_folder,
             commands::relocate_moved_samples,
+            commands::stage_dropped_audio_file_raw,
             commands::stage_dropped_audio_files,
             commands::import_external_files_to_folder,
             commands::query_samples,

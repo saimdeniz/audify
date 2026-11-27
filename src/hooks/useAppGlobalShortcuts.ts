@@ -1,10 +1,7 @@
 import { useEffect } from "react";
-import { DEFAULT_SHORTCUTS } from "../constants/shortcuts";
 import { isStandaloneSettingsWindow } from "../store/storageHelpers";
 import { useSampleStore } from "../store/useSampleStore";
-import { resolveSamplesByIds } from "../utils/sampleLookup";
 import {
-  isHardwareMediaKey,
   isRangeSliderTarget,
   isSafeGlobalShortcutInTextEntry,
   isTextEntryTarget,
@@ -12,9 +9,21 @@ import {
   shouldBlurSearchInputOnPointerDown,
 } from "../utils/shortcuts";
 import {
+  isLayersSavedViewActive,
+  isNonSampleTableViewActive,
+  isSliceTableViewActive,
+} from "../utils/viewModes";
+import {
   handleDawListNavigationShortcut,
   handleDawTransportAndSliceShortcut,
 } from "./dawShortcutsHelper";
+import {
+  handleCollectionOrTrashDelete,
+  handleFileUtilityShortcuts,
+  handleHardwareMediaKey,
+  handleTransportShortcuts,
+  handleUndoRedoShortcut,
+} from "./globalShortcutHandlers";
 import {
   handleF2RenameShortcut,
   handleMarkSliceInOutShortcut,
@@ -24,258 +33,6 @@ import {
   handleSliceUndoRedoShortcut,
   handleToggleFavoriteShortcut,
 } from "./sliceShortcutsHelper";
-
-type AppStoreState = ReturnType<typeof useSampleStore.getState>;
-
-interface TransportShortcutEntry {
-  shortcut: string;
-  allowRepeat?: boolean;
-  run: (state: AppStoreState) => void;
-}
-
-function getTransportShortcuts(state: AppStoreState): TransportShortcutEntry[] {
-  const { shortcuts } = state;
-  return [
-    { shortcut: shortcuts.prevTrack, allowRepeat: true, run: (st) => st.selectRelativeSample(-1) },
-    { shortcut: shortcuts.nextTrack, allowRepeat: true, run: (st) => st.selectRelativeSample(1) },
-    { shortcut: shortcuts.stopPlayback, run: (st) => st.stopPlayback() },
-    { shortcut: shortcuts.toggleShuffle, run: (st) => st.toggleShuffle() },
-    { shortcut: shortcuts.toggleAutoPreview, run: (st) => st.toggleAutoPreview() },
-    { shortcut: shortcuts.toggleMute, run: (st) => st.toggleMute() },
-    { shortcut: shortcuts.playPause, run: (st) => st.togglePlayPause() },
-    { shortcut: shortcuts.toggleLoop, run: (st) => st.toggleLooping() },
-  ];
-}
-
-function handleHardwareMediaKey(e: KeyboardEvent, state: AppStoreState): boolean {
-  if (!isHardwareMediaKey(e.key)) return false;
-  e.preventDefault();
-  if (e.repeat) return true;
-  if (e.key === "MediaPlayPause" || e.key === "MediaPlay" || e.key === "MediaPause") {
-    state.togglePlayPause();
-  } else if (e.key === "MediaStop") {
-    state.stopPlayback();
-  } else if (e.key === "MediaTrackPrevious") {
-    state.selectRelativeSample(-1);
-  } else if (e.key === "MediaTrackNext") {
-    state.selectRelativeSample(1);
-  }
-  return true;
-}
-
-function handleFileUtilityShortcuts(
-  e: KeyboardEvent,
-  state: AppStoreState,
-  textEntryOnly: boolean
-): boolean {
-  const saveSliceKey =
-    state.shortcuts.saveSlice ?? DEFAULT_SHORTCUTS.saveSlice ?? "";
-  if (
-    saveSliceKey &&
-    (textEntryOnly
-      ? isSafeGlobalShortcutInTextEntry(e, saveSliceKey)
-      : matchesShortcut(e, saveSliceKey))
-  ) {
-    e.preventDefault();
-    if (!e.repeat) {
-      void state.saveActiveSlice();
-    }
-    return true;
-  }
-
-  const copyKey =
-    state.shortcuts.copyFilePath ?? DEFAULT_SHORTCUTS.copyFilePath ?? "";
-  if (
-    copyKey &&
-    (textEntryOnly
-      ? isSafeGlobalShortcutInTextEntry(e, copyKey)
-      : matchesShortcut(e, copyKey))
-  ) {
-    e.preventDefault();
-    if (
-      !e.repeat &&
-      (state.selectedSampleIds.length > 0 || state.selectedSample)
-    ) {
-      void state.copySamplePaths();
-    }
-    return true;
-  }
-
-  const revealKey =
-    state.shortcuts.showInFolder ?? DEFAULT_SHORTCUTS.showInFolder ?? "";
-  if (
-    revealKey &&
-    (textEntryOnly
-      ? isSafeGlobalShortcutInTextEntry(e, revealKey)
-      : matchesShortcut(e, revealKey))
-  ) {
-    e.preventDefault();
-    const targetSample =
-      state.selectedSample ??
-      (state.selectedSampleIds.length > 0
-        ? resolveSamplesByIds(
-            [state.selectedSampleIds[0]],
-            state.samples,
-            state.allProfileSamples
-          )[0] ?? null
-        : null);
-    if (!e.repeat && targetSample) {
-      void state.showInFolder(targetSample.file_path);
-    }
-    return true;
-  }
-
-  return false;
-}
-
-function handleTransportShortcuts(
-  e: KeyboardEvent,
-  state: AppStoreState,
-  textEntryOnly: boolean
-): boolean {
-  for (const entry of getTransportShortcuts(state)) {
-    const matched = textEntryOnly
-      ? isSafeGlobalShortcutInTextEntry(e, entry.shortcut)
-      : matchesShortcut(e, entry.shortcut);
-    if (!matched) continue;
-    e.preventDefault();
-    if (entry.allowRepeat || !e.repeat) {
-      entry.run(state);
-    }
-    return true;
-  }
-  return false;
-}
-
-function handleUndoRedoShortcut(e: KeyboardEvent, state: AppStoreState): boolean {
-  if (!(e.ctrlKey || e.metaKey) || e.altKey) return false;
-  const k = e.key.toLowerCase();
-  const isUndo = !e.shiftKey && k === "z";
-  const isRedo = (!e.shiftKey && k === "y") || (e.shiftKey && k === "z");
-  if (!isUndo && !isRedo) return false;
-
-  const inLayersEditor =
-    state.layersFilterActive &&
-    state.layersWorkspaceTab === "editor" &&
-    !state.slicesFilterActive &&
-    !(state.favoriteOnly && state.favoritesViewTab === "layers") &&
-    !(state.trashFilterActive && state.trashViewTab === "layers");
-
-  if (inLayersEditor) {
-    e.preventDefault();
-    if (!e.repeat) (isUndo ? state.undoLayerDraft : state.redoLayerDraft)();
-    return true;
-  }
-  if (!state.enableAdvancedFileOps) return false;
-  e.preventDefault();
-  if (!e.repeat) void (isUndo ? state.undoLastFileOp : state.redoLastFileOp)();
-  return true;
-}
-
-function handleCollectionOrTrashDelete(
-  e: KeyboardEvent,
-  state: AppStoreState
-): boolean {
-  const {
-    shortcuts,
-    selectedCollectionId,
-    selectedSampleIds,
-    selectedSample,
-  } = state;
-
-  const removeKey =
-    shortcuts.removeFromCollection ?? DEFAULT_SHORTCUTS.removeFromCollection;
-  const isDefaultRemove = removeKey === DEFAULT_SHORTCUTS.removeFromCollection;
-  const matchedRemoveFromCollection =
-    removeKey !== "" &&
-    (isDefaultRemove
-      ? !e.ctrlKey &&
-        !e.metaKey &&
-        !e.altKey &&
-        !e.shiftKey &&
-        (e.key === "Delete" || e.key === "Backspace")
-      : matchesShortcut(e, removeKey));
-
-  if (selectedCollectionId !== null && matchedRemoveFromCollection) {
-    const activeCol = state.collections.find((c) => c.id === selectedCollectionId);
-    if (activeCol?.smart_query?.trim()) {
-      e.preventDefault();
-      if (!e.repeat) {
-        state.setStatusMessage(
-          "Smart Collections are dynamic — switch to All Samples to trash files"
-        );
-      }
-      return true;
-    }
-    const idsToRemove =
-      selectedSampleIds.length > 0
-        ? selectedSampleIds
-        : selectedSample
-        ? [selectedSample.id]
-        : [];
-    if (idsToRemove.length > 0) {
-      e.preventDefault();
-      if (!e.repeat) {
-        void state.removeSamplesFromCollection(
-          selectedCollectionId,
-          idsToRemove
-        );
-      }
-    }
-    return true;
-  }
-
-  if (
-    state.binFilterActive &&
-    !e.ctrlKey &&
-    !e.metaKey &&
-    !e.altKey &&
-    !e.shiftKey &&
-    (e.key === "Delete" || e.key === "Backspace")
-  ) {
-    const idsToRemove =
-      selectedSampleIds.length > 0
-        ? selectedSampleIds
-        : selectedSample
-        ? [selectedSample.id]
-        : [];
-    if (idsToRemove.length > 0) {
-      e.preventDefault();
-      if (!e.repeat) {
-        state.removeSamplesFromBin(idsToRemove);
-      }
-    }
-    return true;
-  }
-
-  if (
-    selectedCollectionId === null &&
-    !state.trashFilterActive &&
-    !state.binFilterActive &&
-    state.enableAdvancedFileOps &&
-    !e.ctrlKey &&
-    !e.metaKey &&
-    !e.altKey &&
-    !e.shiftKey &&
-    e.key === "Delete"
-  ) {
-    const idsToTrash =
-      selectedSampleIds.length > 0
-        ? selectedSampleIds
-        : selectedSample
-        ? [selectedSample.id]
-        : [];
-    if (idsToTrash.length > 0) {
-      e.preventDefault();
-      if (!e.repeat) {
-        void state.requestMoveSamplesToTrash(idsToTrash);
-      }
-    }
-    return true;
-  }
-
-  return false;
-}
 
 /**
  * Registers Audify's global keyboard shortcuts for settings, Mini Dock,
@@ -384,15 +141,19 @@ export function useAppGlobalShortcuts(): void {
         return;
       }
 
-      const showingSlicesTable =
-        state.slicesFilterActive ||
-        (state.trashFilterActive && state.trashViewTab === "slices");
+      const showingSlicesTable = isSliceTableViewActive(state);
+      const showingLayersTable = isLayersSavedViewActive(state);
+      const showingAltTable = isNonSampleTableViewActive(state);
 
       if (
         (e.ctrlKey || e.metaKey) &&
         !e.shiftKey &&
         e.key.toLowerCase() === "a"
       ) {
+        if (showingLayersTable) {
+          // Handled directly by SavedLayersTableView's grid keydown (do not leak onto background tracks)
+          return;
+        }
         e.preventDefault();
         if (!e.repeat) {
           if (showingSlicesTable) {
@@ -426,7 +187,14 @@ export function useAppGlobalShortcuts(): void {
           state.setStatusMessage("Cleared multi-slice selection");
           return;
         }
-        if (!showingSlicesTable && state.selectedSampleIds.length > 1) {
+        if (showingLayersTable && state.selectedLayerIds.length > 1) {
+          e.preventDefault();
+          const keep = state.selectedLayerIds[0];
+          state.setLayerSelection(keep !== undefined ? [keep] : [], keep ?? null);
+          state.setStatusMessage("Cleared multi-layer selection");
+          return;
+        }
+        if (!showingAltTable && state.selectedSampleIds.length > 1) {
           e.preventDefault();
           state.clearMultiSelection();
           return;
@@ -462,6 +230,7 @@ export function useAppGlobalShortcuts(): void {
       if (
         !isRangeSlider &&
         !hasOpenFloatingMenu &&
+        !showingAltTable &&
         e.key === "ArrowDown" &&
         !e.ctrlKey &&
         !e.metaKey &&
@@ -475,6 +244,7 @@ export function useAppGlobalShortcuts(): void {
       if (
         !isRangeSlider &&
         !hasOpenFloatingMenu &&
+        !showingAltTable &&
         e.key === "ArrowUp" &&
         !e.ctrlKey &&
         !e.metaKey &&
@@ -516,7 +286,7 @@ export function useAppGlobalShortcuts(): void {
         }
         return;
       }
-      if (matchesShortcut(e, shortcuts.toggleFavorite)) {
+      if (!showingAltTable && matchesShortcut(e, shortcuts.toggleFavorite)) {
         e.preventDefault();
         if (!e.repeat) handleToggleFavoriteShortcut(state);
         return;
@@ -528,14 +298,14 @@ export function useAppGlobalShortcuts(): void {
       if (handleF2RenameShortcut(e, state)) {
         return;
       }
-      if (handleCollectionOrTrashDelete(e, state)) {
+      if (!showingAltTable && handleCollectionOrTrashDelete(e, state)) {
         return;
       }
 
       if (
         !e.repeat &&
         matchesShortcut(e, state.shortcuts.findSimilar ?? "Shift+Enter") &&
-        !state.slicesFilterActive &&
+        !showingAltTable &&
         !state.trashFilterActive &&
         state.selectedSample &&
         state.selectedSample.id > 0 &&
@@ -547,7 +317,7 @@ export function useAppGlobalShortcuts(): void {
       }
 
       if (matchesShortcut(e, shortcuts.addToBin)) {
-        if (!showingSlicesTable && !state.trashFilterActive) {
+        if (!showingAltTable && !state.trashFilterActive) {
           const ids = (
             selectedSampleIds.length > 0
               ? selectedSampleIds

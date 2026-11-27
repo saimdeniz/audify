@@ -42,7 +42,6 @@ pub const ALLOWED_PROFILE_SETTINGS_KEYS: &[&str] = &[
     "customSliceExportPath",
     "customLayerExportPath",
     "autoSaveLayerOnNleDrag",
-    "layerTopDeckView",
     "playheadLatencyMs",
     "smartSearchSynonyms",
     "autoBinOnNleDrag",
@@ -503,4 +502,31 @@ pub fn validate_safe_audio_stem(raw_stem: &str) -> Result<String, String> {
     }
 
     Ok(trimmed.to_string())
+}
+
+/// Truncates a filename stem so that `stem.encode_utf16().count() + reserved_utf16_units <= 255`
+/// (Windows NTFS `MAX_COMPONENT` limit), preserving full UTF-8 character boundaries and trimming
+/// trailing spaces/periods that Windows shells reject.
+pub fn truncate_filename_stem_utf16(stem: &str, reserved_utf16_units: usize) -> String {
+    const NTFS_MAX_COMPONENT_UTF16: usize = 255;
+    let budget = NTFS_MAX_COMPONENT_UTF16.saturating_sub(reserved_utf16_units);
+    if budget == 0 {
+        return "a".to_string();
+    }
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in stem.chars() {
+        let units = ch.len_utf16();
+        if used + units > budget {
+            break;
+        }
+        out.push(ch);
+        used += units;
+    }
+    let cleaned = out.trim_end_matches([' ', '.']).trim();
+    if cleaned.is_empty() || is_dos_device_name(cleaned) {
+        "Audio".to_string()
+    } else {
+        cleaned.to_string()
+    }
 }

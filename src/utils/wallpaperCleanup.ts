@@ -4,8 +4,6 @@ import {
   clearAllAutoAccentCaches,
   evictAsciiMagicAutoAccentCache,
 } from "./autoAccentCache";
-import { clearWallpaperMediaCaches } from "./thumbnailCache";
-import { clearBlurredWallpaperCache } from "./wallpaperBlurCache";
 import { runWallpaperCacheCleaner } from "./wallpaperCacheRegistry";
 
 /**
@@ -21,8 +19,8 @@ export function releaseBackdropTransitionCaches(
     clearAsciiMagicPreviewSnapshots();
     evictAsciiMagicAutoAccentCache();
     clearAllAutoAccentCaches();
-    clearWallpaperMediaCaches("all");
-    clearBlurredWallpaperCache();
+    runWallpaperCacheCleaner("wallpaper_media_all");
+    runWallpaperCacheCleaner("wallpaper_blur");
     runWallpaperCacheCleaner("ascii_preset_grid");
     queueMicrotask(() => {
       runWallpaperCacheCleaner("ascii_magic_sandbox");
@@ -40,8 +38,8 @@ export function releaseBackdropTransitionCaches(
   }
 
   if (prevKind === "image" && nextKind !== "image") {
-    clearWallpaperMediaCaches("viewport");
-    clearBlurredWallpaperCache();
+    runWallpaperCacheCleaner("wallpaper_media_viewport");
+    runWallpaperCacheCleaner("wallpaper_blur");
   }
 
   if (prevKind === "ascii_preset" && nextKind !== "ascii_preset") {
@@ -56,8 +54,8 @@ export function releaseSettingsWindowCaches(): void {
   runWallpaperCacheCleaner("ascii_magic_render");
   clearAsciiMagicPreviewSnapshots();
   clearAllAutoAccentCaches();
-  clearWallpaperMediaCaches("all");
-  clearBlurredWallpaperCache();
+  runWallpaperCacheCleaner("wallpaper_media_all");
+  runWallpaperCacheCleaner("wallpaper_blur");
   runWallpaperCacheCleaner("ascii_preset_grid");
   runWallpaperCacheCleaner("ascii_magic_sandbox");
 }

@@ -1,7 +1,8 @@
-use super::ensure_manual_tag_on_sample;
+use super::{ensure_manual_tag_on_sample, ensure_manual_tag_on_sample_batched};
 use super::types::AiTagSuggestionItem;
 use crate::security::sanitize_err;
 use rusqlite::{params, Connection};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 const MAX_SUGGESTIONS_FETCH: usize = 5_000;
@@ -227,16 +228,33 @@ pub fn approve_all_ai_tag_suggestions_in_db(
         .map_err(|e| sanitize_err(user_dir, &e.to_string()))?;
 
     let mut approved_count = 0usize;
-    for (sample_id, tag_name) in &pending {
-        ensure_manual_tag_on_sample(&tx, *sample_id, tag_name)?;
-        tx.execute(
-            "UPDATE ai_tag_suggestions
-             SET status = 'approved'
-             WHERE sample_id = ?1 AND LOWER(tag_name) = LOWER(?2)",
-            params![sample_id, tag_name],
-        )
-        .map_err(|e| sanitize_err(user_dir, &e.to_string()))?;
-        approved_count += 1;
+    let mut tag_cache: HashMap<String, (i64, bool)> = HashMap::new();
+    let mut genre_dirty_sample_ids: HashSet<i64> = HashSet::new();
+    {
+        let mut update_stmt = tx
+            .prepare_cached(
+                "UPDATE ai_tag_suggestions
+                 SET status = 'approved'
+                 WHERE sample_id = ?1 AND LOWER(tag_name) = LOWER(?2)",
+            )
+            .map_err(|e| sanitize_err(user_dir, &e.to_string()))?;
+
+        for (sample_id, tag_name) in &pending {
+            let is_genre =
+                ensure_manual_tag_on_sample_batched(&tx, *sample_id, tag_name, &mut tag_cache)?;
+            if is_genre {
+                genre_dirty_sample_ids.insert(*sample_id);
+            }
+            update_stmt
+                .execute(params![sample_id, tag_name])
+                .map_err(|e| sanitize_err(user_dir, &e.to_string()))?;
+            approved_count += 1;
+        }
+    }
+
+    if !genre_dirty_sample_ids.is_empty() {
+        let dirty_vec: Vec<i64> = genre_dirty_sample_ids.into_iter().collect();
+        let _ = crate::db::sync_primary_genre_for_samples(&tx, &dirty_vec);
     }
 
     tx.commit()
@@ -261,16 +279,20 @@ pub fn dismiss_all_ai_tag_suggestions_in_db(
         .map_err(|e| sanitize_err(user_dir, &e.to_string()))?;
 
     let mut dismissed_count = 0usize;
-    for (sample_id, tag_name) in &pending {
-        let changed = tx
-            .execute(
+    {
+        let mut dismiss_stmt = tx
+            .prepare_cached(
                 "UPDATE ai_tag_suggestions
                  SET status = 'dismissed'
                  WHERE sample_id = ?1 AND LOWER(tag_name) = LOWER(?2) AND status = 'pending'",
-                params![sample_id, tag_name],
             )
             .map_err(|e| sanitize_err(user_dir, &e.to_string()))?;
-        dismissed_count += changed;
+        for (sample_id, tag_name) in &pending {
+            let changed = dismiss_stmt
+                .execute(params![sample_id, tag_name])
+                .map_err(|e| sanitize_err(user_dir, &e.to_string()))?;
+            dismissed_count += changed;
+        }
     }
 
     tx.commit()

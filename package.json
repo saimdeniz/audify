@@ -10,9 +10,9 @@
     "tauri": "tauri",
     "build:exe": "tauri build --no-bundle && powershell -NoProfile -Command \"Copy-Item -Path 'src-tauri/target/release/audify.exe' -Destination 'Audify.exe' -Force\"",
     "build:installer": "tauri build",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit --noUnusedLocals --noUnusedParameters",
     "test": "vitest run",
-    "lint": "eslint src"
+    "lint": "eslint src --max-warnings=0"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.10.8",

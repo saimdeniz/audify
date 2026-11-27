@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Check, Copy, Shuffle } from "lucide-react";
 import { STUDIO_COLOR_PALETTE } from "../constants/palettes";
 import { Z_INDEX } from "../constants/zIndex";
+import { useDialogFocusTrap } from "../utils/modalFocus";
 import { generateRandomStudioHex } from "../utils/taxonomyColor";
 import {
   getHexLuminance,
@@ -46,6 +47,7 @@ export const ColorPickerPopover: React.FC<ColorPickerPopoverProps> = ({
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const satValRef = useRef<HTMLDivElement | null>(null);
   const hueRef = useRef<HTMLDivElement | null>(null);
+  useDialogFocusTrap(isOpen, popoverRef);
 
   useEffect(() => {
     const nextSafe = normalizeHex(color);
@@ -241,6 +243,49 @@ export const ColorPickerPopover: React.FC<ColorPickerPopoverProps> = ({
     updateHueFromPointer(e);
   };
 
+  const applyHsvUpdate = useCallback(
+    (nextHsv: { h: number; s: number; v: number }) => {
+      setHsv(nextHsv);
+      const newHex = hsvToRgb(nextHsv.h, nextHsv.s, nextHsv.v);
+      onChange(newHex);
+      setHexInput(newHex);
+    },
+    [onChange]
+  );
+
+  const handleSatValKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = e.shiftKey ? 0.1 : 0.02;
+    let nextS = hsv.s;
+    let nextV = hsv.v;
+    if (e.key === "ArrowLeft") nextS = Math.max(0, hsv.s - step);
+    else if (e.key === "ArrowRight") nextS = Math.min(1, hsv.s + step);
+    else if (e.key === "ArrowUp") nextV = Math.min(1, hsv.v + step);
+    else if (e.key === "ArrowDown") nextV = Math.max(0, hsv.v - step);
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+    applyHsvUpdate({ ...hsv, s: nextS, v: nextV });
+  };
+
+  const handleHueKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = e.shiftKey ? 0.05 : 0.01;
+    let nextH = hsv.h;
+    if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
+      nextH = Math.max(0, hsv.h - step);
+    } else if (e.key === "ArrowRight" || e.key === "ArrowUp") {
+      nextH = Math.min(0.9999, hsv.h + step);
+    } else if (e.key === "Home") {
+      nextH = 0;
+    } else if (e.key === "End") {
+      nextH = 0.9999;
+    } else {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    applyHsvUpdate({ ...hsv, h: nextH });
+  };
+
   const sizeClasses =
     triggerSize === "xs"
       ? "w-[20px] h-[20px]"
@@ -263,6 +308,9 @@ export const ColorPickerPopover: React.FC<ColorPickerPopoverProps> = ({
       ) : (
         <button
           type="button"
+          aria-expanded={isOpen}
+          aria-haspopup="dialog"
+          aria-label={title}
           onClick={handleToggleOpen}
           className={`${sizeClasses} rounded-xs border border-line hover:border-accent flex items-center justify-center p-0.5 transition-all shadow-xs shrink-0 cursor-pointer`}
           title={title}
@@ -279,6 +327,10 @@ export const ColorPickerPopover: React.FC<ColorPickerPopoverProps> = ({
         createPortal(
           <div
             ref={popoverRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label={title}
+            tabIndex={-1}
             style={{
               position: "fixed",
               top: `${popoverPos.top}px`,
@@ -294,9 +346,15 @@ export const ColorPickerPopover: React.FC<ColorPickerPopoverProps> = ({
           >
             {/* Header: Segmented Mode Selector & Theme-Safe Live Hex Pill */}
             <div className="flex items-center justify-between border-b border-line pb-1.5 h-[28px]">
-              <div className="flex items-center p-0.5 bg-surface-3 rounded-xs border border-line w-[144px]">
+              <div
+                role="tablist"
+                aria-label="Color picker mode"
+                className="flex items-center p-0.5 bg-surface-3 rounded-xs border border-line w-[144px]"
+              >
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={activeTab === "presets"}
                   onClick={() => setActiveTab("presets")}
                   className={`flex-1 h-[20px] rounded-2xs font-mono text-[9.5px] uppercase tracking-wider font-semibold transition-colors cursor-pointer text-center ${
                     activeTab === "presets"
@@ -308,6 +366,8 @@ export const ColorPickerPopover: React.FC<ColorPickerPopoverProps> = ({
                 </button>
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={activeTab === "custom"}
                   onClick={() => setActiveTab("custom")}
                   className={`flex-1 h-[20px] rounded-2xs font-mono text-[9.5px] uppercase tracking-wider font-semibold transition-colors cursor-pointer text-center ${
                     activeTab === "custom"
@@ -368,11 +428,19 @@ export const ColorPickerPopover: React.FC<ColorPickerPopoverProps> = ({
                 <div className="space-y-2">
                   <div
                     ref={satValRef}
+                    role="slider"
+                    tabIndex={0}
+                    aria-label="Color saturation and brightness"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(hsv.s * 100)}
+                    aria-valuetext={`Saturation ${Math.round(hsv.s * 100)}%, Brightness ${Math.round(hsv.v * 100)}%`}
+                    onKeyDown={handleSatValKeyDown}
                     onPointerDown={handleSatValDown}
                     onPointerMove={handleSatValMove}
                     className="h-[102px] w-full rounded-xs relative cursor-crosshair overflow-hidden border border-line-strong shadow-inner select-none touch-none"
                     style={{ backgroundColor: baseHueHex }}
-                    title="Click or drag to select saturation and brightness"
+                    title="Click, drag, or use arrow keys to select saturation and brightness"
                   >
                     <div
                       className="absolute inset-0 pointer-events-none"
@@ -400,6 +468,14 @@ export const ColorPickerPopover: React.FC<ColorPickerPopoverProps> = ({
 
                   <div
                     ref={hueRef}
+                    role="slider"
+                    tabIndex={0}
+                    aria-label="Color hue"
+                    aria-valuemin={0}
+                    aria-valuemax={360}
+                    aria-valuenow={Math.round(hsv.h * 360)}
+                    aria-valuetext={`${Math.round(hsv.h * 360)} degrees`}
+                    onKeyDown={handleHueKeyDown}
                     onPointerDown={handleHueDown}
                     onPointerMove={handleHueMove}
                     className="h-[14px] w-full rounded-full relative cursor-pointer border border-line-strong shadow-inner select-none touch-none"
@@ -407,7 +483,7 @@ export const ColorPickerPopover: React.FC<ColorPickerPopoverProps> = ({
                       background:
                         "linear-gradient(to right, #ff0000 0%, #ffff00 17%, #00ff00 33%, #00ffff 50%, #0000ff 67%, #ff00ff 83%, #ff0000 100%)",
                     }}
-                    title="Click or drag to choose hue spectrum"
+                    title="Click, drag, or use arrow keys to choose hue spectrum"
                   >
                     <div
                       className="absolute w-3.5 h-3.5 rounded-full bg-surface-0 border-2 border-fg shadow-md -translate-x-1/2 top-1/2 -translate-y-1/2 pointer-events-none ring-1 ring-line-strong"

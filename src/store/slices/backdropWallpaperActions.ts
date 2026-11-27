@@ -11,12 +11,6 @@ import {
   getCachedAsciiMagicAutoAccentHex,
   getPresetAutoAccentHex,
 } from "../../utils/autoAccentCache";
-import {
-  evictThumbnailCache,
-  getWallpaperThumbnailUrl,
-  getWallpaperViewportUrl,
-} from "../../utils/thumbnailCache";
-import { evictBlurredWallpaperCache } from "../../utils/wallpaperBlurCache";
 import { releaseBackdropTransitionCaches } from "../../utils/wallpaperCleanup";
 import {
   ASCII_MAGIC_FIT_STORAGE_KEY,
@@ -106,8 +100,12 @@ export function createBackdropWallpaperActions(
     deleteCustomBgImage: async (filePath: string) => {
       try {
         await invoke("delete_custom_background", { filePath });
-        evictThumbnailCache(filePath);
-        evictBlurredWallpaperCache(filePath);
+        const [thumbMod, blurMod] = await Promise.all([
+          import("../../utils/thumbnailCache"),
+          import("../../utils/wallpaperBlurCache"),
+        ]);
+        thumbMod.evictThumbnailCache(filePath);
+        blurMod.evictBlurredWallpaperCache(filePath);
         evictAutoAccentCache(filePath);
         if (get().customBgImage === filePath) {
           get().setCustomBgImage("");
@@ -149,6 +147,7 @@ export function createBackdropWallpaperActions(
         );
         if (validPaths.length === 0) return;
 
+        const thumbMod = await import("../../utils/thumbnailCache");
         let lastImported = "";
         for (const srcPath of validPaths) {
           const importedPath = await invoke<string>(
@@ -156,11 +155,11 @@ export function createBackdropWallpaperActions(
             { sourcePath: srcPath }
           );
           lastImported = importedPath;
-          void getWallpaperThumbnailUrl(importedPath);
+          void thumbMod.getWallpaperThumbnailUrl(importedPath);
         }
 
         if (lastImported) {
-          void getWallpaperViewportUrl(lastImported);
+          void thumbMod.getWallpaperViewportUrl(lastImported);
           get().setCustomBgImage(lastImported);
         }
         await get().loadCustomBgGallery();

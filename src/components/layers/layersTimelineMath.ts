@@ -133,7 +133,8 @@ export function hitTestTimelineClip(
   y: number,
   scrollLeftPx: number,
   pxPerSec: number,
-  laneHeight = DEFAULT_LANE_HEIGHT
+  laneHeight = DEFAULT_LANE_HEIGHT,
+  selectedClipIds?: ReadonlySet<string>
 ): TimelineClipHit | null {
   if (y < 0 || laneHeight <= 0) return null;
   const laneIndex = Math.floor(y / laneHeight);
@@ -142,27 +143,46 @@ export function hitTestTimelineClip(
   const localY = y - laneIndex * laneHeight;
   const absX = x + scrollLeftPx;
 
-  for (let i = recipe.clips.length - 1; i >= 0; i--) {
-    const clip = recipe.clips[i];
-    if (clip.laneId !== lane.id) continue;
+  const checkClip = (clip: LayerClipSpec): TimelineClipHit | null => {
+    if (clip.laneId !== lane.id) return null;
     const dur = getClipRenderedDurationSec(clip);
     const leftPx = clip.startSec * pxPerSec;
     const widthPx = Math.max(8, dur * pxPerSec);
     const rightPx = leftPx + widthPx;
 
-    if (absX < leftPx - 4 || absX > rightPx + 4) continue;
+    if (absX < leftPx - 4 || absX > rightPx + 4) return null;
 
     const fadeInHandleX =
       leftPx + Math.min(widthPx * 0.5, clip.fadeInSec * pxPerSec);
     const fadeOutHandleX =
       rightPx - Math.min(widthPx * 0.5, clip.fadeOutSec * pxPerSec);
-    if (localY <= Math.min(18, laneHeight * 0.45)) {
-      if (Math.abs(absX - fadeInHandleX) <= 8) {
+    const activeFadeHitBand = Math.min(16, laneHeight * 0.4);
+    const zeroFadeCornerBand = Math.min(9, laneHeight * 0.25);
+    const hasFadeIn = clip.fadeInSec > 0.001;
+    const hasFadeOut = clip.fadeOutSec > 0.001;
+
+    if (hasFadeIn) {
+      if (localY <= activeFadeHitBand && Math.abs(absX - fadeInHandleX) <= 8) {
         return { clip, laneIndex, zone: "fade-in" };
       }
-      if (Math.abs(absX - fadeOutHandleX) <= 8) {
+    } else if (
+      localY <= zeroFadeCornerBand &&
+      absX >= leftPx &&
+      absX <= leftPx + 7
+    ) {
+      return { clip, laneIndex, zone: "fade-in" };
+    }
+
+    if (hasFadeOut) {
+      if (localY <= activeFadeHitBand && Math.abs(absX - fadeOutHandleX) <= 8) {
         return { clip, laneIndex, zone: "fade-out" };
       }
+    } else if (
+      localY <= zeroFadeCornerBand &&
+      absX <= rightPx &&
+      absX >= rightPx - 7
+    ) {
+      return { clip, laneIndex, zone: "fade-out" };
     }
 
     const edgeGrab = Math.min(8, widthPx * 0.25);
@@ -173,6 +193,22 @@ export function hitTestTimelineClip(
       return { clip, laneIndex, zone: "trim-right" };
     }
     return { clip, laneIndex, zone: "body" };
+  };
+
+  // Match renderer Z-order: selected clips draw on top and win hit-tests first.
+  if (selectedClipIds && selectedClipIds.size > 0) {
+    for (let i = recipe.clips.length - 1; i >= 0; i--) {
+      const clip = recipe.clips[i];
+      if (!selectedClipIds.has(clip.id)) continue;
+      const hit = checkClip(clip);
+      if (hit) return hit;
+    }
+  }
+  for (let i = recipe.clips.length - 1; i >= 0; i--) {
+    const clip = recipe.clips[i];
+    if (selectedClipIds?.has(clip.id)) continue;
+    const hit = checkClip(clip);
+    if (hit) return hit;
   }
   return null;
 }
@@ -207,13 +243,13 @@ export function splitClipAtTimelineSec(
     ? {
         ...clip,
         trimStartSec: Math.max(clip.trimStartSec, splitSourceSec),
-        fadeInSec: Math.min(clip.fadeInSec, offsetRendered),
+        fadeInSec: Math.min(clip.fadeInSec, offsetRendered * 0.5),
         fadeOutSec: 0,
       }
     : {
         ...clip,
         trimEndSec: Math.min(clip.trimEndSec, splitSourceSec),
-        fadeInSec: Math.min(clip.fadeInSec, offsetRendered),
+        fadeInSec: Math.min(clip.fadeInSec, offsetRendered * 0.5),
         fadeOutSec: 0,
       };
 
@@ -226,7 +262,7 @@ export function splitClipAtTimelineSec(
         startSec: splitSec,
         trimEndSec: Math.min(clip.trimEndSec, splitSourceSec),
         fadeInSec: 0,
-        fadeOutSec: Math.min(clip.fadeOutSec, rightDur),
+        fadeOutSec: Math.min(clip.fadeOutSec, rightDur * 0.5),
       }
     : {
         ...clip,
@@ -234,7 +270,7 @@ export function splitClipAtTimelineSec(
         startSec: splitSec,
         trimStartSec: Math.max(clip.trimStartSec, splitSourceSec),
         fadeInSec: 0,
-        fadeOutSec: Math.min(clip.fadeOutSec, rightDur),
+        fadeOutSec: Math.min(clip.fadeOutSec, rightDur * 0.5),
       };
 
   const nextClips = [...recipe.clips];
@@ -248,30 +284,44 @@ export function splitClipAtTimelineSec(
 /** Trims the left edge of a clip non-destructively while shifting `startSec` smoothly. */
 export function applyLeftTrim(
   clip: LayerClipSpec,
-  deltaRenderedSec: number
+  deltaRenderedSec: number,
+  maxSourceDurationSec?: number
 ): LayerClipSpec {
   const speed = getClipPitchFactor(clip);
   const renderedDur = getClipRenderedDurationSec(clip);
   const maxAdvance = renderedDur - MIN_CLIP_DURATION_SEC;
-  const minRetreat = -Math.min(
-    clip.startSec,
-    clip.reversed ? 0 : clip.trimStartSec / speed
-  );
+  const resolvedSourceDur =
+    maxSourceDurationSec && maxSourceDurationSec > 0
+      ? maxSourceDurationSec
+      : clip.sourceDurationSec && clip.sourceDurationSec > 0
+      ? clip.sourceDurationSec
+      : undefined;
+  const maxRetreatSource = clip.reversed
+    ? resolvedSourceDur !== undefined
+      ? Math.max(0, resolvedSourceDur - clip.trimEndSec)
+      : 0
+    : clip.trimStartSec;
+  const minRetreat = -Math.min(clip.startSec, maxRetreatSource / speed);
   const clampedDelta = Math.max(minRetreat, Math.min(maxAdvance, deltaRenderedSec));
   const nextStart = Math.max(0, clip.startSec + clampedDelta);
   const nextRendered = Math.max(MIN_CLIP_DURATION_SEC, renderedDur - clampedDelta);
+  const maxFade = nextRendered * 0.5;
 
   if (clip.reversed) {
-    const nextTrimEnd = Math.max(
-      clip.trimStartSec + MIN_CLIP_DURATION_SEC * speed,
-      clip.trimEndSec - clampedDelta * speed
+    const upperEnd = resolvedSourceDur ?? Number.POSITIVE_INFINITY;
+    const nextTrimEnd = Math.min(
+      upperEnd,
+      Math.max(
+        clip.trimStartSec + MIN_CLIP_DURATION_SEC * speed,
+        clip.trimEndSec - clampedDelta * speed
+      )
     );
     return {
       ...clip,
       startSec: nextStart,
       trimEndSec: nextTrimEnd,
-      fadeInSec: Math.min(clip.fadeInSec, nextRendered),
-      fadeOutSec: Math.min(clip.fadeOutSec, nextRendered),
+      fadeInSec: Math.min(clip.fadeInSec, maxFade),
+      fadeOutSec: Math.min(clip.fadeOutSec, maxFade),
     };
   }
 
@@ -286,8 +336,8 @@ export function applyLeftTrim(
     ...clip,
     startSec: nextStart,
     trimStartSec: nextTrimStart,
-    fadeInSec: Math.min(clip.fadeInSec, nextRendered),
-    fadeOutSec: Math.min(clip.fadeOutSec, nextRendered),
+    fadeInSec: Math.min(clip.fadeInSec, maxFade),
+    fadeOutSec: Math.min(clip.fadeOutSec, maxFade),
   };
 }
 
@@ -299,10 +349,13 @@ export function applyRightTrim(
 ): LayerClipSpec {
   const speed = getClipPitchFactor(clip);
   const minSourceSpan = MIN_CLIP_DURATION_SEC * speed;
-  const maxSourceEnd =
+  const resolvedSourceDur =
     maxSourceDurationSec && maxSourceDurationSec > 0
       ? maxSourceDurationSec
-      : Number.POSITIVE_INFINITY;
+      : clip.sourceDurationSec && clip.sourceDurationSec > 0
+      ? clip.sourceDurationSec
+      : undefined;
+  const maxSourceEnd = resolvedSourceDur ?? Number.POSITIVE_INFINITY;
 
   if (clip.reversed) {
     const nextTrimStart = Math.max(
@@ -316,11 +369,12 @@ export function applyRightTrim(
       MIN_CLIP_DURATION_SEC,
       (clip.trimEndSec - nextTrimStart) / speed
     );
+    const maxFade = nextRendered * 0.5;
     return {
       ...clip,
       trimStartSec: nextTrimStart,
-      fadeInSec: Math.min(clip.fadeInSec, nextRendered),
-      fadeOutSec: Math.min(clip.fadeOutSec, nextRendered),
+      fadeInSec: Math.min(clip.fadeInSec, maxFade),
+      fadeOutSec: Math.min(clip.fadeOutSec, maxFade),
     };
   }
 
@@ -332,17 +386,11 @@ export function applyRightTrim(
     MIN_CLIP_DURATION_SEC,
     (nextTrimEnd - clip.trimStartSec) / speed
   );
+  const maxFade = nextRendered * 0.5;
   return {
     ...clip,
     trimEndSec: nextTrimEnd,
-    fadeInSec: Math.min(clip.fadeInSec, nextRendered),
-    fadeOutSec: Math.min(clip.fadeOutSec, nextRendered),
+    fadeInSec: Math.min(clip.fadeInSec, maxFade),
+    fadeOutSec: Math.min(clip.fadeOutSec, maxFade),
   };
 }
-
-export {
-  computePlayheadCenteredScrollLeft,
-  getClipsInMarqueeRect,
-  getShiftClickRangeClipIds,
-  resolveSameLaneOverlaps,
-} from "./layersTimelineEditOps";

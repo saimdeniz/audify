@@ -65,6 +65,8 @@ export const ShortcutsCheatsheetModal: React.FC<ShortcutsCheatsheetModalProps> =
         ["Find Similar Audio (AI)", fmt("findSimilar")],
         ["Rename / Batch Rename", "F2"],
         ["Undo / Redo File Op", "Ctrl + Z / Ctrl + Y"],
+        ["Layers: Split / Duplicate", "S / Ctrl + D"],
+        ["Layers: Delete / Undo", "Del / Ctrl + Z"],
         ["Exclude Tag / Mood Filter", "Alt + Click"],
         ["Copy Path / Reveal", `${fmt("copyFilePath")} / ${fmt("showInFolder")}`],
         ["Settings", "Ctrl + ,"],

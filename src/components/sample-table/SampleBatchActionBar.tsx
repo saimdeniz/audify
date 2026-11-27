@@ -108,7 +108,10 @@ export const SampleBatchActionBar: React.FC<SampleBatchActionBarProps> = ({
     const update = () => {
       const rect = getTrigger()?.getBoundingClientRect();
       if (!rect) return;
-      const width = batchPopover === "collection" ? 236 : 210;
+      const width = Math.min(
+        batchPopover === "collection" ? 236 : 264,
+        Math.max(180, window.innerWidth - 16)
+      );
       const left = Math.max(
         8,
         Math.min(rect.left, window.innerWidth - width - 8)
@@ -171,7 +174,7 @@ export const SampleBatchActionBar: React.FC<SampleBatchActionBarProps> = ({
       data-mica-overlay="true"
       onClick={(e) => e.stopPropagation()}
       style={{ zIndex: Z_INDEX.batchBar }}
-      className={`absolute left-1/2 -translate-x-1/2 w-max max-w-[96%] bg-surface-2 border border-accent/85 rounded-md flex items-center shadow-2xl whitespace-nowrap ${
+      className={`absolute left-1/2 -translate-x-1/2 w-max max-w-[calc(100%-16px)] overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden bg-surface-2 border border-accent/85 rounded-md flex items-center shadow-2xl whitespace-nowrap ${
         compact
           ? "bottom-2.5 px-2 py-1 gap-1"
           : "bottom-5 px-3 py-1.5 gap-2"

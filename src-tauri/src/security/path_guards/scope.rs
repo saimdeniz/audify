@@ -313,6 +313,17 @@ impl AuthorizedAudioScope {
             Err("Access denied: path is outside registered libraries and audio cache".to_string())
         }
     }
+
+    /// Validates an existing regular audio file within this pre-resolved scope (O(1) DB queries).
+    pub fn validate_audio_path(&self, raw: &str) -> Result<PathBuf, String> {
+        match self.validate_existing_audio_file(raw)? {
+            Some(p) => Ok(p),
+            None => Err(format!(
+                "Source audio file not found: {}",
+                display_leaf(Path::new(raw.trim()))
+            )),
+        }
+    }
 }
 
 /// Validates that `raw_path` is an existing regular file inside registered libraries or audio cache.

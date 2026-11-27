@@ -30,6 +30,7 @@ fn decode_mono_for_dsp(path: &Path, max_seconds: f64) -> Option<(Vec<f32>, u32, 
     if is_unc_or_network_path(&raw_str) || has_ntfs_ads_colon(&raw_str) {
         return None;
     }
+    crate::security::reject_symlink_ancestors(path).ok()?;
     let sym = fs::symlink_metadata(path).ok()?;
     if sym.file_type().is_symlink() || !sym.is_file() {
         return None;

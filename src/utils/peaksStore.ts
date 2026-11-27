@@ -65,6 +65,7 @@ async function flush() {
 }
 
 export function requestPeaks(id: number) {
+  if (!Number.isSafeInteger(id) || id <= 0) return;
   if (cache.has(id) || inflight.has(id) || pending.has(id)) return;
   pending.add(id);
   if (flushTimer === null) {
@@ -126,7 +127,7 @@ export function usePeaksJson(
   const clearEpoch = useSyncExternalStore(subscribePeaksCache, () => generation);
 
   useEffect(() => {
-    if (id != null && !inline && cached === undefined) {
+    if (id != null && id > 0 && !inline && cached === undefined) {
       requestPeaks(id);
     }
   }, [id, inline, cached, clearEpoch]);

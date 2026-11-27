@@ -167,13 +167,6 @@ export function syncCatalogWorkerTaxonomy(
   return cachedTaxonomyIndex;
 }
 
-export function getCachedTaxonomyWorkerIndex(
-  tags: readonly Tag[],
-  facets?: readonly TagFacet[]
-): TaxonomyWorkerIndex | null {
-  return syncCatalogWorkerTaxonomy(tags, facets);
-}
-
 export function clearCatalogWorkerSearchCache(): void {
   if (!workerInstance) return;
   const msg: CatalogWorkerRequest = { type: "clear_search_cache" };

@@ -82,6 +82,12 @@ pub(super) enum EngineCmd {
         req: LoadTrackRequest,
         reply: Option<mpsc::Sender<Result<AudioSyncPayload, String>>>,
     },
+    LoadDecoded {
+        load_seq: u64,
+        req: LoadTrackRequest,
+        result: Result<decoder::AudioSource, String>,
+        reply: Option<mpsc::Sender<Result<AudioSyncPayload, String>>>,
+    },
     LoadMemoryPcm {
         load_seq: u64,
         req: LoadMemoryPcmRequest,
@@ -125,13 +131,14 @@ impl AudioEngineState {
             return;
         }
         let (tx, rx) = mpsc::channel::<EngineCmd>();
+        let tx_loop = tx.clone();
         *guard = Some(tx);
         let latest_load_seq = Arc::clone(&self.latest_load_seq);
         let event_seq = Arc::clone(&self.event_seq);
         let _ = thread::Builder::new()
             .name("audify-audio-ctrl".to_string())
             .spawn(move || {
-                controller::run_audio_control_loop(app, rx, latest_load_seq, event_seq);
+                controller::run_audio_control_loop(app, rx, tx_loop, latest_load_seq, event_seq);
             });
     }
 
@@ -157,8 +164,25 @@ impl AudioEngineState {
             .map_err(|_| "Audio decode timed out".to_string())?
     }
 
-    pub fn load_memory_pcm(&self, req: LoadMemoryPcmRequest) -> Result<AudioSyncPayload, String> {
-        let load_seq = self.latest_load_seq.fetch_add(1, Ordering::AcqRel) + 1;
+    pub fn reserve_load_seq(&self) -> u64 {
+        self.latest_load_seq.fetch_add(1, Ordering::AcqRel) + 1
+    }
+
+    pub fn is_load_seq_stale(&self, seq: u64) -> bool {
+        seq < self.latest_load_seq.load(Ordering::Acquire)
+    }
+
+    pub fn load_memory_pcm_with_seq(
+        &self,
+        load_seq: u64,
+        req: LoadMemoryPcmRequest,
+    ) -> Result<AudioSyncPayload, String> {
+        if self.is_load_seq_stale(load_seq) {
+            return Ok(AudioSyncPayload {
+                event: "superseded".to_string(),
+                ..AudioSyncPayload::default()
+            });
+        }
         let (reply_tx, reply_rx) = mpsc::channel();
         self.send(EngineCmd::LoadMemoryPcm {
             load_seq,
@@ -168,6 +192,11 @@ impl AudioEngineState {
         reply_rx
             .recv_timeout(Duration::from_secs(10))
             .map_err(|_| "Layer memory audio load timed out".to_string())?
+    }
+
+    pub fn load_memory_pcm(&self, req: LoadMemoryPcmRequest) -> Result<AudioSyncPayload, String> {
+        let load_seq = self.reserve_load_seq();
+        self.load_memory_pcm_with_seq(load_seq, req)
     }
 
     pub fn play(&self) -> Result<(), String> {

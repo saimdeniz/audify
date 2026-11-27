@@ -1,7 +1,9 @@
-use super::decoder::{open_audio_source, AudioSource, DecodedTrack, NormGainAccumulator, TrackDecodeCache};
+use super::decoder::{
+    open_audio_source_uncached, AudioSource, DecodedTrack, NormGainAccumulator, TrackDecodeCache,
+};
 use super::dsp::PlaybackDsp;
 use super::output::{open_output_stream, CallbackSignals, OpenedOutputStream};
-use super::{AudioSyncPayload, EngineCmd, AUDIO_SYNC_EVENT};
+use super::{AudioSyncPayload, EngineCmd, LoadTrackRequest, AUDIO_SYNC_EVENT};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -100,6 +102,7 @@ impl ControllerCtx {
 pub(super) fn run_audio_control_loop(
     app: AppHandle,
     rx: mpsc::Receiver<EngineCmd>,
+    tx_self: mpsc::Sender<EngineCmd>,
     latest_load_seq: Arc<AtomicU64>,
     event_seq: Arc<AtomicU64>,
 ) {
@@ -135,9 +138,9 @@ pub(super) fn run_audio_control_loop(
         };
 
         if let Some(first_cmd) = cmd_opt {
-            handle_cmd(&mut ctx, first_cmd, &latest_load_seq);
+            handle_cmd(&mut ctx, first_cmd, &tx_self, &latest_load_seq);
             while let Ok(next_cmd) = rx.try_recv() {
-                handle_cmd(&mut ctx, next_cmd, &latest_load_seq);
+                handle_cmd(&mut ctx, next_cmd, &tx_self, &latest_load_seq);
             }
         }
 
@@ -197,7 +200,74 @@ pub(super) fn run_audio_control_loop(
     }
 }
 
-fn handle_cmd(ctx: &mut ControllerCtx, cmd: EngineCmd, latest_load_seq: &AtomicU64) {
+fn install_loaded_source(
+    ctx: &mut ControllerCtx,
+    req: LoadTrackRequest,
+    source: AudioSource,
+    reply: Option<mpsc::Sender<Result<AudioSyncPayload, String>>>,
+) {
+    let mut stream_err: Option<String> = None;
+    if req.autoplay {
+        if let Err(e) = ctx.ensure_stream() {
+            stream_err = Some(e);
+        }
+    }
+
+    let will_play = req.autoplay && stream_err.is_none();
+    let (prev_src, pending_seek) = if let Ok(mut g) = ctx.dsp.lock() {
+        g.set_params(
+            Some(req.volume),
+            Some(req.pitch_semitones),
+            Some(req.looping),
+            Some(req.normalize_preview),
+            Some(req.slice_range),
+        );
+        let old = g.clear_source();
+        let (s_start, s_end) = match req.slice_range {
+            Some((s, e)) if e > s => (Some(s), Some(e)),
+            _ => (None, None),
+        };
+        let effective_start_sec =
+            if req.skip_leading_silence && s_start.is_none() && req.start_sec <= 0.001 {
+                source.leading_silence_sec()
+            } else {
+                req.start_sec
+            };
+        let seek = g.load_source(source, will_play, effective_start_sec, s_start, s_end);
+        (old, seek)
+    } else {
+        (None, None)
+    };
+    if let Some((src, frame)) = pending_seek {
+        src.request_seek(frame);
+    }
+    if let Some(old) = prev_src {
+        old.release_file_handle();
+    }
+
+    ctx.active_display_path = req.display_path;
+    ctx.signals.ended.store(false, Ordering::Release);
+    ctx.signals.looped.store(false, Ordering::Release);
+    ctx.signals.became_paused.store(false, Ordering::Release);
+    ctx.last_active_audio = Instant::now();
+    ctx.last_heartbeat = Instant::now();
+
+    let payload = if let Some(err) = stream_err {
+        ctx.emit_sync("error", Some(err))
+    } else {
+        ctx.emit_sync(if will_play { "playing" } else { "loaded" }, None)
+    };
+    if let Some(r) = reply {
+        let _ = r.send(Ok(payload));
+    }
+}
+
+fn handle_cmd(
+    ctx: &mut ControllerCtx,
+    cmd: EngineCmd,
+    tx_self: &mpsc::Sender<EngineCmd>,
+    latest_load_seq: &Arc<AtomicU64>,
+) {
     match cmd {
         EngineCmd::Load {
             load_seq,
@@ -211,9 +281,54 @@ fn handle_cmd(ctx: &mut ControllerCtx, cmd: EngineCmd, latest_load_seq: &AtomicU
                 return;
             }
 
-            let open_res = open_audio_source(&req.canon_path, &mut ctx.decode_cache);
+            if let Some(cached_source) = ctx.decode_cache.try_get_cached(&req.canon_path) {
+                install_loaded_source(ctx, req, cached_source, reply);
+                return;
+            }
+
+            // Offload cold disk decode to blocking pool so Pause/Stop/ReleaseHandle never stall
+            let tx_done = tx_self.clone();
+            let seq_ref = Arc::clone(latest_load_seq);
+            tauri::async_runtime::spawn_blocking(move || {
+                if load_seq < seq_ref.load(Ordering::Acquire) {
+                    if let Some(r) = reply {
+                        let _ = r.send(Ok(AudioSyncPayload {
+                            event: "superseded".to_string(),
+                            ..AudioSyncPayload::default()
+                        }));
+                    }
+                    return;
+                }
+                let result = open_audio_source_uncached(&req.canon_path);
+                if load_seq < seq_ref.load(Ordering::Acquire) {
+                    if let Ok(src) = result {
+                        src.release_file_handle();
+                    }
+                    if let Some(r) = reply {
+                        let _ = r.send(Ok(AudioSyncPayload {
+                            event: "superseded".to_string(),
+                            ..AudioSyncPayload::default()
+                        }));
+                    }
+                    return;
+                }
+                let _ = tx_done.send(EngineCmd::LoadDecoded {
+                    load_seq,
+                    req,
+                    result,
+                    reply,
+                });
+            });
+        }
+
+        EngineCmd::LoadDecoded {
+            load_seq,
+            req,
+            result,
+            reply,
+        } => {
             if load_seq < latest_load_seq.load(Ordering::Acquire) {
-                if let Ok(src) = open_res {
+                if let Ok(src) = result {
                     src.release_file_handle();
                 }
                 if let Some(r) = reply {
@@ -221,66 +336,13 @@ fn handle_cmd(ctx: &mut ControllerCtx, cmd: EngineCmd, latest_load_seq: &AtomicU
                 }
                 return;
             }
-
-            match open_res {
+            match result {
                 Ok(source) => {
-                    let mut stream_err: Option<String> = None;
-                    if req.autoplay {
-                        if let Err(e) = ctx.ensure_stream() {
-                            stream_err = Some(e);
-                        }
+                    if let AudioSource::InMemory(ref decoded) = source {
+                        ctx.decode_cache
+                            .insert_decoded_for_path(&req.canon_path, Arc::clone(decoded));
                     }
-
-                    let will_play = req.autoplay && stream_err.is_none();
-                    let (prev_src, pending_seek) = if let Ok(mut g) = ctx.dsp.lock() {
-                        g.set_params(
-                            Some(req.volume),
-                            Some(req.pitch_semitones),
-                            Some(req.looping),
-                            Some(req.normalize_preview),
-                            Some(req.slice_range),
-                        );
-                        let old = g.clear_source();
-                        let (s_start, s_end) = match req.slice_range {
-                            Some((s, e)) if e > s => (Some(s), Some(e)),
-                            _ => (None, None),
-                        };
-                        let effective_start_sec = if req.skip_leading_silence
-                            && s_start.is_none()
-                            && req.start_sec <= 0.001
-                        {
-                            source.leading_silence_sec()
-                        } else {
-                            req.start_sec
-                        };
-                        let seek =
-                            g.load_source(source, will_play, effective_start_sec, s_start, s_end);
-                        (old, seek)
-                    } else {
-                        (None, None)
-                    };
-                    if let Some((src, frame)) = pending_seek {
-                        src.request_seek(frame);
-                    }
-                    if let Some(old) = prev_src {
-                        old.release_file_handle();
-                    }
-
-                    ctx.active_display_path = req.display_path;
-                    ctx.signals.ended.store(false, Ordering::Release);
-                    ctx.signals.looped.store(false, Ordering::Release);
-                    ctx.signals.became_paused.store(false, Ordering::Release);
-                    ctx.last_active_audio = Instant::now();
-                    ctx.last_heartbeat = Instant::now();
-
-                    let payload = if let Some(err) = stream_err {
-                        ctx.emit_sync("error", Some(err))
-                    } else {
-                        ctx.emit_sync(if will_play { "playing" } else { "loaded" }, None)
-                    };
-                    if let Some(r) = reply {
-                        let _ = r.send(Ok(payload));
-                    }
+                    install_loaded_source(ctx, req, source, reply);
                 }
                 Err(err) => {
                     if let Some(r) = reply {
@@ -387,12 +449,23 @@ fn handle_cmd(ctx: &mut ControllerCtx, cmd: EngineCmd, latest_load_seq: &AtomicU
         EngineCmd::Pause => {
             if let Ok(mut g) = ctx.dsp.lock() {
                 g.pause();
+                // If output stream is already parked, no audio callback will run to finish
+                // the fade-out ramp; force immediate pause so `is_idle_parked` stays true (0 Hz).
+                if ctx.stream.is_none() {
+                    g.force_pause_immediate();
+                }
             }
             ctx.emit_sync("paused", None);
         }
 
         EngineCmd::Stop => {
-            let pending_seek = ctx.dsp.lock().ok().and_then(|mut g| g.stop());
+            let pending_seek = ctx.dsp.lock().ok().and_then(|mut g| {
+                let seek = g.stop();
+                if ctx.stream.is_none() {
+                    g.force_pause_immediate();
+                }
+                seek
+            });
             if let Some((src, frame)) = pending_seek {
                 src.request_seek(frame);
             }

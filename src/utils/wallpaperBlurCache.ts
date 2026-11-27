@@ -1,6 +1,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { normalizePathForMatch } from "./pathHelpers";
 import { isGifWallpaperPath, isVideoWallpaperPath } from "./thumbnailCache";
+import { registerWallpaperCacheCleaner } from "./wallpaperCacheRegistry";
 
 const MAX_BLUR_CACHE_ENTRIES = 4;
 
@@ -246,6 +247,7 @@ export function evictBlurredWallpaperCache(filePath: string): void {
 
 export function clearBlurredWallpaperCache(): void {
   globalBlurEpoch += 1;
+  keyBlurEpochs.clear();
   for (const url of blurCache.values()) {
     if (url.startsWith("blob:")) {
       URL.revokeObjectURL(url);
@@ -254,3 +256,5 @@ export function clearBlurredWallpaperCache(): void {
   blurCache.clear();
   pendingBlurPromises.clear();
 }
+
+registerWallpaperCacheCleaner("wallpaper_blur", clearBlurredWallpaperCache);

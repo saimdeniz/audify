@@ -189,7 +189,7 @@ export const ContextMenuCollectionSubmenu: React.FC<
 
                     <span className="flex items-center space-x-1 shrink-0 ml-1">
                       {hasChildren && autoRouteCollectionDrops && (
-                        <span className="text-[8px] font-mono text-accent-fg px-1 bg-accent-soft rounded-xs border border-accent/20">
+                        <span className="text-[9.5px] font-mono text-accent-fg px-1 bg-accent-soft rounded-xs border border-accent/20">
                           Auto
                         </span>
                       )}

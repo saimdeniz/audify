@@ -1,14 +1,13 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { AUDIFY_STORAGE_KEYS } from "../../constants/storageKeys";
 import { Z_INDEX } from "../../constants/zIndex";
-import { getPlayheadSec } from "../../store/playheadClock";
+import { getLayerDraftPlayheadSec } from "../../store/playheadClock";
 import { safeSetItem } from "../../store/storageHelpers";
 import { useSampleStore } from "../../store/useSampleStore";
-import type { LayerClipSpec, SampleItem } from "../../types";
 import {
   createSequentialLane,
-  makeClipFromSample,
-  makeLayerClipId,
+  isLayerDraftPreviewPending,
+  isLayerDraftSample,
   MAX_LAYER_LANES,
 } from "../../utils/layerHelpers";
 import { safeGetItem } from "../../utils/localStorageSafe";
@@ -18,22 +17,19 @@ import {
   LayersTimelineCanvas,
   TimelineFollowMode,
 } from "./LayersTimelineCanvas";
+import { dispatchTimelineKeyDown } from "./layersTimelineDragHelpers";
 import {
   computeFitAllPxPerSec,
   DEFAULT_LANE_HEADER_WIDTH,
   DEFAULT_LANE_HEIGHT,
-  getClipPitchMode,
-  getClipRenderedDurationSec,
   MAX_LANE_HEADER_WIDTH,
   MAX_LANE_HEIGHT,
   MIN_LANE_HEADER_WIDTH,
   MIN_LANE_HEIGHT,
-  resolveSameLaneOverlaps,
-  snapTimeSec,
-  splitClipAtTimelineSec,
 } from "./layersTimelineMath";
 import { SavedLayersTableView } from "./SavedLayersTableView";
 import { SaveLayerModal } from "./SaveLayerModal";
+import { useLayersStudioActions } from "./useLayersStudioActions";
 
 function loadClampedInt(
   key: string,
@@ -108,10 +104,11 @@ export const LayersStudio: React.FC = () => {
   );
 
   const [pxPerSec, setPxPerSec] = useState(120);
-  const [snapEnabled, setSnapEnabled] = useState(true);
-  const [snapGridSec, setSnapGridSec] = useState(0.1);
   const [followMode, setFollowMode] = useState<TimelineFollowMode>("page");
   const [saveModalOpen, setSaveModalOpen] = useState(false);
+  const snapEnabled = layerDraftRecipe.snapEnabled ?? true;
+  const snapGridSec =
+    layerDraftRecipe.snapGridSec > 0 ? layerDraftRecipe.snapGridSec : 0.1;
   const [laneHeight, setLaneHeight] = useState(() =>
     loadClampedInt(
       AUDIFY_STORAGE_KEYS.layerLaneHeightV1,
@@ -129,6 +126,26 @@ export const LayersStudio: React.FC = () => {
     )
   );
   const viewportWidthRef = useRef(640);
+  const laneHeaderResizeCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => () => laneHeaderResizeCleanupRef.current?.(), []);
+
+  const handleToggleSnap = useCallback(() => {
+    updateLayerDraftRecipe(
+      { ...layerDraftRecipe, snapEnabled: !snapEnabled },
+      { pushUndo: false, autoRender: false }
+    );
+  }, [layerDraftRecipe, snapEnabled, updateLayerDraftRecipe]);
+
+  const handleChangeSnapGridSec = useCallback(
+    (nextGrid: number) => {
+      updateLayerDraftRecipe(
+        { ...layerDraftRecipe, snapGridSec: nextGrid },
+        { pushUndo: false, autoRender: false }
+      );
+    },
+    [layerDraftRecipe, updateLayerDraftRecipe]
+  );
 
   const handleChangeLaneHeight = useCallback((next: number) => {
     const clamped = Math.max(
@@ -145,6 +162,7 @@ export const LayersStudio: React.FC = () => {
     (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
+      laneHeaderResizeCleanupRef.current?.();
       const startX = e.clientX;
       const startW = laneHeaderWidth;
       let latest = startW;
@@ -156,13 +174,18 @@ export const LayersStudio: React.FC = () => {
         );
         setLaneHeaderWidth(latest);
       };
-      const onUp = () => {
+      const cleanup = () => {
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
         document.body.style.cursor = "";
         setIsResizingLaneHeader(false);
+        laneHeaderResizeCleanupRef.current = null;
+      };
+      const onUp = () => {
+        cleanup();
         safeSetItem(AUDIFY_STORAGE_KEYS.layerLaneHeaderWidthV1, String(latest));
       };
+      laneHeaderResizeCleanupRef.current = cleanup;
       document.body.style.cursor = "col-resize";
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
@@ -178,190 +201,73 @@ export const LayersStudio: React.FC = () => {
     [layerDraftRecipe]
   );
 
-  const primarySelectedClip = useMemo(() => {
-    if (layerDraftSelectedClipIds.length === 0) return null;
-    const firstId = layerDraftSelectedClipIds[0];
-    return layerDraftRecipe.clips.find((c) => c.id === firstId) ?? null;
-  }, [layerDraftRecipe.clips, layerDraftSelectedClipIds]);
-
-  const handleUpdatePrimaryClip = useCallback(
-    (patch: Partial<LayerClipSpec>) => {
-      if (layerDraftSelectedClipIds.length === 0) return;
-      const selSet = new Set(layerDraftSelectedClipIds);
-      const nextRaw = {
-        ...layerDraftRecipe,
-        clips: layerDraftRecipe.clips.map((c) =>
-          selSet.has(c.id) ? { ...c, ...patch } : c
-        ),
-      };
-      // If rendered duration may expand (Tape varispeed pitch or mode switch), enforce DaVinci overwrite cleanly
-      const lengthMayChange =
-        patch.pitchMode !== undefined ||
-        (patch.pitchSemitones !== undefined &&
-          nextRaw.clips.some(
-            (c) => selSet.has(c.id) && getClipPitchMode(c) === "varispeed"
-          ));
-      const nextRecipe = lengthMayChange
-        ? resolveSameLaneOverlaps(nextRaw, selSet, makeLayerClipId)
-        : nextRaw;
-      updateLayerDraftRecipe(nextRecipe);
-    },
-    [layerDraftRecipe, layerDraftSelectedClipIds, updateLayerDraftRecipe]
-  );
-
-  const handleSplitAtPlayhead = useCallback(() => {
-    const targetId = primarySelectedClip?.id;
-    if (!targetId) return;
-    const res = splitClipAtTimelineSec(
-      layerDraftRecipe,
-      targetId,
-      getPlayheadSec(),
-      makeLayerClipId
-    );
-    if (!res) return;
-    updateLayerDraftRecipe(res.recipe);
-    setLayerDraftSelectedClipIds([res.rightClipId]);
-  }, [
-    layerDraftRecipe,
+  const {
+    selectedClips,
     primarySelectedClip,
-    updateLayerDraftRecipe,
-    setLayerDraftSelectedClipIds,
-  ]);
-
-  const handleCopySelected = useCallback(() => {
-    if (layerDraftSelectedClipIds.length === 0) return;
-    const selSet = new Set(layerDraftSelectedClipIds);
-    const clips = layerDraftRecipe.clips.filter((c) => selSet.has(c.id));
-    if (clips.length > 0) setLayerDraftClipboardClips(clips);
-  }, [
-    layerDraftRecipe.clips,
-    layerDraftSelectedClipIds,
-    setLayerDraftClipboardClips,
-  ]);
-
-  const handlePasteAtPlayhead = useCallback(() => {
-    if (layerDraftClipboardClips.length === 0) return;
-    const minStart = Math.min(...layerDraftClipboardClips.map((c) => c.startSec));
-    const anchor = snapTimeSec(getPlayheadSec(), snapEnabled, snapGridSec);
-    const validLaneIds = new Set(layerDraftRecipe.lanes.map((l) => l.id));
-    const fallbackLaneId = layerDraftRecipe.lanes[0]?.id;
-    if (!fallbackLaneId) return;
-
-    const pasted: LayerClipSpec[] = layerDraftClipboardClips.map((c) => ({
-      ...c,
-      id: makeLayerClipId(),
-      laneId: validLaneIds.has(c.laneId) ? c.laneId : fallbackLaneId,
-      startSec: Math.max(0, anchor + (c.startSec - minStart)),
-    }));
-    const pastedIds = pasted.map((c) => c.id);
-    updateLayerDraftRecipe(
-      resolveSameLaneOverlaps(
-        {
-          ...layerDraftRecipe,
-          clips: [...layerDraftRecipe.clips, ...pasted],
-        },
-        new Set(pastedIds),
-        makeLayerClipId
-      )
-    );
-    setLayerDraftSelectedClipIds(pastedIds);
-  }, [
-    layerDraftClipboardClips,
+    handleUpdatePrimaryClip,
+    handleSplitAtPlayhead,
+    handleCopySelected,
+    handlePasteAtPlayhead,
+    handleDuplicateSelected,
+    handleDeleteSelected,
+    handleDropSamplesAt,
+  } = useLayersStudioActions({
     layerDraftRecipe,
+    layerDraftSelectedClipIds,
+    layerDraftClipboardClips,
     snapEnabled,
     snapGridSec,
     updateLayerDraftRecipe,
     setLayerDraftSelectedClipIds,
-  ]);
+    setLayerDraftClipboardClips,
+  });
 
-  const handleDuplicateSelected = useCallback(() => {
-    if (layerDraftSelectedClipIds.length === 0) return;
-    const selSet = new Set(layerDraftSelectedClipIds);
-    const sourceClips = layerDraftRecipe.clips.filter((c) => selSet.has(c.id));
-    if (sourceClips.length === 0) return;
-    const minStart = Math.min(...sourceClips.map((c) => c.startSec));
-    const maxEnd = Math.max(
-      ...sourceClips.map((c) => c.startSec + getClipRenderedDurationSec(c))
-    );
-    const shiftSec = Math.max(0.05, maxEnd - minStart);
-    const clones: LayerClipSpec[] = sourceClips.map((c) => ({
-      ...c,
-      id: makeLayerClipId(),
-      startSec: c.startSec + shiftSec,
-    }));
-    const cloneIds = clones.map((c) => c.id);
-    updateLayerDraftRecipe(
-      resolveSameLaneOverlaps(
-        {
-          ...layerDraftRecipe,
-          clips: [...layerDraftRecipe.clips, ...clones],
+  const handleStudioKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (saveModalOpen) return;
+      dispatchTimelineKeyDown(e, {
+        recipe: layerDraftRecipe,
+        viewportWidth: viewportWidthRef.current,
+        onFitAll: handleFitAll,
+        onSelectClips: setLayerDraftSelectedClipIds,
+        onCopySelected: handleCopySelected,
+        onPasteAtPlayhead: handlePasteAtPlayhead,
+        onDuplicateSelected: handleDuplicateSelected,
+        onSplitAtPlayhead: handleSplitAtPlayhead,
+        onDeleteSelected: handleDeleteSelected,
+        onUndo: undoLayerDraft,
+        onRedo: redoLayerDraft,
+        onPlayOrRenderDraft: () => {
+          const st = useSampleStore.getState();
+          if (
+            isLayerDraftSample(st.selectedSample) &&
+            !st.isRenderingLayerPreview &&
+            !isLayerDraftPreviewPending()
+          ) {
+            st.togglePlayPause();
+          } else {
+            void renderLayerDraftPreview({
+              autoplay: true,
+              startSec: getLayerDraftPlayheadSec(),
+            });
+          }
         },
-        new Set(cloneIds),
-        makeLayerClipId
-      )
-    );
-    setLayerDraftSelectedClipIds(cloneIds);
-  }, [
-    layerDraftRecipe,
-    layerDraftSelectedClipIds,
-    updateLayerDraftRecipe,
-    setLayerDraftSelectedClipIds,
-  ]);
-
-  const handleDeleteSelected = useCallback(() => {
-    if (layerDraftSelectedClipIds.length === 0) return;
-    const selSet = new Set(layerDraftSelectedClipIds);
-    updateLayerDraftRecipe({
-      ...layerDraftRecipe,
-      clips: layerDraftRecipe.clips.filter((c) => !selSet.has(c.id)),
-    });
-    setLayerDraftSelectedClipIds([]);
-  }, [
-    layerDraftRecipe,
-    layerDraftSelectedClipIds,
-    updateLayerDraftRecipe,
-    setLayerDraftSelectedClipIds,
-  ]);
-
-  const handleDropSamplesAt = useCallback(
-    (
-      droppedSamples: SampleItem[],
-      laneIndex: number,
-      isNewLane: boolean,
-      startSec: number
-    ) => {
-      const valid = droppedSamples.filter((s) => Boolean(s?.file_path?.trim()));
-      if (valid.length === 0) return;
-      const nextLanes = [...layerDraftRecipe.lanes];
-      const nextClips = [...layerDraftRecipe.clips];
-      const addedIds: string[] = [];
-
-      valid.forEach((sample, idx) => {
-        const targetIdx = isNewLane ? nextLanes.length : laneIndex + idx;
-        while (targetIdx >= nextLanes.length && nextLanes.length < MAX_LAYER_LANES) {
-          nextLanes.push(createSequentialLane(nextLanes));
-        }
-        const lane = nextLanes[Math.min(targetIdx, nextLanes.length - 1)];
-        if (!lane) return;
-        const clip = makeClipFromSample(sample, lane.id, Math.max(0, startSec));
-        addedIds.push(clip.id);
-        nextClips.push(clip);
       });
-
-      updateLayerDraftRecipe(
-        resolveSameLaneOverlaps(
-          {
-            ...layerDraftRecipe,
-            lanes: nextLanes,
-            clips: nextClips,
-          },
-          new Set(addedIds),
-          makeLayerClipId
-        )
-      );
-      if (addedIds.length > 0) setLayerDraftSelectedClipIds(addedIds);
     },
-    [layerDraftRecipe, updateLayerDraftRecipe, setLayerDraftSelectedClipIds]
+    [
+      saveModalOpen,
+      layerDraftRecipe,
+      handleFitAll,
+      setLayerDraftSelectedClipIds,
+      handleCopySelected,
+      handlePasteAtPlayhead,
+      handleDuplicateSelected,
+      handleSplitAtPlayhead,
+      handleDeleteSelected,
+      undoLayerDraft,
+      redoLayerDraft,
+      renderLayerDraftPreview,
+    ]
   );
 
   // Unified Trash, Favorites, and Saved views render SavedLayersTableView directly (Slices 1:1 parity)
@@ -376,7 +282,11 @@ export const LayersStudio: React.FC = () => {
   }
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-surface-0">
+    <div
+      tabIndex={-1}
+      onKeyDown={handleStudioKeyDown}
+      className="flex-1 flex flex-col min-h-0 overflow-hidden bg-surface-0 outline-none"
+    >
       <LayersStudioHeaderBar
         savedCount={layerHistory.length}
         layerDraftName={layerDraftName}
@@ -398,11 +308,16 @@ export const LayersStudio: React.FC = () => {
         onToggleSplitLibrary={() =>
           setLayersSplitLibraryOpen(!layersSplitLibraryOpen)
         }
-        onRenderAndPlay={() => void renderLayerDraftPreview({ autoplay: true })}
+        onRenderAndPlay={() =>
+          void renderLayerDraftPreview({
+            autoplay: true,
+            startSec: getLayerDraftPlayheadSec(),
+          })
+        }
         onUndo={undoLayerDraft}
         onRedo={redoLayerDraft}
-        onToggleSnap={() => setSnapEnabled((v) => !v)}
-        onChangeSnapGridSec={setSnapGridSec}
+        onToggleSnap={handleToggleSnap}
+        onChangeSnapGridSec={handleChangeSnapGridSec}
         onCycleFollowMode={() =>
           setFollowMode((m) =>
             m === "page" ? "smooth" : m === "smooth" ? "off" : "page"
@@ -429,7 +344,6 @@ export const LayersStudio: React.FC = () => {
         onStartLaneHeaderResize={handleStartLaneHeaderResize}
         onChangePxPerSec={setPxPerSec}
         onChangeLaneHeight={handleChangeLaneHeight}
-        onFitAll={handleFitAll}
         onSelectClips={setLayerDraftSelectedClipIds}
         onCommitRecipe={updateLayerDraftRecipe}
         onAddLane={() => {
@@ -458,13 +372,16 @@ export const LayersStudio: React.FC = () => {
             ),
           })
         }
-        onChangeLaneVolume={(laneId, volumeDb) =>
-          updateLayerDraftRecipe({
-            ...layerDraftRecipe,
-            lanes: layerDraftRecipe.lanes.map((l) =>
-              l.id === laneId ? { ...l, volumeDb } : l
-            ),
-          })
+        onChangeLaneVolume={(laneId, volumeDb, pushUndo) =>
+          updateLayerDraftRecipe(
+            {
+              ...layerDraftRecipe,
+              lanes: layerDraftRecipe.lanes.map((l) =>
+                l.id === laneId ? { ...l, volumeDb } : l
+              ),
+            },
+            pushUndo === undefined ? undefined : { pushUndo }
+          )
         }
         onRenameLane={(laneId, name) =>
           updateLayerDraftRecipe({
@@ -483,16 +400,12 @@ export const LayersStudio: React.FC = () => {
           });
         }}
         onDropSamplesAt={handleDropSamplesAt}
-        onSplitAtPlayhead={handleSplitAtPlayhead}
-        onCopySelected={handleCopySelected}
-        onPasteAtPlayhead={handlePasteAtPlayhead}
-        onDuplicateSelected={handleDuplicateSelected}
-        onDeleteSelected={handleDeleteSelected}
         viewportWidthRef={viewportWidthRef}
       />
 
       <LayerClipInspector
         clip={primarySelectedClip}
+        selectedClips={selectedClips}
         selectedCount={layerDraftSelectedClipIds.length}
         isMissingSource={
           primarySelectedClip !== null &&
@@ -519,9 +432,9 @@ export const LayersStudio: React.FC = () => {
         existingLayers={layerHistory}
         isSaving={isSavingLayer}
         onClose={() => setSaveModalOpen(false)}
-        onConfirmSave={async (name, overwrite) => {
-          await saveLayerDraft({ name, overwrite });
-        }}
+        onConfirmSave={async (name, overwrite) =>
+          Boolean(await saveLayerDraft({ name, overwrite }))
+        }
       />
     </div>
   );

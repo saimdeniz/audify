@@ -7,7 +7,9 @@ import type {
   TypeFilter,
 } from "../types";
 import { isLayerDraftSample } from "../utils/layerHelpers";
+import { getCachedSampleByIdMap } from "../utils/sampleLookup";
 import { clearSmartSearchCache } from "../utils/smartSearch";
+import { resetPlayheadClock } from "./playheadClock";
 import { persistNavigationFilters } from "./storageHelpers";
 import type { SampleStoreState } from "./types";
 import { useSampleStore } from "./useSampleStore";
@@ -156,6 +158,41 @@ function seedHistory(state: SampleStoreState): void {
   notifyFlagsIfChanged();
 }
 
+function areNumberArraysEqual(a: readonly number[], b: readonly number[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function isSameNavViewAxes(
+  cur: NavigationSnapshot,
+  state: SampleStoreState
+): boolean {
+  return (
+    cur.folderFilter === state.folderFilter &&
+    cur.favoriteOnly === state.favoriteOnly &&
+    cur.favoritesViewTab === state.favoritesViewTab &&
+    cur.recentOnly === state.recentOnly &&
+    cur.binFilterActive === state.binFilterActive &&
+    cur.slicesFilterActive === state.slicesFilterActive &&
+    cur.layersFilterActive === state.layersFilterActive &&
+    cur.layersWorkspaceTab === state.layersWorkspaceTab &&
+    cur.duplicatesFilterActive === state.duplicatesFilterActive &&
+    cur.trashFilterActive === state.trashFilterActive &&
+    cur.trashViewTab === state.trashViewTab &&
+    cur.selectedCollectionId === state.selectedCollectionId &&
+    cur.selectedLicenseGroupId === state.selectedLicenseGroupId &&
+    cur.tagMatchMode === state.tagMatchMode &&
+    cur.selectedGenre === state.selectedGenre &&
+    cur.typeFilter === state.typeFilter &&
+    cur.srFilter === state.srFilter &&
+    areNumberArraysEqual(cur.selectedTagIds, state.selectedTagIds) &&
+    areNumberArraysEqual(cur.excludedTagIds, state.excludedTagIds)
+  );
+}
+
 function recordStoreTransition(state: SampleStoreState): void {
   if (isRestoring) return;
 
@@ -172,12 +209,31 @@ function recordStoreTransition(state: SampleStoreState): void {
     return;
   }
 
+  // O(1) shallow fast-path avoids allocating snapshots + JSON.stringify on every playhead/selection update
+  const cur = historyEntries[historyCursor];
+  if (cur && isSameNavViewAxes(cur, state)) {
+    const nextSampleId =
+      state.selectedSample && state.selectedSample.id > 0
+        ? state.selectedSample.id
+        : null;
+    if (
+      cur.searchQuery !== state.searchQuery ||
+      (nextSampleId !== null && cur.selectedSampleId !== nextSampleId)
+    ) {
+      historyEntries[historyCursor] = {
+        ...cur,
+        searchQuery: state.searchQuery,
+        selectedSampleId: nextSampleId ?? cur.selectedSampleId,
+      };
+    }
+    return;
+  }
+
   const snap = captureNavigationSnapshot(state);
   const key = buildNavViewKey(snap);
   const currentKey = historyKeys[historyCursor];
 
   if (key === currentKey) {
-    const cur = historyEntries[historyCursor];
     if (
       cur.searchQuery !== snap.searchQuery ||
       (snap.selectedSampleId !== null &&
@@ -222,6 +278,23 @@ function applyNavigationSnapshot(snap: NavigationSnapshot): void {
       ? snap.selectedLicenseGroupId
       : null;
 
+  // Sync pruned collection/license IDs back into the current history slot so a later
+  // debounced search update sees an identical nav key instead of wiping the Forward stack.
+  if (
+    historyCursor >= 0 &&
+    historyCursor < historyEntries.length &&
+    (validCollectionId !== snap.selectedCollectionId ||
+      validLicenseGroupId !== snap.selectedLicenseGroupId)
+  ) {
+    const prunedSnap: NavigationSnapshot = {
+      ...snap,
+      selectedCollectionId: validCollectionId,
+      selectedLicenseGroupId: validLicenseGroupId,
+    };
+    historyEntries[historyCursor] = prunedSnap;
+    historyKeys[historyCursor] = buildNavViewKey(prunedSnap);
+  }
+
   const shouldPersistNav =
     !snap.trashFilterActive &&
     !snap.binFilterActive &&
@@ -248,14 +321,26 @@ function applyNavigationSnapshot(snap: NavigationSnapshot): void {
     !(snap.trashFilterActive && snap.trashViewTab !== "tracks") &&
     !(snap.favoriteOnly && snap.favoritesViewTab !== "tracks");
 
-  // Restore last-selected track for this view silently (never auto-plays or interrupts live audio)
+  // Restore last-selected track silently via O(1) lookup map (never auto-plays or interrupts live audio)
   const restoredTrack =
     isTrackTableView && !st.isPlaying && snap.selectedSampleId !== null
-      ? (snap.trashFilterActive
-          ? st.trashedProfileSamples
-          : st.allProfileSamples
-        ).find((item) => item.id === snap.selectedSampleId) ?? null
+      ? getCachedSampleByIdMap(
+          snap.trashFilterActive
+            ? st.trashedProfileSamples
+            : st.allProfileSamples
+        ).get(snap.selectedSampleId) ?? null
       : null;
+  if (restoredTrack) {
+    resetPlayheadClock(0);
+  }
+
+  const trimmedSnapQuery = snap.searchQuery.trim();
+  const nextSortPatch =
+    trimmedSnapQuery.length > 0
+      ? { sortKey: "match" as const, sortDir: "desc" as const }
+      : st.sortKey === "match"
+      ? { sortKey: null, sortDir: "asc" as const }
+      : {};
 
   isRestoring = true;
   try {
@@ -280,6 +365,7 @@ function applyNavigationSnapshot(snap: NavigationSnapshot): void {
       typeFilter: snap.typeFilter,
       srFilter: snap.srFilter,
       searchQuery: snap.searchQuery,
+      ...nextSortPatch,
       ...(restoredTrack
         ? {
             selectedSample: restoredTrack,
@@ -318,6 +404,7 @@ function applyNavigationSnapshot(snap: NavigationSnapshot): void {
       if (snap.layersWorkspaceTab === "editor" && !next.isMiniDock) {
         next.setSearchQuery(snap.searchQuery);
         if (
+          !next.isPlaying &&
           next.layerDraftRecipe.clips.length > 0 &&
           !isLayerDraftSample(next.selectedSample)
         ) {

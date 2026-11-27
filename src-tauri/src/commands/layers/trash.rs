@@ -1,16 +1,16 @@
 use super::history::{row_to_layer_record, LAYER_SELECT_COLS};
 use super::{
     collect_authorized_layer_dirs, dedup_positive_ids, ensure_existing_layer_in_scope_detailed,
-    ensure_slice_not_in_readonly_library, format_os_display_path, resolve_layer_trash_dir,
-    with_read_conn, LayerHistoryRecord, LayerScopeError, LayerTrashSummary,
+    ensure_slice_not_in_readonly_library, format_os_display_path, is_restore_parent_authorized,
+    resolve_layer_trash_dir, with_read_conn, LayerHistoryRecord, LayerScopeError,
+    LayerTrashSummary,
 };
 use crate::audio_engine::AudioEngineState;
 use crate::commands::file_ops::{move_file_resilient, rollback_disk_moves};
 use crate::db::{get_active_profile_id, AppState};
 use crate::security::{
-    display_leaf, has_ntfs_ads_colon, has_parent_dir_traversal, is_unc_or_network_path,
-    move_files_to_os_recycle_bin, normalize_clean_path, reject_symlink_ancestors, sanitize_err,
-    strip_verbatim_prefix,
+    display_leaf, has_ntfs_ads_colon, is_unc_or_network_path, move_files_to_os_recycle_bin,
+    normalize_clean_path, reject_symlink_ancestors, sanitize_err, strip_verbatim_prefix,
 };
 use rusqlite::{params, params_from_iter, Connection};
 use std::fs;
@@ -56,27 +56,67 @@ fn verify_quarantined_layer_file_with_canon(
     Ok(Some((strip_verbatim_prefix(&target_canon), sym.len())))
 }
 
+fn query_trashed_layer_rows(
+    conn: &Connection,
+    profile_id: i64,
+    layer_ids: Option<&[i64]>,
+) -> Result<Vec<(i64, String, String)>, String> {
+    if let Some(ids) = layer_ids {
+        let clean = dedup_positive_ids(ids);
+        if clean.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for chunk in clean.chunks(450) {
+            let placeholders: Vec<String> = (2..=chunk.len() + 1).map(|i| format!("?{i}")).collect();
+            let sql = format!(
+                "SELECT id, layer_path, COALESCE(trash_file_path, '')
+                 FROM layer_history
+                 WHERE profile_id = ?1 AND COALESCE(is_trashed, 0) = 1 AND id IN ({})",
+                placeholders.join(", ")
+            );
+            let mut vals: Vec<rusqlite::types::Value> = Vec::with_capacity(chunk.len() + 1);
+            vals.push(rusqlite::types::Value::Integer(profile_id));
+            for id in chunk {
+                vals.push(rusqlite::types::Value::Integer(*id));
+            }
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|e| format!("Failed preparing trashed layer query: {}", e))?;
+            let found = stmt
+                .query_map(params_from_iter(vals.iter()), |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+                })
+                .map_err(|e| format!("Failed reading trashed layers: {}", e))?;
+            out.extend(found.flatten());
+        }
+        return Ok(out);
+    }
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, layer_path, COALESCE(trash_file_path, '')
+             FROM layer_history
+             WHERE profile_id = ?1 AND COALESCE(is_trashed, 0) = 1",
+        )
+        .map_err(|e| format!("Failed preparing full trashed layer query: {}", e))?;
+    let found = stmt
+        .query_map([profile_id], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        })
+        .map_err(|e| format!("Failed reading trashed layers: {}", e))?;
+    Ok(found.flatten().collect())
+}
+
 pub(crate) fn query_layer_trash_status_with_conn(
     conn: &Connection,
     user_dir: &Path,
 ) -> Result<LayerTrashSummary, String> {
     let profile_id = get_active_profile_id(conn);
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, COALESCE(trash_file_path, '')
-             FROM layer_history
-             WHERE profile_id = ?1 AND COALESCE(is_trashed, 0) = 1",
-        )
-        .map_err(|e| format!("Failed querying layer trash status: {}", e))?;
-    let rows: Vec<(i64, String)> = stmt
-        .query_map([profile_id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
-        .map_err(|e| format!("Failed reading layer trash rows: {}", e))?
-        .flatten()
-        .collect();
-
+    let rows = query_trashed_layer_rows(conn, profile_id, None)?;
     let trash_canon = resolve_layer_trash_dir(user_dir).canonicalize().ok();
     let mut total_bytes: u64 = 0;
-    for (_, trash_p) in &rows {
+    for (_, _, trash_p) in &rows {
         if let Ok(Some((_, bytes))) =
             verify_quarantined_layer_file_with_canon(trash_p, trash_canon.as_deref())
         {
@@ -169,10 +209,14 @@ pub(crate) fn trash_layer_files_with_conn(
         };
 
         let norm_layer = normalize_clean_path(&layer_path);
+        let alt_layer = norm_layer.replace('/', "\\");
         let is_indexed_source: bool = conn
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM samples WHERE LOWER(REPLACE(file_path, '\\', '/')) = LOWER(?1))",
-                params![norm_layer],
+                "SELECT EXISTS(
+                    SELECT 1 FROM samples
+                    WHERE LOWER(file_path) = LOWER(?1) OR LOWER(file_path) = LOWER(?2)
+                 )",
+                params![norm_layer, alt_layer],
                 |r| r.get(0),
             )
             .unwrap_or(false);
@@ -218,7 +262,7 @@ pub(crate) fn trash_layer_files_with_conn(
         }
     };
 
-    let mut trashed_ids = Vec::with_capacity(planned.len());
+    let mut affected_ids = Vec::with_capacity(planned.len() + missing_row_ids.len());
     for item in &planned {
         let trash_disp = format_os_display_path(&item.trash_pb);
         if tx
@@ -234,14 +278,18 @@ pub(crate) fn trash_layer_files_with_conn(
             rollback_disk_moves(&completed_moves);
             return Err("Failed updating trashed layer state".to_string());
         }
-        trashed_ids.push(item.layer_id);
+        affected_ids.push(item.layer_id);
     }
 
     for missing_id in missing_row_ids {
-        let _ = tx.execute(
+        if let Ok(deleted) = tx.execute(
             "DELETE FROM layer_history WHERE id = ?1 AND profile_id = ?2",
             params![missing_id, profile_id],
-        );
+        ) {
+            if deleted > 0 {
+                affected_ids.push(missing_id);
+            }
+        }
     }
 
     if tx.commit().is_err() {
@@ -249,43 +297,7 @@ pub(crate) fn trash_layer_files_with_conn(
         return Err("Failed committing trashed layer records".to_string());
     }
 
-    Ok(trashed_ids)
-}
-
-fn is_restore_parent_authorized(target_parent: &Path, auth_dirs: &[PathBuf]) -> bool {
-    let raw = target_parent.to_string_lossy();
-    if raw.trim().is_empty()
-        || is_unc_or_network_path(&raw)
-        || has_ntfs_ads_colon(&raw)
-        || has_parent_dir_traversal(&raw)
-        || reject_symlink_ancestors(target_parent).is_err()
-    {
-        return false;
-    }
-    let auth_canons: Vec<PathBuf> = auth_dirs
-        .iter()
-        .filter_map(|d| d.canonicalize().ok())
-        .collect();
-    if auth_canons.is_empty() {
-        return false;
-    }
-    let mut cursor = Some(target_parent);
-    while let Some(dir) = cursor {
-        match fs::symlink_metadata(dir) {
-            Ok(sym) => {
-                if sym.file_type().is_symlink() || !sym.file_type().is_dir() {
-                    return false;
-                }
-                let Ok(canon) = dir.canonicalize() else {
-                    return false;
-                };
-                return auth_canons.iter().any(|base| canon.starts_with(base));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => cursor = dir.parent(),
-            Err(_) => return false,
-        }
-    }
-    false
+    Ok(affected_ids)
 }
 
 pub(crate) fn restore_trashed_layer_files_with_conn(
@@ -297,52 +309,7 @@ pub(crate) fn restore_trashed_layer_files_with_conn(
     let profile_id = get_active_profile_id(conn);
     let trash_canon = resolve_layer_trash_dir(user_dir).canonicalize().ok();
     let auth_dirs = collect_authorized_layer_dirs(conn, user_dir);
-
-    let rows: Vec<(i64, String, String)> = if let Some(ids) = layer_ids {
-        let clean = dedup_positive_ids(ids);
-        if clean.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut out = Vec::new();
-        for chunk in clean.chunks(450) {
-            let placeholders: Vec<String> = (2..=chunk.len() + 1).map(|i| format!("?{i}")).collect();
-            let sql = format!(
-                "SELECT id, layer_path, COALESCE(trash_file_path, '')
-                 FROM layer_history
-                 WHERE profile_id = ?1 AND COALESCE(is_trashed, 0) = 1 AND id IN ({})",
-                placeholders.join(", ")
-            );
-            let mut vals: Vec<rusqlite::types::Value> = Vec::with_capacity(chunk.len() + 1);
-            vals.push(rusqlite::types::Value::Integer(profile_id));
-            for id in chunk {
-                vals.push(rusqlite::types::Value::Integer(*id));
-            }
-            let mut stmt = conn
-                .prepare(&sql)
-                .map_err(|e| format!("Failed preparing layer restore query: {}", e))?;
-            let found = stmt
-                .query_map(params_from_iter(vals.iter()), |r| {
-                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
-                })
-                .map_err(|e| format!("Failed reading trashed layers: {}", e))?;
-            out.extend(found.flatten());
-        }
-        out
-    } else {
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, layer_path, COALESCE(trash_file_path, '')
-                 FROM layer_history
-                 WHERE profile_id = ?1 AND COALESCE(is_trashed, 0) = 1",
-            )
-            .map_err(|e| format!("Failed preparing full layer restore query: {}", e))?;
-        let found = stmt
-            .query_map([profile_id], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
-            })
-            .map_err(|e| format!("Failed reading trashed layers: {}", e))?;
-        found.flatten().collect()
-    };
+    let rows = query_trashed_layer_rows(conn, profile_id, layer_ids)?;
 
     struct PlannedRestore {
         layer_id: i64,
@@ -366,7 +333,7 @@ pub(crate) fn restore_trashed_layer_files_with_conn(
             return Err("Original layer export folder is no longer authorized or online".to_string());
         }
         ensure_slice_not_in_readonly_library(conn, &target_pb)?;
-        let final_pb = if target_pb.exists() {
+        let final_pb = if fs::symlink_metadata(&target_pb).is_ok() {
             let stem = target_pb
                 .file_stem()
                 .and_then(|s| s.to_str())
@@ -448,56 +415,13 @@ pub(crate) fn empty_trashed_layers_with_conn(
 ) -> Result<Vec<i64>, String> {
     let profile_id = get_active_profile_id(conn);
     let trash_canon = resolve_layer_trash_dir(user_dir).canonicalize().ok();
-    let targets: Vec<(i64, String)> = if let Some(ids) = layer_ids {
-        let clean = dedup_positive_ids(ids);
-        if clean.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut out = Vec::new();
-        for chunk in clean.chunks(450) {
-            let placeholders: Vec<String> = (2..=chunk.len() + 1).map(|i| format!("?{i}")).collect();
-            let sql = format!(
-                "SELECT id, COALESCE(trash_file_path, '')
-                 FROM layer_history
-                 WHERE profile_id = ?1 AND COALESCE(is_trashed, 0) = 1 AND id IN ({})",
-                placeholders.join(", ")
-            );
-            let mut vals: Vec<rusqlite::types::Value> = Vec::with_capacity(chunk.len() + 1);
-            vals.push(rusqlite::types::Value::Integer(profile_id));
-            for id in chunk {
-                vals.push(rusqlite::types::Value::Integer(*id));
-            }
-            let mut stmt = conn
-                .prepare(&sql)
-                .map_err(|e| format!("Failed preparing empty layer trash query: {}", e))?;
-            let found = stmt
-                .query_map(params_from_iter(vals.iter()), |r| {
-                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-                })
-                .map_err(|e| format!("Failed reading trashed layers: {}", e))?;
-            out.extend(found.flatten());
-        }
-        out
-    } else {
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, COALESCE(trash_file_path, '')
-                 FROM layer_history
-                 WHERE profile_id = ?1 AND COALESCE(is_trashed, 0) = 1",
-            )
-            .map_err(|e| format!("Failed preparing full empty layer trash query: {}", e))?;
-        let found = stmt
-            .query_map([profile_id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
-            .map_err(|e| format!("Failed reading trashed layers: {}", e))?;
-        found.flatten().collect()
-    };
-
+    let targets = query_trashed_layer_rows(conn, profile_id, layer_ids)?;
     if targets.is_empty() {
         return Ok(Vec::new());
     }
 
     let mut files_to_recycle: Vec<PathBuf> = Vec::new();
-    for (_, trash_p) in &targets {
+    for (_, _, trash_p) in &targets {
         if let Some((pb, _)) =
             verify_quarantined_layer_file_with_canon(trash_p, trash_canon.as_deref())?
         {
@@ -513,7 +437,7 @@ pub(crate) fn empty_trashed_layers_with_conn(
             .map_err(|e| sanitize_err(user_dir, &e))?;
     }
 
-    let deleted_ids: Vec<i64> = targets.iter().map(|(id, _)| *id).collect();
+    let deleted_ids: Vec<i64> = targets.iter().map(|(id, _, _)| *id).collect();
     let tx = conn
         .transaction()
         .map_err(|e| format!("Failed starting delete trashed layers tx: {}", e))?;
@@ -690,6 +614,7 @@ mod tests {
                 source_sample_id: None,
                 source_path: src_wav.to_string_lossy().to_string(),
                 source_name: "impact_hit.wav".to_string(),
+                source_duration_sec: Some(0.2),
                 start_sec: 0.0,
                 trim_start_sec: 0.0,
                 trim_end_sec: 0.2,
@@ -736,7 +661,7 @@ mod tests {
         assert_eq!(renamed.layer_name, "Boss_Slam_v2.wav");
         assert!(Path::new(&renamed.layer_path).is_file());
 
-        // 4. Overwrite existing layer with modified recipe
+        // 4. Overwrite existing layer with modified recipe AND new stem name
         let mut updated_recipe = recipe.clone();
         updated_recipe.clips[0].fade_out_sec = 0.05;
         let (overwritten, _) = save_layer_mix_with_conn(
@@ -745,7 +670,7 @@ mod tests {
             None,
             &SaveLayerInput {
                 recipe: &updated_recipe,
-                name: "Boss_Slam_v2",
+                name: "Boss_Slam_v3",
                 overwrite_layer_id: Some(renamed.id),
                 custom_dir: None,
                 export_preset: Some("nle_48k_24"),
@@ -754,26 +679,41 @@ mod tests {
         )
         .unwrap();
         assert_eq!(overwritten.id, renamed.id);
+        assert_eq!(overwritten.layer_name, "Boss_Slam_v3.wav");
+        assert!(!Path::new(&renamed.layer_path).exists(), "Old file must be removed when Update changes stem");
+        assert!(Path::new(&overwritten.layer_path).is_file());
         assert!(overwritten.recipe_json.contains("0.05"));
 
         // 5. Trash & verify quarantine
-        let trashed_ids = trash_layer_files_with_conn(&mut conn, &user_dir, None, &[renamed.id]).unwrap();
-        assert_eq!(trashed_ids, vec![renamed.id]);
-        assert!(!Path::new(&renamed.layer_path).exists());
+        let trashed_ids =
+            trash_layer_files_with_conn(&mut conn, &user_dir, None, &[overwritten.id]).unwrap();
+        assert_eq!(trashed_ids, vec![overwritten.id]);
+        assert!(!Path::new(&overwritten.layer_path).exists());
         assert!(list_layer_history_with_conn(&conn).unwrap().is_empty());
         let trashed_list = list_trashed_layers_with_conn(&conn, &user_dir).unwrap();
         assert_eq!(trashed_list.len(), 1);
         assert!(trashed_list[0].file_exists);
 
         // 6. Restore & verify WAV back on disk
-        let restored_ids =
-            restore_trashed_layer_files_with_conn(&mut conn, &user_dir, None, Some(&[renamed.id]))
-                .unwrap();
-        assert_eq!(restored_ids, vec![renamed.id]);
-        assert!(Path::new(&renamed.layer_path).is_file());
+        let restored_ids = restore_trashed_layer_files_with_conn(
+            &mut conn,
+            &user_dir,
+            None,
+            Some(&[overwritten.id]),
+        )
+        .unwrap();
+        assert_eq!(restored_ids, vec![overwritten.id]);
+        assert!(Path::new(&overwritten.layer_path).is_file());
         assert_eq!(list_layer_history_with_conn(&conn).unwrap().len(), 1);
 
-        // 7. Security check: out-of-scope source file must be rejected
+        // 7. Missing file trash still reports deleted ID in affected_ids
+        fs::remove_file(&overwritten.layer_path).unwrap();
+        let deleted_missing =
+            trash_layer_files_with_conn(&mut conn, &user_dir, None, &[overwritten.id]).unwrap();
+        assert_eq!(deleted_missing, vec![overwritten.id]);
+        assert!(list_layer_history_with_conn(&conn).unwrap().is_empty());
+
+        // 8. Security check: out-of-scope source file must be rejected
         let rogue_wav = root.join("rogue.wav");
         write_wav_i16(&rogue_wav, 48_000, 1, &vec![4_000i16; 2_000]).unwrap();
         let mut rogue_recipe = recipe;

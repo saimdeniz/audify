@@ -52,6 +52,10 @@ export const MiniDockShell: React.FC = () => {
   const favoritesViewTab = useSampleStore((s) => s.favoritesViewTab);
   const trashFilterActive = useSampleStore((s) => s.trashFilterActive);
   const trashViewTab = useSampleStore((s) => s.trashViewTab);
+  const sliceHistoryCount = useSampleStore((s) => s.sliceHistory.length);
+  const trashedSliceCount = useSampleStore((s) => s.trashedSliceCount);
+  const layerHistoryCount = useSampleStore((s) => s.layerHistory.length);
+  const trashedLayerCount = useSampleStore((s) => s.trashedLayerCount);
   const miniDockEdgePeek = useSampleStore((s) => s.miniDockEdgePeek);
   const miniDockEdgeSide = useSampleStore((s) => s.miniDockEdgeSide);
   const themeMode = useSampleStore((s) => s.themeMode);
@@ -166,7 +170,7 @@ export const MiniDockShell: React.FC = () => {
     const syncHold = () => {
       const hasPortal = Boolean(
         document.querySelector(
-          "[data-context-menu-portal], [data-quick-create-portal], [data-color-picker-portal], [data-modal-portal], [role='dialog'], [role='menu'], [role='listbox']"
+          "[data-popover-portal], [data-context-menu-portal], [data-quick-create-portal], [data-color-picker-portal], [data-modal-portal], [role='dialog'], [role='menu'], [role='listbox']"
         )
       );
       const shouldHold =
@@ -221,12 +225,27 @@ export const MiniDockShell: React.FC = () => {
   // Close mini context menu or batch popover on outside click or Escape
   useEffect(() => {
     if (!miniContextMenu && !batchPopover) return;
-    const close = () => {
+    const close = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.closest?.(
+          "[data-popover-portal], [data-context-menu-portal], [data-color-picker-portal], [data-quick-create-portal]"
+        )
+      ) {
+        return;
+      }
       setMiniContextMenu(null);
       setBatchPopover(null);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        if (
+          document.querySelector(
+            "[data-modal-portal='true'], [data-color-picker-portal], [data-quick-create-portal]"
+          )
+        ) {
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         setMiniContextMenu(null);
@@ -423,7 +442,25 @@ export const MiniDockShell: React.FC = () => {
           </button>
         ) : (
           <span className="truncate font-semibold">
-            {`${samples.length.toLocaleString()} / ${totalProfileSamplesCount.toLocaleString()} files`}
+            {showSlicesTable
+              ? (() => {
+                  const n = trashFilterActive
+                    ? trashedSliceCount
+                    : sliceHistoryCount;
+                  return `${trashFilterActive ? "Trash · " : ""}${n.toLocaleString()} ${
+                    n === 1 ? "slice" : "slices"
+                  }`;
+                })()
+              : showLayersList
+              ? (() => {
+                  const n = trashFilterActive
+                    ? trashedLayerCount
+                    : layerHistoryCount;
+                  return `${trashFilterActive ? "Trash · " : ""}${n.toLocaleString()} ${
+                    n === 1 ? "layer" : "layers"
+                  }`;
+                })()
+              : `${samples.length.toLocaleString()} / ${totalProfileSamplesCount.toLocaleString()} files`}
           </span>
         )}
         <span className="shrink-0 ml-1 opacity-90">

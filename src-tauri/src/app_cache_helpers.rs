@@ -24,21 +24,34 @@ static LAST_ASSET_SCOPE: Mutex<Option<AssetScopeMemo>> = Mutex::new(None);
 /// verifying UNC/ADS/symlink-ancestor safety.
 pub(crate) fn register_runtime_asset_dir(
     app: &tauri::AppHandle,
-    _user_dir: &Path,
+    user_dir: &Path,
     dir: &Path,
 ) {
     use tauri::Manager;
 
     let raw = dir.to_string_lossy();
-    if security::is_unc_or_network_path(&raw) || security::has_ntfs_ads_colon(&raw) {
+    if raw.trim().is_empty()
+        || security::is_unc_or_network_path(&raw)
+        || security::has_ntfs_ads_colon(&raw)
+        || security::has_parent_dir_traversal(&raw)
+        || security::is_forbidden_os_or_root_path(&raw)
+    {
         return;
     }
     if security::reject_symlink_ancestors(dir).is_err() {
         return;
     }
-    let clean = fs::canonicalize(dir)
-        .map(|p| security::strip_verbatim_prefix(&p))
-        .unwrap_or_else(|_| security::strip_verbatim_prefix(dir));
+    let Ok(canon) = fs::canonicalize(dir) else {
+        return;
+    };
+    let clean = security::strip_verbatim_prefix(&canon);
+    let clean_str = clean.to_string_lossy();
+    if security::is_unc_or_network_path(&clean_str)
+        || security::is_forbidden_os_or_root_path(&clean_str)
+        || security::ensure_not_inside_user_dir(user_dir, &clean).is_err()
+    {
+        return;
+    }
 
     let scope = app.asset_protocol_scope();
     let _ = scope.allow_directory(&clean, true);

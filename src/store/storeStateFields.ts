@@ -33,7 +33,6 @@ import {
   LayerPreviewState,
   LayerRecipe,
   LayerSortKey,
-  LayerTopDeckView,
   LayersWorkspaceTab,
   Library,
   LicenseGroup,
@@ -164,7 +163,6 @@ export interface SampleStoreDataState {
   // Layers Multi-Track SFX Studio
   customLayerExportPath: string;
   autoSaveLayerOnNleDrag: boolean;
-  layerTopDeckView: LayerTopDeckView;
   layersFilterActive: boolean;
   layersWorkspaceTab: LayersWorkspaceTab;
   layersSplitLibraryOpen: boolean;

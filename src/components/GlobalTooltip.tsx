@@ -114,23 +114,7 @@ export const GlobalTooltip: React.FC = () => {
       }
     };
 
-    const handlePointerOver = (e: PointerEvent) => {
-      if (isDragActive()) {
-        hideImmediately();
-        return;
-      }
-
-      const target = (e.target as HTMLElement | null)?.closest?.<HTMLElement>(
-        "[title], [data-tooltip]"
-      );
-
-      if (!target || isBlockedByOpenPortal(target)) {
-        if (currentTargetRef.current || visibleRef.current) {
-          hideImmediately();
-        }
-        return;
-      }
-
+    const syncTargetTooltipAttr = (target: HTMLElement): string => {
       // Transfer native title -> data-tooltip using `title=""` suppression so React's
       // later `removeAttribute("title")` still fires a MutationRecord and clears stale tooltips.
       const rawTitle = target.getAttribute("title");
@@ -158,15 +142,23 @@ export const GlobalTooltip: React.FC = () => {
         target.removeAttribute("data-tooltip");
         target.removeAttribute("data-tooltip-from-title");
       }
+      return target.getAttribute("data-tooltip") || "";
+    };
 
-      const text = target.getAttribute("data-tooltip") || "";
+    const scheduleTooltipForTarget = (
+      target: HTMLElement,
+      coords: { x: number; y: number },
+      forceCenter: boolean,
+      keyboardMode: boolean
+    ) => {
+      const text = syncTargetTooltipAttr(target);
       if (!text) {
         hideImmediately();
         return;
       }
 
       currentTargetRef.current = target;
-      lastCoordsRef.current = { x: e.clientX, y: e.clientY };
+      lastCoordsRef.current = coords;
 
       if (timerRef.current !== null) {
         clearTimeout(timerRef.current);
@@ -180,10 +172,12 @@ export const GlobalTooltip: React.FC = () => {
           ?.getAttribute("data-tooltip-delay");
       const customDelay = delayAttr ? parseInt(delayAttr, 10) : null;
 
-      const alignCenter = Boolean(
-        target.getAttribute("data-tooltip-align") === "center" ||
-          target.closest("[data-tooltip-align='center']")
-      );
+      const alignCenter =
+        forceCenter ||
+        Boolean(
+          target.getAttribute("data-tooltip-align") === "center" ||
+            target.closest("[data-tooltip-align='center']")
+        );
 
       const rect = target.getBoundingClientRect();
       const anchorRect: AnchorRect = {
@@ -197,10 +191,10 @@ export const GlobalTooltip: React.FC = () => {
       const isSidebar = Boolean(target.closest("aside, [data-sidebar]"));
       const isWarm = Date.now() - lastActiveRef.current < 350;
 
-      let delay = 500;
-      if (customDelay !== null && !Number.isNaN(customDelay)) {
+      let delay = keyboardMode ? 240 : 500;
+      if (!keyboardMode && customDelay !== null && !Number.isNaN(customDelay)) {
         delay = customDelay;
-      } else if (isSidebar) {
+      } else if (!keyboardMode && isSidebar) {
         delay = isWarm ? 750 : 950;
       } else if (isWarm) {
         delay = 180;
@@ -215,26 +209,7 @@ export const GlobalTooltip: React.FC = () => {
         ) {
           return;
         }
-        // Re-read in case React updated or cleared title/data-tooltip while waiting
-        const delayedTitle = target.getAttribute("title");
-        if (delayedTitle) {
-          const fresh = sanitizeTooltipText(delayedTitle);
-          if (fresh) {
-            target.setAttribute("data-tooltip", fresh);
-            target.setAttribute("data-tooltip-from-title", "true");
-          } else {
-            target.removeAttribute("data-tooltip");
-            target.removeAttribute("data-tooltip-from-title");
-          }
-          target.setAttribute("title", "");
-        } else if (
-          !target.hasAttribute("title") &&
-          target.hasAttribute("data-tooltip-from-title")
-        ) {
-          target.removeAttribute("data-tooltip");
-          target.removeAttribute("data-tooltip-from-title");
-        }
-        const liveText = target.getAttribute("data-tooltip") || "";
+        const liveText = syncTargetTooltipAttr(target);
         if (!liveText) return;
 
         const tw = Math.min(500, getAccurateTextWidth(liveText) + 18);
@@ -276,6 +251,67 @@ export const GlobalTooltip: React.FC = () => {
         });
         lastActiveRef.current = Date.now();
       }, delay);
+    };
+
+    const handlePointerOver = (e: PointerEvent) => {
+      if (isDragActive()) {
+        hideImmediately();
+        return;
+      }
+
+      const target = (e.target as HTMLElement | null)?.closest?.<HTMLElement>(
+        "[title], [data-tooltip]"
+      );
+
+      if (!target || isBlockedByOpenPortal(target)) {
+        if (currentTargetRef.current || visibleRef.current) {
+          hideImmediately();
+        }
+        return;
+      }
+
+      scheduleTooltipForTarget(
+        target,
+        { x: e.clientX, y: e.clientY },
+        false,
+        false
+      );
+    };
+
+    const handleFocusIn = (e: FocusEvent) => {
+      if (isDragActive()) return;
+      const el = e.target as HTMLElement | null;
+      if (!el || typeof el.matches !== "function") return;
+      let isKeyboardVisible = false;
+      try {
+        isKeyboardVisible = el.matches(":focus-visible");
+      } catch {
+        isKeyboardVisible = false;
+      }
+      if (!isKeyboardVisible) return;
+      const target = el.matches("[title], [data-tooltip]")
+        ? el
+        : el.closest?.<HTMLElement>("[title], [data-tooltip]");
+      if (!target || isBlockedByOpenPortal(target)) return;
+      const rect = target.getBoundingClientRect();
+      scheduleTooltipForTarget(
+        target,
+        { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.bottom) },
+        true,
+        true
+      );
+    };
+
+    const handleFocusOut = (e: FocusEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        currentTargetRef.current &&
+        (!target ||
+          target === currentTargetRef.current ||
+          currentTargetRef.current.contains(target))
+      ) {
+        hideImmediately();
+      }
     };
 
     const handlePointerMove = (e: PointerEvent) => {
@@ -332,6 +368,8 @@ export const GlobalTooltip: React.FC = () => {
     window.addEventListener("pointerover", handlePointerOver, { passive: true });
     window.addEventListener("pointermove", handlePointerMove, { passive: true });
     window.addEventListener("pointerout", handlePointerOut, { passive: true });
+    window.addEventListener("focusin", handleFocusIn, { passive: true });
+    window.addEventListener("focusout", handleFocusOut, { passive: true });
     window.addEventListener("pointerdown", hideImmediately, { passive: true });
     window.addEventListener("mousedown", hideImmediately, {
       capture: true,
@@ -363,6 +401,8 @@ export const GlobalTooltip: React.FC = () => {
       window.removeEventListener("pointerover", handlePointerOver);
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerout", handlePointerOut);
+      window.removeEventListener("focusin", handleFocusIn);
+      window.removeEventListener("focusout", handleFocusOut);
       window.removeEventListener("pointerdown", hideImmediately);
       window.removeEventListener("mousedown", hideImmediately, true);
       window.removeEventListener("audify:hide-tooltip", hideImmediately);

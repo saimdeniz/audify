@@ -3,9 +3,9 @@ import {
   AUDIFY_RELEASES_LATEST_URL,
 } from "../constants/appInfo";
 import { AUDIFY_STORAGE_KEYS } from "../constants/storageKeys";
-import { isStandaloneSettingsWindow, safeSetItem } from "../store/storageHelpers";
-import { safeGetItem } from "../utils/localStorageSafe";
+import { safeGetItem, safeSetItem } from "../utils/localStorageSafe";
 import { invokeCommand } from "../utils/tauriCommands";
+import { isStandaloneSettingsWindow } from "../utils/windowContext";
 
 export interface AppUpdateInfo {
   current_version: string;
@@ -72,6 +72,7 @@ function readCachedUpdate(): StoredUpdateCache | null {
 
 const listeners = new Set<() => void>();
 let inFlightCheck: Promise<AppUpdateInfo | null> | null = null;
+let activeCheckIsForced = false;
 let storageBridgeAttached = false;
 let snapshot: AppUpdateSnapshot = buildSnapshotFromStorage("idle", null);
 
@@ -122,6 +123,13 @@ function ensureStorageSyncBridge(): void {
       e.key === AUDIFY_STORAGE_KEYS.updateCheckCacheV1 ||
       e.key === AUDIFY_STORAGE_KEYS.dismissedUpdateVersion
     ) {
+      if (e.key === AUDIFY_STORAGE_KEYS.updateCheckCacheV1) {
+        const fresh = readCachedUpdate();
+        setSnapshot(
+          buildSnapshotFromStorage(fresh ? "ready" : snapshot.status, fresh ? null : snapshot.errorMessage)
+        );
+        return;
+      }
       setSnapshot(buildSnapshotFromStorage(snapshot.status, snapshot.errorMessage));
     }
   });
@@ -175,8 +183,12 @@ export async function checkForAppUpdates(opts?: {
     }
   }
 
-  if (inFlightCheck) return inFlightCheck;
+  if (inFlightCheck) {
+    if (force) activeCheckIsForced = true;
+    return inFlightCheck;
+  }
 
+  activeCheckIsForced = force;
   setSnapshot({
     ...snapshot,
     status: "checking",
@@ -206,14 +218,16 @@ export async function checkForAppUpdates(opts?: {
       return info;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      const reportError = activeCheckIsForced;
       setSnapshot({
         ...snapshot,
-        status: force ? "error" : snapshot.info ? "ready" : "idle",
-        errorMessage: force ? msg : null,
+        status: reportError ? "error" : snapshot.info ? "ready" : "idle",
+        errorMessage: reportError ? msg : null,
       });
       return null;
     } finally {
       inFlightCheck = null;
+      activeCheckIsForced = false;
     }
   })();
 
@@ -233,11 +247,33 @@ export function scheduleStartupUpdateCheck(): () => void {
   return () => window.clearTimeout(timer);
 }
 
+export function sanitizeAudifyReleaseUrl(raw?: string): string {
+  if (!raw) return AUDIFY_RELEASES_LATEST_URL;
+  try {
+    const parsed = new URL(raw.trim());
+    const path = parsed.pathname;
+    const validPath =
+      path === "/saimdeniz/audify" ||
+      path === "/saimdeniz/audify/" ||
+      path.startsWith("/saimdeniz/audify/releases");
+    if (
+      parsed.protocol === "https:" &&
+      parsed.hostname.toLowerCase() === "github.com" &&
+      !parsed.username &&
+      !parsed.password &&
+      !parsed.port &&
+      validPath
+    ) {
+      return parsed.toString();
+    }
+  } catch {
+    // Fall back to canonical latest releases URL
+  }
+  return AUDIFY_RELEASES_LATEST_URL;
+}
+
 export async function openAudifyReleasesPage(url?: string): Promise<void> {
-  const target =
-    url && url.startsWith("https://github.com/saimdeniz/audify")
-      ? url
-      : AUDIFY_RELEASES_LATEST_URL;
+  const target = sanitizeAudifyReleaseUrl(url);
   try {
     await invokeCommand("open_github_url", { url: target });
   } catch {
@@ -250,6 +286,7 @@ export async function openAudifyReleasesPage(url?: string): Promise<void> {
 /** Test-only helper to reset singleton module state cleanly between cases. */
 export function resetAppUpdateStateForTest(): void {
   inFlightCheck = null;
+  activeCheckIsForced = false;
   snapshot = buildSnapshotFromStorage("idle", null);
   for (const listener of listeners) {
     listener();

@@ -113,6 +113,9 @@ pub(super) fn exec_empty_trash_disk(
             continue;
         }
         let pb = PathBuf::from(trimmed);
+        if crate::security::reject_symlink_ancestors(&pb).is_err() {
+            continue;
+        }
         if let Ok(sym_meta) = fs::symlink_metadata(&pb) {
             if !sym_meta.file_type().is_symlink() && sym_meta.file_type().is_file() {
                 if let Ok(canon) = pb.canonicalize() {

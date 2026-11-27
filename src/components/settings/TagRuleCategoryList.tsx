@@ -10,7 +10,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import { deterministicColorForName } from "../../constants/palettes";
+import { deterministicColorForName } from "../../utils/taxonomyColor";
 import { useStudioPointerDrag } from "../../hooks/useStudioPointerDrag";
 import { useSampleStore } from "../../store/useSampleStore";
 import {
@@ -472,7 +472,7 @@ export const TagRuleCategoryList: React.FC<TagRuleCategoryListProps> = ({
                       onClick={(e) => e.stopPropagation()}
                     >
                       {isDropHover && (
-                        <span className="font-mono text-[8.5px] text-accent-fg font-semibold">
+                        <span className="font-mono text-[9.5px] text-accent-fg font-semibold">
                           ↳ Move
                         </span>
                       )}

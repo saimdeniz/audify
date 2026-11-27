@@ -86,7 +86,6 @@ export const AUDIFY_STORAGE_KEYS = {
   customSliceExportPath: "audify_custom_slice_export_path",
   customLayerExportPath: "audify_custom_layer_export_path",
   autoSaveLayerOnNleDrag: "audify_auto_save_layer_nle_drag",
-  layerTopDeckView: "audify_layer_top_deck_view",
   miniDockBoundsV4: "audify_mini_dock_bounds_v4",
   miniDockPinned: "audify_mini_dock_pinned",
   miniDockEdgePeek: "audify_mini_dock_edge_peek",

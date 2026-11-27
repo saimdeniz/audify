@@ -472,7 +472,7 @@ export const TaxonomyStudioTree: React.FC<TaxonomyStudioTreeProps> = ({
                     )}
                     <span className="truncate font-semibold">{facet.name}</span>
                     {!facet.is_system && (
-                      <span className="text-[8px] text-fg-3 font-normal">
+                      <span className="text-[9.5px] text-fg-3 font-normal">
                         ({hierarchical ? "tree" : "flat"})
                       </span>
                     )}
@@ -489,7 +489,7 @@ export const TaxonomyStudioTree: React.FC<TaxonomyStudioTreeProps> = ({
                             e.stopPropagation();
                             void onHarmonizeFacet(facet.slug);
                           }}
-                          className="h-[16px] px-1.5 rounded-[2px] bg-accent-soft hover:bg-accent hover:text-accent-on border border-accent/50 text-accent-fg font-mono text-[8.5px] normal-case inline-flex items-center gap-1 transition-colors cursor-pointer"
+                          className="h-[16px] px-1.5 rounded-[2px] bg-accent-soft hover:bg-accent hover:text-accent-on border border-accent/50 text-accent-fg font-mono text-[9.5px] normal-case inline-flex items-center gap-1 transition-colors cursor-pointer"
                           title={`Match all ${unharmonizedCount} custom-colored sub-item(s) in ${facet.name} to their parent's color family`}
                         >
                           <Palette className="w-2.5 h-2.5 shrink-0" />
@@ -497,7 +497,7 @@ export const TaxonomyStudioTree: React.FC<TaxonomyStudioTreeProps> = ({
                         </button>
                       )}
                     {isSecDropHover && (
-                      <span className="text-[8.5px] text-accent-fg font-semibold">
+                      <span className="text-[9.5px] text-accent-fg font-semibold">
                         ↳ Root
                       </span>
                     )}

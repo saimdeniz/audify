@@ -130,16 +130,6 @@ export function isLayerDraftSample(
   );
 }
 
-export function isLayerPreviewSample(
-  sample: SampleItem | null | undefined
-): boolean {
-  return Boolean(
-    sample &&
-      (isLayerDraftSample(sample) ||
-        sample.id <= -LAYER_HISTORY_SAMPLE_ID_OFFSET)
-  );
-}
-
 export function createLayerDraftVirtualSample(
   name: string,
   durationSec: number,
@@ -306,6 +296,7 @@ export function makeClipFromSample(
     sourceSampleId: sample.id > 0 ? sample.id : null,
     sourcePath: sample.file_path,
     sourceName: sample.file_name,
+    sourceDurationSec: durSec,
     startSec: Math.max(0, startSec),
     trimStartSec: 0,
     trimEndSec: durSec,
@@ -340,8 +331,11 @@ export function buildNextLayerRecipeForSamples(opts: {
   addedClipIds: string[];
   isFresh: boolean;
 } {
-  const toAdd = opts.samples.slice(0, MAX_LAYER_LANES);
   const isFresh = opts.mode === "new" || opts.prevRecipe.clips.length === 0;
+  const availableClipSlots = isFresh
+    ? MAX_LAYER_CLIPS
+    : Math.max(0, MAX_LAYER_CLIPS - opts.prevRecipe.clips.length);
+  const toAdd = opts.samples.slice(0, Math.min(MAX_LAYER_LANES, availableClipSlots));
   const addedClipIds: string[] = [];
 
   if (isFresh) {
@@ -410,4 +404,16 @@ export function buildNextLayerRecipeForSamples(opts: {
     addedClipIds,
     isFresh: false,
   };
+}
+
+let layerDraftPreviewPending = false;
+
+/** Marks whether the active Layers recipe has edits not yet committed into WASAPI RAM. */
+export function setLayerDraftPreviewPending(pending: boolean): void {
+  layerDraftPreviewPending = pending;
+}
+
+/** Returns true while a recipe edit is waiting for debounce/render to finish. */
+export function isLayerDraftPreviewPending(): boolean {
+  return layerDraftPreviewPending;
 }

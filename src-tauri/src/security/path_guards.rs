@@ -228,12 +228,18 @@ pub fn is_forbidden_os_or_root_path(raw: &str) -> bool {
 /// (drive/root -> leaf) BEFORE touching deeper child components or calling `fs::canonicalize`,
 /// blocking Windows SMB Net-NTLMv2 leaks via intermediate directory junctions.
 pub(crate) fn reject_symlink_ancestors(path: &Path) -> Result<(), String> {
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err("Parent directory traversal ('..') is not allowed".to_string());
+    }
     let mut current = PathBuf::new();
     for comp in path.components() {
         current.push(comp.as_os_str());
         match comp {
             Component::Prefix(_) | Component::RootDir | Component::CurDir => continue,
-            Component::Normal(_) | Component::ParentDir => match fs::symlink_metadata(&current) {
+            Component::ParentDir => {
+                return Err("Parent directory traversal ('..') is not allowed".to_string());
+            }
+            Component::Normal(_) => match fs::symlink_metadata(&current) {
                 Ok(sym) => {
                     if sym.file_type().is_symlink() {
                         return Err("Symbolic links and junctions are not allowed".to_string());
@@ -419,12 +425,24 @@ pub fn ensure_inside(base: &Path, target: &Path) -> Result<PathBuf, String> {
 /// Ensures `candidate` neither sits inside Audify's `user_dir` (which holds `samples.db`,
 /// `backups/`, and WebView cache) nor is a parent directory containing `user_dir`.
 pub fn ensure_not_inside_user_dir(user_dir: &Path, candidate: &Path) -> Result<(), String> {
+    let raw_cand = candidate.to_string_lossy();
+    if is_unc_or_network_path(&raw_cand)
+        || has_ntfs_ads_colon(&raw_cand)
+        || super::has_parent_dir_traversal(&raw_cand)
+    {
+        return Err("Unsafe or network path rejected".to_string());
+    }
+    reject_symlink_ancestors(candidate)?;
+
     let user_canon = fs::canonicalize(user_dir)
         .map(|p| strip_verbatim_prefix(&p))
         .unwrap_or_else(|_| user_dir.to_path_buf());
     let cand_canon = fs::canonicalize(candidate)
         .map(|p| strip_verbatim_prefix(&p))
         .unwrap_or_else(|_| candidate.to_path_buf());
+    if is_unc_or_network_path(&cand_canon.to_string_lossy()) {
+        return Err("Network/UNC path rejected".to_string());
+    }
 
     let user_norm = normalize_clean_path(&user_canon.to_string_lossy());
     let cand_norm = normalize_clean_path(&cand_canon.to_string_lossy());

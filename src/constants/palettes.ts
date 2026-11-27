@@ -1,5 +1,4 @@
 import { AccentColorOption } from "../types";
-import { generateDeterministicFullSpectrumColor } from "../utils/taxonomyColor";
 
 export const ACCENT_COLORS: AccentColorOption[] = [
   {
@@ -79,8 +78,3 @@ export const STUDIO_COLOR_PALETTE: string[] = [
   "#F87171", "#E879F9", "#C084FC", "#818CF8", "#60A5FA", "#0284C7",
   "#0D9488", "#059669",
 ];
-
-export function deterministicColorForName(name: string): string {
-  if (!name || !name.trim()) return FAMILY_COLOR_PALETTE[0];
-  return generateDeterministicFullSpectrumColor(name);
-}

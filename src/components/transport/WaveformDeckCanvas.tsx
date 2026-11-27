@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef } from "react";
+import React, { Suspense, useCallback, useEffect, useRef } from "react";
 import { subscribePlayhead } from "../../store/playheadClock";
 import { useSampleStore } from "../../store/useSampleStore";
 import { useDevicePixelRatio } from "../../utils/devicePixelRatio";
@@ -25,7 +25,11 @@ import {
   DEFAULT_WAVEFORM_VIEWPORT,
   WaveformViewport,
 } from "./waveformViewport";
-import { WaveformSimilarityDropOverlay } from "./WaveformSimilarityDropOverlay";
+const LazyWaveformSimilarityDropOverlay = React.lazy(() =>
+  import("./WaveformSimilarityDropOverlay").then((m) => ({
+    default: m.WaveformSimilarityDropOverlay,
+  }))
+);
 
 export const WaveformDeckCanvas: React.FC = React.memo(() => {
   const selectedSample = useSampleStore((s) => s.selectedSample);
@@ -573,7 +577,9 @@ export const WaveformDeckCanvas: React.FC = React.memo(() => {
           className="absolute inset-0 w-full h-full block"
         />
       </div>
-      <WaveformSimilarityDropOverlay panelRef={deckPanelRef} />
+      <Suspense fallback={null}>
+        <LazyWaveformSimilarityDropOverlay panelRef={deckPanelRef} />
+      </Suspense>
     </div>
   );
 });

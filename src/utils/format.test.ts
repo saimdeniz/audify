@@ -345,7 +345,7 @@ describe("getCanvasThemePalette pure JS theme tokens", () => {
   it("resolves Dark, Light, Contrast, and Mica canvas palettes cleanly without DOM style lookups", () => {
     const dark = getCanvasThemePalette("dark:false:#F59E0B");
     expect(dark.surface2).toBe("#18181C");
-    expect(dark.okOn).toBe("#FFFFFF");
+    expect(dark.okOn).toBe("#0D0D0F");
     expect(dark.accentOn).toBe("#0D0D0F");
 
     const light = getCanvasThemePalette("light:false:#2563EB");

@@ -63,7 +63,7 @@ export const LibrariesTab: React.FC = () => {
 
       {/* Active Libraries Table Card (sizes naturally to its entries) */}
       <div className="bg-surface-1 border border-line rounded-md max-h-[420px] flex flex-col min-h-0 overflow-hidden shrink-0">
-        <div className="h-[26px] px-3 bg-surface-header border-b border-line grid grid-cols-[1fr_80px_172px_150px] items-center gap-3 text-[9.5px] font-mono font-semibold text-fg-3 uppercase tracking-wider shrink-0">
+        <div className="hidden md:grid h-[26px] px-3 bg-surface-header border-b border-line grid-cols-[minmax(0,1fr)_72px_172px_150px] items-center gap-3 text-[9.5px] font-mono font-semibold text-fg-3 uppercase tracking-wider shrink-0">
           <span>LIBRARY</span>
           <span className="text-right">SAMPLES</span>
           <span>VISIBILITY</span>
@@ -111,16 +111,19 @@ export const LibrariesTab: React.FC = () => {
                       onCancel={() => setConfirmRemoveLibId(null)}
                     />
                   ) : (
-                    <div className="grid grid-cols-[1fr_80px_172px_150px] items-center gap-3">
+                    <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_72px_172px_150px] items-center gap-2 md:gap-3">
                       <div className="min-w-0">
                         <div className="flex items-center space-x-2 min-w-0">
                           <Folder className="w-3.5 h-3.5 text-accent-fg shrink-0" />
                           <span className="font-semibold text-[12px] text-fg truncate">
                             {lib.name}
                           </span>
+                          <span className="md:hidden font-mono tabular-nums text-[10px] text-fg-3 shrink-0">
+                            ({lib.sample_count.toLocaleString()})
+                          </span>
                           {lib.is_read_only && (
                             <span
-                              className="text-[9px] font-mono px-1.5 py-0.2 rounded-xs bg-accent-soft border border-accent/45 text-accent-fg font-semibold shrink-0"
+                              className="text-[9.5px] font-mono px-1.5 py-0.2 rounded-xs bg-accent-soft border border-accent/45 text-accent-fg font-semibold shrink-0"
                               title="Protected Read-Only Vault: F2 Rename and Trash are blocked for this library"
                             >
                               PROTECTED
@@ -135,10 +138,11 @@ export const LibrariesTab: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="text-right font-mono tabular-nums text-[11px] font-semibold text-fg-2">
+                      <div className="hidden md:block text-right font-mono tabular-nums text-[11px] font-semibold text-fg-2">
                         {lib.sample_count.toLocaleString()}
                       </div>
 
+                      <div className="flex flex-wrap items-center justify-between gap-2 md:contents">
                       <div className="flex items-center p-0.5 bg-surface-2 rounded-xs border border-line w-fit">
                         <button
                           type="button"
@@ -238,6 +242,7 @@ export const LibrariesTab: React.FC = () => {
                         >
                           <Trash2 className="w-3 h-3" />
                         </button>
+                      </div>
                       </div>
                     </div>
                   )}

@@ -23,9 +23,7 @@ export function getClipActiveFxBadges(
   }
   if (Math.abs(clip.gainDb) >= 0.05) {
     const rounded = Math.round(clip.gainDb * 10) / 10;
-    const text = Number.isInteger(rounded)
-      ? `${rounded > 0 ? "+" : ""}${rounded}dB`
-      : `${rounded > 0 ? "+" : ""}${rounded.toFixed(1)}dB`;
+    const text = `${rounded > 0 ? "+" : ""}${rounded.toFixed(1)}dB`;
     badges.push({ kind: "gain", label: text });
   }
   if (Math.abs(clip.pitchSemitones) >= 0.01) {
@@ -38,6 +36,23 @@ export function getClipActiveFxBadges(
     badges.push({ kind: "reverse", label: "REV" });
   }
   return badges;
+}
+
+/**
+ * Widest canonical label per FX badge kind so pill frames stay locked to a
+ * fixed width and never jitter horizontally while dragging Gain or stepping Pitch.
+ */
+export function getFxBadgeWidthTemplate(badge: ClipFxBadge): string {
+  switch (badge.kind) {
+    case "gain":
+      return "-24.0dB";
+    case "pitch":
+      return badge.label.endsWith(" T") ? "+24st T" : "+24st";
+    case "reverse":
+      return "REV";
+    case "missing":
+      return "MISSING";
+  }
 }
 
 function drawRoundedRectPath(
@@ -226,16 +241,22 @@ export function drawClipHeaderAndFxBadges(
     const iconGap = 2.5;
     const padX = 3.5;
     const pillGap = 3;
-    const pillWidths = badges.map(
-      (b) => Math.ceil(ctx.measureText(b.label).width + iconW + iconGap + padX * 2)
-    );
+    const pillWidths = badges.map((b) => {
+      const textW = Math.max(
+        ctx.measureText(getFxBadgeWidthTemplate(b)).width,
+        ctx.measureText(b.label).width
+      );
+      return Math.ceil(textW + iconW + iconGap + padX * 2);
+    });
     const totalFullW =
       pillWidths.reduce((sum, w) => sum + w, 0) +
       pillGap * Math.max(0, badges.length - 1);
 
     if (clipW >= totalFullW + 38) {
-      // Full right-pinned FX pills with icons & values
+      // Full right-pinned fixed-width FX pills with icons & right-anchored tabular values
       let cursorX = clipLeft + clipW - 3.5;
+      ctx.save();
+      ctx.textAlign = "right";
       for (let i = badges.length - 1; i >= 0; i--) {
         const badge = badges[i];
         const w = pillWidths[i];
@@ -251,13 +272,10 @@ export function drawClipHeaderAndFxBadges(
         const glyphColor = isWarn ? warnBorder : accentColor;
         drawFxBadgeIcon(ctx, badge.kind, cursorX + padX, pillCenterY, glyphColor);
         ctx.fillStyle = fgColor;
-        ctx.fillText(
-          badge.label,
-          cursorX + padX + iconW + iconGap,
-          pillCenterY + 2.9
-        );
+        ctx.fillText(badge.label, cursorX + w - padX, pillCenterY + 2.9);
         cursorX -= pillGap;
       }
+      ctx.restore();
       rightReservedW = totalFullW + 7;
     } else {
       // Compact "FX" indicator pill pinned to the right edge

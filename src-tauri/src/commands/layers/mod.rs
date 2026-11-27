@@ -12,8 +12,9 @@ pub(super) use super::with_read_conn;
 use crate::audio::LanePeaksPreview;
 use crate::audio_engine::AudioSyncPayload;
 use crate::security::{
-    collect_profile_layer_dirs, has_ntfs_ads_colon, is_unc_or_network_path,
-    reject_symlink_ancestors, strip_verbatim_prefix, validate_safe_audio_stem,
+    collect_profile_layer_dirs, has_ntfs_ads_colon, has_parent_dir_traversal,
+    is_unc_or_network_path, reject_symlink_ancestors, strip_verbatim_prefix,
+    validate_safe_audio_stem,
 };
 use rusqlite::Connection;
 use serde::Serialize;
@@ -140,19 +141,24 @@ impl LayerScopeError {
     }
 }
 
-fn missing_layer_has_online_authorized_ancestor(
-    conn: &Connection,
-    user_dir: &Path,
-    pb: &Path,
-) -> bool {
-    let auth_canons: Vec<PathBuf> = collect_authorized_layer_dirs(conn, user_dir)
-        .into_iter()
+pub(super) fn is_restore_parent_authorized(target_parent: &Path, auth_dirs: &[PathBuf]) -> bool {
+    let raw = target_parent.to_string_lossy();
+    if raw.trim().is_empty()
+        || is_unc_or_network_path(&raw)
+        || has_ntfs_ads_colon(&raw)
+        || has_parent_dir_traversal(&raw)
+        || reject_symlink_ancestors(target_parent).is_err()
+    {
+        return false;
+    }
+    let auth_canons: Vec<PathBuf> = auth_dirs
+        .iter()
         .filter_map(|d| d.canonicalize().ok())
         .collect();
     if auth_canons.is_empty() {
         return false;
     }
-    let mut cursor = pb.parent();
+    let mut cursor = Some(target_parent);
     while let Some(dir) = cursor {
         match fs::symlink_metadata(dir) {
             Ok(sym) => {
@@ -171,6 +177,46 @@ fn missing_layer_has_online_authorized_ancestor(
         }
     }
     false
+}
+
+pub(crate) fn cleanup_quarantined_layer_file_if_present(
+    user_dir: &Path,
+    raw_trash_path: Option<&str>,
+) {
+    let Some(raw) = raw_trash_path.map(str::trim).filter(|s| !s.is_empty()) else {
+        return;
+    };
+    if is_unc_or_network_path(raw) || has_ntfs_ads_colon(raw) || has_parent_dir_traversal(raw) {
+        return;
+    }
+    let pb = PathBuf::from(raw);
+    if reject_symlink_ancestors(&pb).is_err() {
+        return;
+    }
+    let Ok(trash_canon) = resolve_layer_trash_dir(user_dir).canonicalize() else {
+        return;
+    };
+    if let Ok(sym) = fs::symlink_metadata(&pb) {
+        if !sym.file_type().is_symlink() && sym.file_type().is_file() {
+            if let Ok(canon) = pb.canonicalize() {
+                if canon.starts_with(&trash_canon) {
+                    let _ = fs::remove_file(&pb);
+                }
+            }
+        }
+    }
+}
+
+fn missing_layer_has_online_authorized_ancestor(
+    conn: &Connection,
+    user_dir: &Path,
+    pb: &Path,
+) -> bool {
+    let Some(parent) = pb.parent() else {
+        return false;
+    };
+    let auth_dirs = collect_authorized_layer_dirs(conn, user_dir);
+    is_restore_parent_authorized(parent, &auth_dirs)
 }
 
 pub(super) fn ensure_existing_layer_in_scope_detailed(

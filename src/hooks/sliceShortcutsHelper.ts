@@ -8,6 +8,10 @@ import {
   matchesShortcut,
 } from "../utils/shortcuts";
 import { isSlicePreviewSample } from "../utils/slicePreview";
+import {
+  isLayersSavedViewActive,
+  isSliceTableViewActive,
+} from "../utils/viewModes";
 
 function resolveTargetSliceIds(state: SampleStoreState): number[] {
   if (state.selectedSliceIds.length > 0) return state.selectedSliceIds;
@@ -16,10 +20,7 @@ function resolveTargetSliceIds(state: SampleStoreState): number[] {
 }
 
 function isSliceTableShowing(state: SampleStoreState): boolean {
-  return (
-    state.slicesFilterActive ||
-    (state.trashFilterActive && state.trashViewTab === "slices")
-  );
+  return isSliceTableViewActive(state);
 }
 
 function isSliceTrashActive(state: SampleStoreState): boolean {
@@ -304,6 +305,9 @@ export function handleF2RenameShortcut(
   e: KeyboardEvent,
   state: SampleStoreState
 ): boolean {
+  if (isLayersSavedViewActive(state) || isSliceTableViewActive(state)) {
+    return false;
+  }
   if (
     e.key !== "F2" ||
     e.ctrlKey ||
@@ -368,7 +372,13 @@ export function handleRapidTaxonomyPickerShortcut(
   e: KeyboardEvent,
   state: SampleStoreState
 ): boolean {
-  if (state.slicesFilterActive || state.trashFilterActive) return false;
+  if (
+    isSliceTableViewActive(state) ||
+    isLayersSavedViewActive(state) ||
+    state.trashFilterActive
+  ) {
+    return false;
+  }
   if (state.selectedSampleIds.length === 0 && !state.selectedSample) {
     return false;
   }

@@ -1,12 +1,13 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { FolderTree, List, Pencil, Plus, Trash2, X } from "lucide-react";
-import {
-  deterministicColorForName,
-  FAMILY_COLOR_PALETTE,
-} from "../../constants/palettes";
+import { FolderTree, List, Pencil, Plus, X } from "lucide-react";
+import { FAMILY_COLOR_PALETTE } from "../../constants/palettes";
+import { Z_INDEX } from "../../constants/zIndex";
 import type { TagFacet, TaxonomyDomain } from "../../types";
+import { useDialogFocusTrap } from "../../utils/modalFocus";
+import { deterministicColorForName } from "../../utils/taxonomyColor";
 import { ColorPickerPopover } from "../ColorPickerPopover";
+import { InlineConfirmDeleteButton } from "../common/InlineConfirmDeleteButton";
 
 interface CustomFacetPopoverProps {
   domain: TaxonomyDomain;
@@ -49,6 +50,7 @@ export const CustomFacetPopover: React.FC<CustomFacetPopoverProps> = ({
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  useDialogFocusTrap(open, dialogRef);
 
   const openPopover = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -102,9 +104,11 @@ export const CustomFacetPopover: React.FC<CustomFacetPopoverProps> = ({
     };
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        if (document.querySelector("[data-color-picker-portal]")) return;
         e.preventDefault();
         e.stopPropagation();
         setOpen(false);
+        triggerRef.current?.focus();
       }
     };
     window.addEventListener("mousedown", onPointerDown, true);
@@ -199,9 +203,17 @@ export const CustomFacetPopover: React.FC<CustomFacetPopoverProps> = ({
             role="dialog"
             aria-modal="true"
             aria-label={isEdit ? "Edit Custom Facet" : "New Custom Facet"}
-            style={{ top: `${coords.top}px`, left: `${coords.left}px` }}
+            tabIndex={-1}
+            data-popover-portal="true"
+            data-modal-portal="true"
+            data-mica-overlay="true"
+            style={{
+              top: `${coords.top}px`,
+              left: `${coords.left}px`,
+              zIndex: Z_INDEX.popoverFloating,
+            }}
             onClick={(e) => e.stopPropagation()}
-            className="fixed z-[120] w-[264px] bg-surface-1 border border-line-strong rounded-md shadow-xl p-2.5 space-y-2.5 text-fg"
+            className="fixed w-[264px] max-w-[calc(100vw-16px)] bg-surface-1 audify-overlay-surface border border-line-strong rounded-md shadow-xl p-2.5 space-y-2.5 text-fg"
           >
             <div className="flex items-center justify-between border-b border-line pb-1.5">
               <span className="font-mono text-[9.5px] font-semibold uppercase tracking-wider text-accent-fg">
@@ -294,38 +306,20 @@ export const CustomFacetPopover: React.FC<CustomFacetPopoverProps> = ({
 
               <div className="flex items-center justify-between gap-1.5 pt-1 border-t border-line-subtle">
                 {isEdit && onDelete ? (
-                  confirmDelete ? (
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        disabled={submitting}
-                        onClick={() => void handleDelete()}
-                        className="h-[24px] px-2 rounded-xs bg-danger text-accent-on font-mono text-[9.5px] font-semibold cursor-pointer disabled:opacity-50"
-                        title={`Delete facet — items move safely to ${fallbackLabel}`}
-                      >
-                        Confirm
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDelete(false)}
-                        className="h-[24px] px-1.5 rounded-xs bg-surface-2 border border-line text-[9.5px] font-mono text-fg-2 hover:text-fg cursor-pointer"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setConfirmDelete(true)}
-                      className="h-[24px] px-1.5 rounded-xs bg-surface-2 hover:bg-danger/10 border border-line hover:border-danger/40 text-fg-3 hover:text-danger inline-flex items-center gap-1 text-[9.5px] font-mono cursor-pointer transition-colors"
-                      title={`Delete custom facet (items move safely to ${fallbackLabel})`}
-                    >
-                      <Trash2 className="w-3 h-3" />
-                      <span>Delete</span>
-                    </button>
-                  )
+                  <InlineConfirmDeleteButton
+                    isConfirming={confirmDelete}
+                    onRequest={() => setConfirmDelete(true)}
+                    onConfirm={() => void handleDelete()}
+                    onCancel={() => setConfirmDelete(false)}
+                    disabled={submitting}
+                    idleLabel="Delete"
+                    confirmLabel="Confirm"
+                    cancelLabel="Cancel"
+                    deleteTitle={`Delete custom facet (items move safely to ${fallbackLabel})`}
+                    confirmTitle={`Delete facet — items move safely to ${fallbackLabel}`}
+                  />
                 ) : (
-                  <span className="text-[9px] font-mono text-fg-3">
+                  <span className="text-[9.5px] font-mono text-fg-3">
                     {allowNesting ? "Up to 3 levels" : "Single level"}
                   </span>
                 )}

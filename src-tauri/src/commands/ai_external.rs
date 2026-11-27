@@ -214,7 +214,12 @@ fn write_temp_probe_file(
     bytes: &[u8],
 ) -> Result<TempProbeFile, String> {
     let dir = user_dir.join("cache").join("sim_probe");
-    fs::create_dir_all(&dir).map_err(|e| format!("Failed creating similarity probe dir: {}", e))?;
+    fs::create_dir_all(&dir).map_err(|e| {
+        format!(
+            "Failed creating similarity probe dir: {}",
+            sanitize_err(user_dir, &e.to_string())
+        )
+    })?;
     cleanup_stale_probe_files(&dir);
 
     let seq = EXTERNAL_PROBE_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -223,12 +228,24 @@ fn write_temp_probe_file(
         .map(|d| d.as_millis())
         .unwrap_or(0);
     let probe_path = dir.join(format!("probe_{}_{}_{}.{}", std::process::id(), ts, seq, ext));
-    let mut file = fs::File::create(&probe_path)
-        .map_err(|e| format!("Failed staging similarity probe file: {}", e))?;
-    file.write_all(bytes)
-        .map_err(|e| format!("Failed writing similarity probe audio: {}", e))?;
-    file.flush()
-        .map_err(|e| format!("Failed flushing similarity probe audio: {}", e))?;
+    let mut file = fs::File::create(&probe_path).map_err(|e| {
+        format!(
+            "Failed staging similarity probe file: {}",
+            sanitize_err(user_dir, &e.to_string())
+        )
+    })?;
+    file.write_all(bytes).map_err(|e| {
+        format!(
+            "Failed writing similarity probe audio: {}",
+            sanitize_err(user_dir, &e.to_string())
+        )
+    })?;
+    file.flush().map_err(|e| {
+        format!(
+            "Failed flushing similarity probe audio: {}",
+            sanitize_err(user_dir, &e.to_string())
+        )
+    })?;
     Ok(TempProbeFile(probe_path))
 }
 

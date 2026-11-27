@@ -3,7 +3,6 @@ import {
   LayerHistoryEntry,
   LayerRecipe,
   LayerSortKey,
-  LayerTopDeckView,
   LayerTrashSummary,
   LayersWorkspaceTab,
   PreparedLayerDragResult,
@@ -13,9 +12,16 @@ import {
   createEmptyLayerRecipe,
   isLayerDraftSample,
   layerEntryToPreviewSample,
+  MAX_LAYER_CLIPS,
+  setLayerDraftPreviewPending,
 } from "../../utils/layerHelpers";
 import { clearSmartSearchCache } from "../../utils/smartSearch";
-import { AUDIFY_STORAGE_KEYS, persistNavigationFilters, safeSetItem } from "../storageHelpers";
+import { resetLayerDraftPlayheadClock } from "../playheadClock";
+import {
+  AUDIFY_STORAGE_KEYS,
+  persistNavigationFilters,
+  safeSetItem,
+} from "../storageHelpers";
 import type { StoreSliceContext } from "../types";
 
 export interface LayerSliceActions {
@@ -23,9 +29,12 @@ export interface LayerSliceActions {
   pickCustomLayerExportPath: () => Promise<void>;
   openLayersFolder: () => Promise<void>;
   setAutoSaveLayerOnNleDrag: (enabled: boolean) => void;
-  setLayerTopDeckView: (view: LayerTopDeckView) => void;
 
-  setLayersFilterActive: (active: boolean, initialTab?: LayersWorkspaceTab) => void;
+  setLayersFilterActive: (
+    active: boolean,
+    initialTab?: LayersWorkspaceTab,
+    opts?: { skipAutoRender?: boolean }
+  ) => void;
   setLayersWorkspaceTab: (tab: LayersWorkspaceTab) => void;
   setLayersSplitLibraryOpen: (open: boolean) => void;
   setLayerHideMissing: (hide: boolean) => void;
@@ -138,13 +147,11 @@ export function createLayerSlice(ctx: StoreSliceContext): LayerSliceActions {
       void get().persistActiveProfileSettings();
     },
 
-    setLayerTopDeckView: (layerTopDeckView: LayerTopDeckView) => {
-      safeSetItem(AUDIFY_STORAGE_KEYS.layerTopDeckView, layerTopDeckView);
-      set({ layerTopDeckView });
-      void get().persistActiveProfileSettings();
-    },
-
-    setLayersFilterActive: (active: boolean, initialTab?: LayersWorkspaceTab) => {
+    setLayersFilterActive: (
+      active: boolean,
+      initialTab?: LayersWorkspaceTab,
+      opts?: { skipAutoRender?: boolean }
+    ) => {
       if (active) {
         const st = get();
         const nextTab = initialTab ?? st.layersWorkspaceTab;
@@ -183,8 +190,10 @@ export function createLayerSlice(ctx: StoreSliceContext): LayerSliceActions {
         // Reload active mix into WASAPI whenever returning to Editor while idle (never interrupt live playback)
         const after = get();
         if (
+          !opts?.skipAutoRender &&
           nextTab === "editor" &&
           after.layerDraftRecipe.clips.length > 0 &&
+          after.layerDraftMissingClipIds.length === 0 &&
           !after.isPlaying &&
           (!after.layerDraftPreview || !isLayerDraftSample(after.selectedSample))
         ) {
@@ -212,6 +221,7 @@ export function createLayerSlice(ctx: StoreSliceContext): LayerSliceActions {
         const st = get();
         if (
           st.layerDraftRecipe.clips.length > 0 &&
+          st.layerDraftMissingClipIds.length === 0 &&
           !st.isPlaying &&
           (!st.layerDraftPreview || !isLayerDraftSample(st.selectedSample))
         ) {
@@ -313,6 +323,13 @@ export function createLayerSlice(ctx: StoreSliceContext): LayerSliceActions {
     },
 
     trashLayerFiles: async (layerIds: number[]) => {
+      if (!get().enableAdvancedFileOps) {
+        emitNotice(
+          "Safe Read-Only Mode is active — enable Write Mode in Settings → Advanced to delete layers",
+          "info"
+        );
+        return;
+      }
       const actions = await loadActions();
       await actions?.trashLayerFiles(layerIds);
     },
@@ -341,6 +358,10 @@ export function createLayerSlice(ctx: StoreSliceContext): LayerSliceActions {
     },
 
     resetLayerDraft: () => {
+      cachedActions?.cancelPendingPreview();
+      setLayerDraftPreviewPending(false);
+      const wasDraftSelected = isLayerDraftSample(get().selectedSample);
+      resetLayerDraftPlayheadClock(0);
       set({
         layerDraftName: "Untitled_Layer",
         layerDraftEditingId: null,
@@ -351,7 +372,14 @@ export function createLayerSlice(ctx: StoreSliceContext): LayerSliceActions {
         layerDraftUndoStack: [],
         layerDraftRedoStack: [],
         layerDraftPreview: null,
+        isRenderingLayerPreview: false,
+        ...(wasDraftSelected
+          ? { isPlaying: false, durationSec: 0, currentTimeSec: 0 }
+          : {}),
       });
+      if (wasDraftSelected) {
+        void loadActions().then((a) => a?.unloadDraftAudioIfActive());
+      }
     },
 
     setLayerDraftName: (layerDraftName: string) => {
@@ -370,6 +398,13 @@ export function createLayerSlice(ctx: StoreSliceContext): LayerSliceActions {
       nextRecipe: LayerRecipe,
       opts?: { pushUndo?: boolean; autoRender?: boolean; autoplay?: boolean }
     ) => {
+      if (nextRecipe.clips.length > MAX_LAYER_CLIPS) {
+        emitNotice(
+          `Layer mix reached the maximum limit of ${MAX_LAYER_CLIPS} clips`,
+          "error"
+        );
+        return;
+      }
       const pushUndo = opts?.pushUndo !== false;
       const prev = get().layerDraftRecipe;
       const undoStack = pushUndo
@@ -382,6 +417,7 @@ export function createLayerSlice(ctx: StoreSliceContext): LayerSliceActions {
         ...(pushUndo ? { layerDraftRedoStack: [] } : {}),
       });
       if (opts?.autoRender !== false) {
+        setLayerDraftPreviewPending(true);
         void loadActions().then((a) =>
           a?.schedulePreviewRender(
             opts?.autoplay !== undefined ? { autoplay: opts.autoplay } : undefined
@@ -400,6 +436,7 @@ export function createLayerSlice(ctx: StoreSliceContext): LayerSliceActions {
         layerDraftUndoStack: st.layerDraftUndoStack.slice(0, -1),
         layerDraftRedoStack: [...st.layerDraftRedoStack.slice(-59), st.layerDraftRecipe],
       });
+      setLayerDraftPreviewPending(true);
       void loadActions().then((a) => a?.schedulePreviewRender());
     },
 
@@ -413,6 +450,7 @@ export function createLayerSlice(ctx: StoreSliceContext): LayerSliceActions {
         layerDraftRedoStack: st.layerDraftRedoStack.slice(0, -1),
         layerDraftUndoStack: [...st.layerDraftUndoStack.slice(-59), st.layerDraftRecipe],
       });
+      setLayerDraftPreviewPending(true);
       void loadActions().then((a) => a?.schedulePreviewRender());
     },
 

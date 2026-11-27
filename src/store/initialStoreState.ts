@@ -92,7 +92,6 @@ export function createInitialStoreState(): SampleStoreDataState {
     sliceOpRedoStack: [],
     customLayerExportPath: boot.customLayerExportPath,
     autoSaveLayerOnNleDrag: boot.autoSaveLayerOnNleDrag,
-    layerTopDeckView: boot.layerTopDeckView,
     layersFilterActive: false,
     layersWorkspaceTab: "saved",
     layersSplitLibraryOpen: true,

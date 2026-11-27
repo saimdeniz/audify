@@ -202,4 +202,32 @@ describe("navigationHistory", () => {
     expect(useSampleStore.getState().selectedSample?.id).toBe(102);
     expect(useSampleStore.getState().isPlaying).toBe(false);
   });
+
+  it("preserves Forward stack when a deleted collection is pruned on Back and never interrupts live playback returning to Layers Editor", () => {
+    const renderSpy = vi.fn(async () => {});
+    useSampleStore.setState({
+      collections: [
+        { id: 7, name: "Temp", color: "#38BDF8", icon: "folder", sample_count: 1, created_at: "" },
+      ],
+      renderLayerDraftPreview: renderSpy,
+    });
+    // Navigate to collection 7 -> then to Layers Editor -> then delete collection 7
+    useSampleStore.setState({ selectedCollectionId: 7 });
+    useSampleStore.setState({
+      selectedCollectionId: null,
+      layersFilterActive: true,
+      layersWorkspaceTab: "editor",
+    });
+    useSampleStore.setState({ collections: [], isPlaying: true });
+
+    // Back prunes deleted collection 7 to null AND must keep Forward stack intact after subsequent search update
+    expect(navigateHistoryBack()).toBe(true);
+    expect(useSampleStore.getState().selectedCollectionId).toBeNull();
+    useSampleStore.setState({ searchQuery: "boom" });
+    expect(getNavigationHistoryFlags().canGoForward).toBe(true);
+
+    // Forward back to Layers Editor while isPlaying=true must NOT invoke renderLayerDraftPreview
+    expect(navigateHistoryForward()).toBe(true);
+    expect(renderSpy).not.toHaveBeenCalled();
+  });
 });

@@ -4,11 +4,13 @@ import {
   hash2,
   hexToRgb,
   mixRgb,
+  Rgb,
+} from "./blueprintGrid";
+import {
   paintGridBox,
   paintGridCircleRing,
   paintGridLine,
-  Rgb,
-} from "./blueprintGrid";
+} from "./blueprintShapes";
 import { AsciiRenderParams } from "./shared";
 
 export function renderStudioPreset(params: AsciiRenderParams): void {

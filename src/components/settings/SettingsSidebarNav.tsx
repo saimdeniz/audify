@@ -104,6 +104,7 @@ export const SettingsSidebarNav: React.FC<SettingsSidebarNavProps> = ({
               <button
                 key={tab.id}
                 type="button"
+                aria-current={active ? "page" : undefined}
                 onClick={() => onSelectTab(tab.id)}
                 className={`w-full h-[30px] px-2.5 rounded-sm text-left text-[12px] flex items-center justify-between border-l-2 whitespace-nowrap transition-colors ${
                   active

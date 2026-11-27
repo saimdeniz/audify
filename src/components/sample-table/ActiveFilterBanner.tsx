@@ -1,30 +1,18 @@
 import React, { Suspense, lazy, useMemo } from "react";
-import {
-  CopyCheck,
-  FileCheck2,
-  Folder,
-  History,
-  Inbox,
-  Layers,
-  LayoutGrid,
-  Loader2,
-  Scissors,
-  Star,
-  Trash2,
-  X,
-  Zap,
-} from "lucide-react";
+import { X } from "lucide-react";
 import { useSampleStore } from "../../store/useSampleStore";
 import {
   folderNameFromPath,
-  formatBytesCompact,
   formatSampleRateKhz,
 } from "../../utils/format";
 import {
   extractSearchPrefixValues,
   removeSearchPrefixTokens,
 } from "../../utils/searchPrefixHelpers";
-import { formatTrashOpLabel } from "../../utils/trashStatusFormat";
+import {
+  ActiveFilterChip,
+  ActiveFilterPrimaryChips,
+} from "./ActiveFilterPrimaryChips";
 import { ActiveTaxonomyChips } from "./ActiveTaxonomyChips";
 
 export {
@@ -234,315 +222,79 @@ export const ActiveFilterBanner: React.FC = () => {
 
       {hasOtherChip && (
         <div className="px-2 py-1 border-b border-line bg-surface-1 flex items-center gap-1.5 flex-wrap shrink-0">
-          {folderFilter && (
-            <span
-              className="inline-flex items-center gap-1.5 h-[20px] pl-1.5 pr-1 rounded-[3px] border border-accent/50 bg-accent-soft text-accent-fg text-[11px]"
-              title={`Folder: ${folderFilter}`}
-            >
-              <Folder className="w-3 h-3 shrink-0" />
-              <span className="truncate max-w-[160px]">{folderDisplayName}</span>
-              <button
-                type="button"
-                onClick={() => setFolderFilter(null)}
-                className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-fg hover:bg-surface-3"
-                title="Remove folder filter"
-              >
-                <X className="w-2.5 h-2.5" />
-              </button>
-            </span>
-          )}
-
-          {activeCollection && (
-            <span
-              className="inline-flex items-center gap-1.5 h-[20px] pl-1.5 pr-1 rounded-[3px] border border-accent/50 bg-accent-soft text-accent-fg text-[11px]"
-              title={
-                activeCollection.smart_query
-                  ? `Smart Collection: ${activeCollection.smart_query}`
-                  : undefined
-              }
-            >
-              {activeCollection.smart_query ? (
-                <Zap className="w-3 h-3 shrink-0" />
-              ) : (
-                <LayoutGrid className="w-3 h-3 shrink-0" />
-              )}
-              <span className="truncate max-w-[150px]">
-                {activeCollection.name}
-              </span>
-              <button
-                type="button"
-                onClick={() => setCollectionFilter(null)}
-                className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-fg hover:bg-surface-3"
-                title="Remove collection filter"
-              >
-                <X className="w-2.5 h-2.5" />
-              </button>
-            </span>
-          )}
-
-          {activeLicenseGroup && (
-            <span className="inline-flex items-center gap-1.5 h-[20px] pl-1.5 pr-1 rounded-[3px] border border-accent/50 bg-accent-soft text-accent-fg text-[11px]">
-              <FileCheck2 className="w-3 h-3 shrink-0" />
-              <span className="truncate max-w-[150px]">
-                {activeLicenseGroup.name}
-              </span>
-              <button
-                type="button"
-                onClick={() => setLicenseGroupFilter(null, null)}
-                className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-fg hover:bg-surface-3"
-                title="Remove license filter"
-              >
-                <X className="w-2.5 h-2.5" />
-              </button>
-            </span>
-          )}
-
-          {favoriteOnly && (
-            <span className="inline-flex items-center gap-1.5 h-[20px] pl-1.5 pr-1 rounded-[3px] border border-accent/50 bg-accent-soft text-accent-fg text-[11px]">
-              <Star className="w-3 h-3 fill-current shrink-0" />
-              <span>
-                {favoritesViewTab === "slices"
-                  ? "Favorites · Slices"
-                  : favoritesViewTab === "layers"
-                  ? "Favorites · Layers"
-                  : "Favorites"}
-              </span>
-              <button
-                type="button"
-                onClick={() => setFavoriteOnly(false)}
-                className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-fg hover:bg-surface-3"
-                title="Remove Favorites filter"
-              >
-                <X className="w-2.5 h-2.5" />
-              </button>
-            </span>
-          )}
-
-          {recentOnly && (
-            <span className="inline-flex items-center gap-1.5 h-[20px] pl-1.5 pr-1 rounded-[3px] border border-accent/50 bg-accent-soft text-accent-fg text-[11px]">
-              <History className="w-3 h-3 shrink-0" />
-              <span>Recent</span>
-              <button
-                type="button"
-                onClick={() => setRecentOnly(false)}
-                className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-fg hover:bg-surface-3"
-                title="Remove Recent filter"
-              >
-                <X className="w-2.5 h-2.5" />
-              </button>
-            </span>
-          )}
-
-          {binFilterActive && (
-            <span className="inline-flex items-center gap-1.5 h-[20px] pl-1.5 pr-1 rounded-[3px] border border-accent/50 bg-accent-soft text-accent-fg text-[11px]">
-              <Inbox className="w-3 h-3 shrink-0" />
-              <span>Session Bin</span>
-              <button
-                type="button"
-                onClick={() => setBinFilterActive(false)}
-                className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-fg hover:bg-surface-3"
-                title="Remove Session Bin filter"
-              >
-                <X className="w-2.5 h-2.5" />
-              </button>
-            </span>
-          )}
-
-          {trashFilterActive ? (
-            <span
-              className="inline-flex items-center gap-1.5 h-[20px] pl-1.5 pr-1 rounded-[3px] border border-accent/50 bg-accent-soft text-accent-fg text-[11px]"
-              title="Trash — Favorites, Tags, Genres & Collections are preserved until emptied"
-            >
-              {trashOpStatus ? (
-                <Loader2 className="w-3 h-3 animate-spin shrink-0" />
-              ) : (
-                <Trash2 className="w-3 h-3 shrink-0" />
-              )}
-              <span>
-                {trashOpStatus
-                  ? `Trash · ${formatTrashOpLabel(trashOpStatus)}`
-                  : trashViewTab === "slices"
-                    ? `Trash · Slices · ${trashedSliceCount.toLocaleString()} ${
-                        trashedSliceCount === 1 ? "slice" : "slices"
-                      } · ${formatBytesCompact(trashedSliceTotalBytes)}`
-                    : trashViewTab === "layers"
-                      ? `Trash · Layers · ${trashedLayerCount.toLocaleString()} ${
-                          trashedLayerCount === 1 ? "layer" : "layers"
-                        } · ${formatBytesCompact(trashedLayerTotalBytes)}`
-                      : `Trash · ${trashedCount.toLocaleString()} ${
-                          trashedCount === 1 ? "file" : "files"
-                        } · ${formatBytesCompact(trashedTotalBytes)}`}
-              </span>
-              {!trashOpStatus && (
-                <button
-                  type="button"
-                  onClick={() => setTrashFilterActive(false)}
-                  className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-fg hover:bg-surface-3"
-                  title="Exit Trash view"
-                >
-                  <X className="w-2.5 h-2.5" />
-                </button>
-              )}
-            </span>
-          ) : (
-            trashOpStatus && (
-              <span className="inline-flex items-center gap-1.5 h-[20px] px-2 rounded-[3px] border border-accent/50 bg-accent-soft text-accent-fg text-[11px]">
-                <Loader2 className="w-3 h-3 animate-spin shrink-0" />
-                <span>{formatTrashOpLabel(trashOpStatus)}</span>
-              </span>
-            )
-          )}
-
-          {layersFilterActive && (
-            <span
-              className="inline-flex items-center gap-1.5 h-[20px] pl-1.5 pr-1 rounded-[3px] border border-accent bg-accent-soft text-accent-fg text-[11px]"
-              title="Layers Multi-Track SFX Studio"
-            >
-              <Layers className="w-3 h-3 shrink-0" />
-              <span>
-                Layers · {layerHistoryCount.toLocaleString()} saved
-              </span>
-              <button
-                type="button"
-                onClick={() => setLayersFilterActive(false)}
-                className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-fg hover:bg-surface-3"
-                title="Exit Layers Studio"
-              >
-                <X className="w-2.5 h-2.5" />
-              </button>
-            </span>
-          )}
-
-          {slicesFilterActive && (
-            <>
-              <span
-                className="inline-flex items-center gap-1.5 h-[20px] pl-1.5 pr-1 rounded-[3px] border border-accent bg-accent-soft text-accent-fg text-[11px]"
-                title="Saved slices · Click row to preview · Click Source Track (↗) to open original track · F2 Rename · Del Trash · Ctrl+Z Undo"
-              >
-                <Scissors className="w-3 h-3 shrink-0" />
-                <span>Slices · {sliceHistoryCount.toLocaleString()}</span>
-                <button
-                  type="button"
-                  onClick={() => setSlicesFilterActive(false)}
-                  className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-fg hover:bg-surface-3"
-                  title="Exit Slices view"
-                >
-                  <X className="w-2.5 h-2.5" />
-                </button>
-              </span>
-              {sliceFavoriteOnly && (
-                <span className="inline-flex items-center gap-1 h-[20px] pl-1.5 pr-1 rounded-[3px] border border-accent/50 bg-accent-soft text-accent-fg text-[11px]">
-                  <Star className="w-3 h-3 fill-current shrink-0" />
-                  <span>Favorites</span>
-                  <button
-                    type="button"
-                    onClick={() => setSliceFavoriteOnly(false)}
-                    className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-fg hover:bg-surface-3"
-                    title="Clear slice favorites filter"
-                  >
-                    <X className="w-2.5 h-2.5" />
-                  </button>
-                </span>
-              )}
-              {slicePitchOnly && (
-                <span className="inline-flex items-center gap-1 h-[20px] pl-1.5 pr-1 rounded-[3px] border border-accent/50 bg-accent-soft text-accent-fg text-[11px]">
-                  <span>Pitch / FX</span>
-                  <button
-                    type="button"
-                    onClick={() => setSlicePitchOnly(false)}
-                    className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-fg hover:bg-surface-3"
-                    title="Clear slice pitch filter"
-                  >
-                    <X className="w-2.5 h-2.5" />
-                  </button>
-                </span>
-              )}
-            </>
-          )}
-
-          {duplicatesFilterActive && (
-            <span
-              className="inline-flex items-center gap-1.5 h-[20px] pl-1.5 pr-1 rounded-[3px] border border-accent/50 bg-accent-soft text-accent-fg text-[11px]"
-              title={
-                duplicateScanError
-                  ? `Duplicate scan failed: ${duplicateScanError}`
-                  : duplicateScanResult
-                  ? `${duplicateScanResult.groups_found} groups · ${duplicateScanResult.duplicate_files_count} extra files (${formatBytesCompact(duplicateScanResult.reclaimable_bytes)})`
-                  : "Duplicates filter active"
-              }
-            >
-              <CopyCheck className="w-3 h-3 shrink-0" />
-              <span>
-                {isScanningDuplicates
-                  ? duplicateScanProgress
-                    ? `${duplicateScanProgress.stage_label} (${Math.min(
-                        100,
-                        Math.max(0, Math.round(duplicateScanProgress.percentage))
-                      )}%)`
-                    : "Scanning duplicates..."
-                  : duplicateScanError
-                  ? "Duplicates (Error)"
-                  : duplicateScanResult
-                  ? `Duplicates · ${duplicateScanResult.groups_found.toLocaleString()} ${
-                      duplicateScanResult.groups_found === 1 ? "group" : "groups"
-                    } · ${formatBytesCompact(duplicateScanResult.reclaimable_bytes)}`
-                  : "Duplicates"}
-              </span>
-              <button
-                type="button"
-                onClick={() => setDuplicatesFilterActive(false)}
-                className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-fg hover:bg-surface-3"
-                title="Exit Duplicates view"
-              >
-                <X className="w-2.5 h-2.5" />
-              </button>
-            </span>
-          )}
+          <ActiveFilterPrimaryChips
+            folderFilter={folderFilter}
+            folderDisplayName={folderDisplayName}
+            activeCollection={activeCollection}
+            activeLicenseGroup={activeLicenseGroup}
+            favoriteOnly={favoriteOnly}
+            favoritesViewTab={favoritesViewTab}
+            recentOnly={recentOnly}
+            binFilterActive={binFilterActive}
+            trashFilterActive={trashFilterActive}
+            trashViewTab={trashViewTab}
+            trashOpStatus={trashOpStatus}
+            trashedCount={trashedCount}
+            trashedTotalBytes={trashedTotalBytes}
+            trashedSliceCount={trashedSliceCount}
+            trashedSliceTotalBytes={trashedSliceTotalBytes}
+            trashedLayerCount={trashedLayerCount}
+            trashedLayerTotalBytes={trashedLayerTotalBytes}
+            layersFilterActive={layersFilterActive}
+            layerHistoryCount={layerHistoryCount}
+            slicesFilterActive={slicesFilterActive}
+            sliceHistoryCount={sliceHistoryCount}
+            sliceFavoriteOnly={sliceFavoriteOnly}
+            slicePitchOnly={slicePitchOnly}
+            duplicatesFilterActive={duplicatesFilterActive}
+            isScanningDuplicates={isScanningDuplicates}
+            duplicateScanProgress={duplicateScanProgress}
+            duplicateScanError={duplicateScanError}
+            duplicateScanResult={duplicateScanResult}
+            onClearFolder={() => setFolderFilter(null)}
+            onClearCollection={() => setCollectionFilter(null)}
+            onClearLicenseGroup={() => setLicenseGroupFilter(null, null)}
+            onClearFavorite={() => setFavoriteOnly(false)}
+            onClearRecent={() => setRecentOnly(false)}
+            onClearBin={() => setBinFilterActive(false)}
+            onClearTrash={() => setTrashFilterActive(false)}
+            onClearLayers={() => setLayersFilterActive(false)}
+            onClearSlices={() => setSlicesFilterActive(false)}
+            onClearSliceFavorite={() => setSliceFavoriteOnly(false)}
+            onClearSlicePitch={() => setSlicePitchOnly(false)}
+            onClearDuplicates={() => setDuplicatesFilterActive(false)}
+          />
 
           {typeFilter !== "all" && (
-            <span className="inline-flex items-center gap-1.5 h-[20px] pl-1.5 pr-1 rounded-[3px] border border-accent/50 bg-accent-soft text-accent-fg text-[11px]">
+            <ActiveFilterChip
+              onRemove={() => setTypeFilter("all")}
+              removeTitle="Remove Type filter"
+            >
               <span>{typeFilter === "oneshot" ? "One-Shot" : "Loop"}</span>
-              <button
-                type="button"
-                onClick={() => setTypeFilter("all")}
-                className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-fg hover:bg-surface-3"
-                title="Remove Type filter"
-              >
-                <X className="w-2.5 h-2.5" />
-              </button>
-            </span>
+            </ActiveFilterChip>
           )}
 
           {srFilter !== null && (
-            <span className="inline-flex items-center gap-1.5 h-[20px] pl-1.5 pr-1 rounded-[3px] border border-accent/50 bg-accent-soft text-accent-fg text-[11px] font-mono">
+            <ActiveFilterChip
+              mono
+              onRemove={() => setSrFilter(null)}
+              removeTitle="Remove Sample Rate filter"
+            >
               <span>{formatSampleRateKhz(srFilter)} kHz</span>
-              <button
-                type="button"
-                onClick={() => setSrFilter(null)}
-                className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-fg hover:bg-surface-3"
-                title="Remove Sample Rate filter"
-              >
-                <X className="w-2.5 h-2.5" />
-              </button>
-            </span>
+            </ActiveFilterChip>
           )}
 
           {selectedGenre && (
-            <span className="inline-flex items-center gap-1.5 h-[20px] pl-1.5 pr-1 rounded-[3px] border border-accent/50 bg-accent-soft text-accent-fg text-[11px]">
+            <ActiveFilterChip
+              onRemove={() => setSelectedGenre(null)}
+              removeTitle="Remove Genre filter"
+            >
               <span
                 className="w-2 h-2 rounded-[2px] shrink-0"
                 style={{ backgroundColor: activeGenreObj?.color || "#8B5CF6" }}
               />
               <span>{selectedGenre}</span>
-              <button
-                type="button"
-                onClick={() => setSelectedGenre(null)}
-                className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-fg hover:bg-surface-3"
-                title="Remove Genre filter"
-              >
-                <X className="w-2.5 h-2.5" />
-              </button>
-            </span>
+            </ActiveFilterChip>
           )}
 
           <ActiveTaxonomyChips
@@ -557,45 +309,33 @@ export const ActiveFilterBanner: React.FC = () => {
           />
 
           {bpmTokens.map((bpmVal) => (
-            <span
+            <ActiveFilterChip
               key={bpmVal}
-              className="inline-flex items-center gap-1.5 h-[20px] pl-1.5 pr-1 rounded-[3px] border border-accent/50 bg-accent-soft text-accent-fg text-[11px] font-mono"
+              mono
+              onRemove={() =>
+                setSearchQuery(
+                  removeSearchPrefixTokens(searchQuery, "bpm:", bpmVal)
+                )
+              }
+              removeTitle="Remove BPM filter"
             >
               <span>{bpmVal.replace("-", "–")} BPM</span>
-              <button
-                type="button"
-                onClick={() =>
-                  setSearchQuery(
-                    removeSearchPrefixTokens(searchQuery, "bpm:", bpmVal)
-                  )
-                }
-                className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-fg hover:bg-surface-3"
-                title="Remove BPM filter"
-              >
-                <X className="w-2.5 h-2.5" />
-              </button>
-            </span>
+            </ActiveFilterChip>
           ))}
 
           {keyTokens.map((keyVal) => (
-            <span
+            <ActiveFilterChip
               key={keyVal}
-              className="inline-flex items-center gap-1.5 h-[20px] pl-1.5 pr-1 rounded-[3px] border border-accent/50 bg-accent-soft text-accent-fg text-[11px] font-mono"
+              mono
+              onRemove={() =>
+                setSearchQuery(
+                  removeSearchPrefixTokens(searchQuery, "key:", keyVal)
+                )
+              }
+              removeTitle="Remove Key filter"
             >
               <span>Key: {keyVal.toUpperCase()}</span>
-              <button
-                type="button"
-                onClick={() =>
-                  setSearchQuery(
-                    removeSearchPrefixTokens(searchQuery, "key:", keyVal)
-                  )
-                }
-                className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-fg hover:bg-surface-3"
-                title="Remove Key filter"
-              >
-                <X className="w-2.5 h-2.5" />
-              </button>
-            </span>
+            </ActiveFilterChip>
           ))}
 
           <button

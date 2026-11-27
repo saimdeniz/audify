@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { useSampleStore } from "../../store/useSampleStore";
 import { createEmptyLayerRecipe } from "../../utils/layerHelpers";
 import { WaveformDeckHeader } from "../transport/WaveformDeckHeader";
@@ -95,15 +95,23 @@ describe("LayersStudio v2 DaVinci Editor, Save duplicate guard & Master Sum Top 
     expect(useSampleStore.getState().layerDraftRecipe.lanes).toHaveLength(3);
     expect(screen.getByText("LANES (3)")).toBeTruthy();
 
-    // Pitch mode defaults to Lock Length without inline speed/duration layout-shift text
-    const pitchModeBtn = screen.getByRole("button", { name: /^Lock$/i });
+    // Pitch mode defaults to Lock Length icon-only toggle without inline layout-shift text
+    const pitchModeBtn = screen.getByRole("button", { name: /Pitch mode: Lock Length/i });
     expect(pitchModeBtn.getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(screen.getByTitle("Pitch up (+1st, Shift +12st)"));
     expect(useSampleStore.getState().layerDraftRecipe.clips[0].pitchSemitones).toBe(1);
     expect(screen.queryByText(/1\.06x/)).toBeNull();
     fireEvent.click(pitchModeBtn);
     expect(useSampleStore.getState().layerDraftRecipe.clips[0].pitchMode).toBe("varispeed");
-    expect(screen.getByRole("button", { name: /^Tape$/i }).getAttribute("aria-pressed")).toBe("true");
+    expect(
+      screen.getByRole("button", { name: /Pitch mode: Tape Varispeed/i }).getAttribute("aria-pressed")
+    ).toBe("true");
+
+    // Mix button never becomes disabled during preview rendering (prevents not-allowed cursor & flicker)
+    useSampleStore.setState({ isRenderingLayerPreview: true });
+    const mixBtn = screen.getByTitle("Render & audition current layer mix (Space)") as HTMLButtonElement;
+    expect(mixBtn.disabled).toBe(false);
+    useSampleStore.setState({ isRenderingLayerPreview: false });
 
     // Open Save Layer dialog & test duplicate filename guard + Auto generator
     fireEvent.click(screen.getByText("Save"));
@@ -152,5 +160,73 @@ describe("LayersStudio v2 DaVinci Editor, Save duplicate guard & Master Sum Top 
     );
     expect(screen.getByText("-1.4 dB")).toBeTruthy();
     expect(screen.queryByText("Lanes")).toBeNull();
+  });
+
+  it("shows Mixed inspector readouts for differing multi-selected clips and guards New draft with 2-step Discard?", () => {
+    const st = useSampleStore.getState();
+    const secondClip = {
+      ...st.layerDraftRecipe.clips[0],
+      id: "c-2",
+      startSec: 2.0,
+      gainDb: -4.5,
+      pitchSemitones: 5,
+      pitchMode: "varispeed" as const,
+      reversed: true,
+    };
+    useSampleStore.setState({
+      layerDraftRecipe: {
+        ...st.layerDraftRecipe,
+        clips: [st.layerDraftRecipe.clips[0], secondClip],
+      },
+      layerDraftSelectedClipIds: ["c-1", "c-2"],
+      layerDraftDirty: true,
+    });
+
+    render(<LayersStudio />);
+    expect(screen.getByText("Mixed")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: /Pitch mode: Mixed/i })
+        .getAttribute("aria-pressed")
+    ).toBe("mixed");
+    expect(screen.getByText("REV*")).toBeTruthy();
+
+    // 1st click on New arms "Discard?" without wiping clips
+    const newBtn = screen.getByTitle("Start a fresh empty layer draft");
+    fireEvent.click(newBtn);
+    expect(screen.getByText("Discard?")).toBeTruthy();
+    expect(useSampleStore.getState().layerDraftRecipe.clips).toHaveLength(2);
+
+    // 2nd click confirms reset
+    fireEvent.click(screen.getByText("Discard?"));
+    expect(useSampleStore.getState().layerDraftRecipe.clips).toHaveLength(0);
+  });
+
+  it("keeps SaveLayerModal open when save fails and blocks Delete in SavedLayersTableView in Read-Only mode", async () => {
+    const saveSpy = vi.fn().mockResolvedValue(null);
+    const trashSpy = vi.fn().mockResolvedValue(undefined);
+    useSampleStore.setState({
+      saveLayerDraft: saveSpy,
+      trashLayerFiles: trashSpy,
+      enableAdvancedFileOps: false,
+      selectedLayerIds: [99],
+    });
+
+    const { rerender } = render(<LayersStudio />);
+    fireEvent.click(screen.getByText("Save"));
+    const dialog = screen.getByRole("dialog");
+    const saveSubmit = within(dialog).getByRole("button", { name: /^Save$/ });
+    fireEvent.click(saveSubmit);
+    await Promise.resolve();
+    expect(saveSpy).toHaveBeenCalledTimes(1);
+    // Modal stays open because save returned null
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    // Switch to Saved Layers table in Read-Only mode: Delete must NOT invoke trashLayerFiles
+    useSampleStore.setState({ layersWorkspaceTab: "saved" });
+    rerender(<LayersStudio />);
+    const grid = screen.getByRole("grid", { name: /Saved layers/i });
+    fireEvent.keyDown(grid, { key: "Delete" });
+    expect(trashSpy).not.toHaveBeenCalled();
   });
 });

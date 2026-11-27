@@ -11,7 +11,6 @@ import {
   ExportAudioPreset,
   ExportLoudnessMode,
   KeyboardShortcuts,
-  LayerTopDeckView,
   LicenseGroup,
   MiniDockEdgeSide,
   Profile,
@@ -318,12 +317,6 @@ export function applyProfileSettingsToStore(
     cur.autoSaveLayerOnNleDrag,
     false
   );
-  const layerTopDeckView: LayerTopDeckView =
-    parsed.layerTopDeckView === "lanes" || parsed.layerTopDeckView === "sum"
-      ? parsed.layerTopDeckView
-      : isBoot
-      ? cur.layerTopDeckView
-      : "sum";
 
   const sliceMicroFade = resolveBool(parsed.sliceMicroFade, isBoot, cur.sliceMicroFade, false);
   const exportAudioPreset: ExportAudioPreset =
@@ -441,7 +434,6 @@ export function applyProfileSettingsToStore(
     customSliceExportPath,
     customLayerExportPath,
     autoSaveLayerOnNleDrag,
-    layerTopDeckView,
     ...aiResolved.fields,
   };
 

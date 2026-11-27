@@ -34,13 +34,13 @@ export interface RenderLayersTimelineParams {
   height: number;
   dpr: number;
   scrollLeftPx: number;
+  scrollTopPx: number;
   pxPerSec: number;
   laneHeight: number;
   recipe: LayerRecipe;
   selectedClipIds: ReadonlySet<string>;
   missingClipIds: ReadonlySet<string>;
   hoveredClipId: string | null;
-  playheadSec: number;
   snapEnabled: boolean;
   snapGridSec: number;
   themeMode: ThemeMode;
@@ -49,6 +49,18 @@ export interface RenderLayersTimelineParams {
   dropPreview: TimelineDropPreview | null;
   marqueeRect: TimelineMarqueeRect | null;
   sourceDurationBySampleId: ReadonlyMap<number, number>;
+}
+
+export interface RenderPlayheadOverlayParams {
+  width: number;
+  height: number;
+  dpr: number;
+  scrollLeftPx: number;
+  pxPerSec: number;
+  playheadSec: number;
+  themeMode: ThemeMode;
+  accentColor: string;
+  enableMica: boolean;
 }
 
 function chooseRulerStepSec(pxPerSec: number): number {
@@ -200,13 +212,13 @@ export function renderLayersTimelineCanvas(
     height,
     dpr,
     scrollLeftPx,
+    scrollTopPx,
     pxPerSec,
     laneHeight,
     recipe,
     selectedClipIds,
     missingClipIds,
     hoveredClipId,
-    playheadSec,
     snapEnabled,
     snapGridSec,
     themeMode,
@@ -229,10 +241,15 @@ export function renderLayersTimelineCanvas(
 
   const visibleStartSec = Math.max(0, scrollLeftPx / pxPerSec);
   const visibleEndSec = (scrollLeftPx + width) / pxPerSec;
+  const firstVisibleLane = Math.max(0, Math.floor(scrollTopPx / laneHeight));
+  const lastVisibleLane = Math.min(
+    recipe.lanes.length - 1,
+    Math.ceil((scrollTopPx + height) / laneHeight)
+  );
 
-  // 1. Lane row stripes & horizontal dividers
-  for (let i = 0; i < recipe.lanes.length; i++) {
-    const y = i * laneHeight;
+  // 1. Visible lane row stripes & horizontal dividers (viewport-culled)
+  for (let i = firstVisibleLane; i <= lastVisibleLane; i++) {
+    const y = i * laneHeight - scrollTopPx;
     if (i % 2 === 1) {
       ctx.fillStyle = isLight
         ? "rgba(15, 23, 42, 0.025)"
@@ -277,11 +294,17 @@ export function renderLayersTimelineCanvas(
     (a, b) => Number(selectedClipIds.has(a.id)) - Number(selectedClipIds.has(b.id))
   );
 
-  // 4. Render Clips (Opaque bodies — zero overlap bleed!)
+  // 4. Render Clips (Opaque bodies — viewport-culled horizontally & vertically)
   for (let i = 0; i < orderedClips.length; i++) {
     const clip = orderedClips[i];
     const laneIdx = laneIndexById.get(clip.laneId);
-    if (laneIdx === undefined) continue;
+    if (
+      laneIdx === undefined ||
+      laneIdx < firstVisibleLane ||
+      laneIdx > lastVisibleLane
+    ) {
+      continue;
+    }
     const lane = recipe.lanes[laneIdx];
     const durSec = getClipRenderedDurationSec(clip);
     const clipLeft = clip.startSec * pxPerSec - scrollLeftPx;
@@ -289,7 +312,7 @@ export function renderLayersTimelineCanvas(
     if (clipLeft + clipW < -4 || clipLeft > width + 4) continue;
 
     const pad = laneHeight <= COMPACT_WAVEFORM_HIDE_HEIGHT ? 2 : 3;
-    const clipTop = laneIdx * laneHeight + pad;
+    const clipTop = laneIdx * laneHeight - scrollTopPx + pad;
     const clipH = Math.max(16, laneHeight - pad * 2);
     const isSelected = selectedClipIds.has(clip.id);
     const isMissing = missingClipIds.has(clip.id);
@@ -324,9 +347,13 @@ export function renderLayersTimelineCanvas(
     // Waveform only when laneHeight > 36px (DaVinci compact style)
     if (showWaveforms && clipH > headerH + 6) {
       const srcDur =
+        (clip.sourceDurationSec && clip.sourceDurationSec > 0
+          ? clip.sourceDurationSec
+          : undefined) ??
         (clip.sourceSampleId !== null
           ? sourceDurationBySampleId.get(clip.sourceSampleId)
-          : undefined) ?? Math.max(clip.trimEndSec, durSec);
+          : undefined) ??
+        Math.max(clip.trimEndSec, durSec);
       drawClipWaveform(
         ctx,
         clip,
@@ -418,31 +445,38 @@ export function renderLayersTimelineCanvas(
 
   // 5. Drag-and-Drop Ghost Preview (existing lane OR auto-create Ghost Lane below!)
   if (dropPreview && dropPreview.laneIndex >= 0) {
-    const laneTop = dropPreview.laneIndex * laneHeight;
-    const gx = dropPreview.startSec * pxPerSec - scrollLeftPx;
-    const gw = Math.max(18, dropPreview.durationSec * pxPerSec);
-    if (dropPreview.isNewLane) {
-      ctx.fillStyle = palette.accentFillSoft;
-      ctx.fillRect(0, laneTop, width, laneHeight);
+    const laneTop = dropPreview.laneIndex * laneHeight - scrollTopPx;
+    if (laneTop + laneHeight >= -4 && laneTop <= height + 4) {
+      const gx = dropPreview.startSec * pxPerSec - scrollLeftPx;
+      const gw = Math.max(18, dropPreview.durationSec * pxPerSec);
+      if (dropPreview.isNewLane) {
+        ctx.fillStyle = palette.accentFillSoft;
+        ctx.fillRect(0, laneTop, width, laneHeight);
+        ctx.strokeStyle = palette.accentColor;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([5, 4]);
+        ctx.strokeRect(0.5, laneTop + 0.5, width - 1, laneHeight - 1);
+        ctx.setLineDash([]);
+      }
+      ctx.fillStyle = palette.accentFillHover;
+      ctx.fillRect(gx, laneTop + 3, gw, Math.max(16, laneHeight - 6));
       ctx.strokeStyle = palette.accentColor;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([5, 4]);
-      ctx.strokeRect(0.5, laneTop + 0.5, width - 1, laneHeight - 1);
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 2]);
+      ctx.strokeRect(
+        gx + 0.5,
+        laneTop + 3.5,
+        gw - 1,
+        Math.max(15, laneHeight - 7)
+      );
       ctx.setLineDash([]);
     }
-    ctx.fillStyle = palette.accentFillHover;
-    ctx.fillRect(gx, laneTop + 3, gw, Math.max(16, laneHeight - 6));
-    ctx.strokeStyle = palette.accentColor;
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([4, 2]);
-    ctx.strokeRect(gx + 0.5, laneTop + 3.5, gw - 1, Math.max(15, laneHeight - 7));
-    ctx.setLineDash([]);
   }
 
   // 5.5. Marquee / Rubber-Band Multi-Clip Selection Box
   if (marqueeRect) {
     const rx = Math.min(marqueeRect.x1, marqueeRect.x2) - scrollLeftPx;
-    const ry = Math.min(marqueeRect.y1, marqueeRect.y2);
+    const ry = Math.min(marqueeRect.y1, marqueeRect.y2) - scrollTopPx;
     const rw = Math.abs(marqueeRect.x2 - marqueeRect.x1);
     const rh = Math.abs(marqueeRect.y2 - marqueeRect.y1);
     if (rw >= 2 || rh >= 2) {
@@ -459,7 +493,31 @@ export function renderLayersTimelineCanvas(
     }
   }
 
-  // 6. Live 60Hz Playhead Line
+  ctx.restore();
+}
+
+/** Lightweight 60Hz overlay renderer drawing only the playhead vertical cursor line. */
+export function renderLayersPlayheadOverlay(
+  ctx: CanvasRenderingContext2D,
+  params: RenderPlayheadOverlayParams
+): void {
+  const {
+    width,
+    height,
+    dpr,
+    scrollLeftPx,
+    pxPerSec,
+    playheadSec,
+    themeMode,
+    accentColor,
+    enableMica,
+  } = params;
+  const palette = getCanvasThemePalette(
+    `${themeMode}:${enableMica}:${accentColor}`
+  );
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
   const px = Math.floor(playheadSec * pxPerSec - scrollLeftPx) + 0.5;
   if (px >= -2 && px <= width + 2) {
     ctx.strokeStyle = palette.accentColor;
@@ -469,6 +527,5 @@ export function renderLayersTimelineCanvas(
     ctx.lineTo(px, height);
     ctx.stroke();
   }
-
   ctx.restore();
 }

@@ -372,9 +372,10 @@ pub(super) fn write_staged_snapshot_zip(
         .map_err(|e| format!("Failed to serialize snapshot manifest: {}", e))?;
 
     let tmp_name = format!(
-        ".{}.tmp_{}",
+        ".{}.tmp_{}_{}",
         display_leaf(dest_path),
-        std::process::id()
+        std::process::id(),
+        unique_nanos()
     );
     let tmp_zip = dest_path
         .parent()

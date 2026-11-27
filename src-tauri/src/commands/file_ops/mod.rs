@@ -17,12 +17,15 @@ pub use trash_restore::*;
 use crate::db::get_active_profile_id;
 use crate::security::{
     display_leaf, has_ntfs_ads_colon, is_unc_or_network_path, normalize_clean_path,
-    reject_symlink_ancestors, strip_verbatim_prefix,
+    reject_symlink_ancestors, strip_verbatim_prefix, truncate_filename_stem_utf16,
 };
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static KEEP_BOTH_NONCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileOpJournalEntry {
@@ -424,17 +427,32 @@ pub(super) fn suggest_keep_both_name(
     let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
 
     for idx in 2..1000 {
-        let candidate = if ext.is_empty() {
-            format!("{} ({})", base_stem, idx)
+        let suffix = if ext.is_empty() {
+            format!(" ({})", idx)
         } else {
-            format!("{} ({}).{}", base_stem, idx, ext)
+            format!(" ({}).{}", idx, ext)
         };
+        let safe_stem = truncate_filename_stem_utf16(base_stem, suffix.encode_utf16().count());
+        let candidate = format!("{}{}", safe_stem, suffix);
         let cand_lower = candidate.to_lowercase();
-        if !reserved_lower.contains(&cand_lower) && !target_dir.join(&candidate).exists() {
+        if !reserved_lower.contains(&cand_lower)
+            && fs::symlink_metadata(target_dir.join(&candidate)).is_err()
+        {
             return candidate;
         }
     }
-    file_name.to_string()
+    let nonce = KEEP_BOTH_NONCE.fetch_add(1, Ordering::Relaxed);
+    let ts_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let suffix = if ext.is_empty() {
+        format!(" ({:x}_{})", ts_ms & 0xFFFF_FFFF, nonce)
+    } else {
+        format!(" ({:x}_{}).{}", ts_ms & 0xFFFF_FFFF, nonce, ext)
+    };
+    let safe_stem = truncate_filename_stem_utf16(base_stem, suffix.encode_utf16().count());
+    format!("{}{}", safe_stem, suffix)
 }
 
 pub(super) fn validate_writable_library_folder(

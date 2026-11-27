@@ -223,14 +223,14 @@ export const TagLibraryInspectorFields: React.FC<
               COLOR
             </label>
             {tag.parent_id != null && tag.color_inherited && (
-              <span className="text-[8.5px] font-mono text-fg-3">
+              <span className="text-[9.5px] font-mono text-fg-3">
                 auto shade
               </span>
             )}
             {tag.parent_id == null &&
               facet === "source" &&
               tag.color_inherited && (
-                <span className="text-[8.5px] font-mono text-fg-3">neutral</span>
+                <span className="text-[9.5px] font-mono text-fg-3">neutral</span>
               )}
           </div>
           <div className="h-[28px] px-2 flex items-center space-x-2 bg-surface-2 border border-line rounded-xs">

@@ -13,6 +13,11 @@ interface SampleTableEmptyStateProps {
   duplicateHasResult?: boolean;
   duplicateScopeLabel?: string;
   duplicateScanModeLabel?: string;
+  favoriteOnly?: boolean;
+  recentOnly?: boolean;
+  binFilterActive?: boolean;
+  trashFilterActive?: boolean;
+  selectedCollectionName?: string | null;
   onScanDuplicates?: () => void;
   onAddFolder: () => void;
   onResetFilters: () => void;
@@ -27,6 +32,11 @@ export const SampleTableEmptyState: React.FC<SampleTableEmptyStateProps> = ({
   duplicateHasResult = false,
   duplicateScopeLabel = "All Libraries",
   duplicateScanModeLabel = "Exact (SHA-256)",
+  favoriteOnly = false,
+  recentOnly = false,
+  binFilterActive = false,
+  trashFilterActive = false,
+  selectedCollectionName = null,
   onScanDuplicates,
   onAddFolder,
   onResetFilters,
@@ -157,26 +167,51 @@ export const SampleTableEmptyState: React.FC<SampleTableEmptyStateProps> = ({
     );
   }
 
+  const emptyHeading = duplicatesFilterActive
+    ? "NO DUPLICATE AUDIO FOUND IN CURRENT SCOPE"
+    : trashFilterActive
+    ? "TRASH IS EMPTY"
+    : binFilterActive
+    ? "SESSION BIN IS EMPTY"
+    : favoriteOnly
+    ? "NO FAVORITE TRACKS YET"
+    : recentOnly
+    ? "NO RECENTLY PLAYED TRACKS"
+    : selectedCollectionName
+    ? `NO SAMPLES IN "${selectedCollectionName.toUpperCase()}"`
+    : "NO SAMPLES MATCH CURRENT FILTER CRITERIA";
+
+  const emptySubtext = duplicatesFilterActive
+    ? "Try switching to Similar Audio or All Libraries in Tools → Duplicates below and clicking Scan, or exit Duplicates view."
+    : trashFilterActive
+    ? "Deleted tracks, slices, or layers appear here until restored or emptied."
+    : binFilterActive
+    ? "Press B or drag samples onto the Session Bin icon to stage tracks for export."
+    : favoriteOnly
+    ? "Press F or click the star icon on any track to save it to Favorites."
+    : recentOnly
+    ? "Audition any track in your library to build your recent listening history."
+    : selectedCollectionName
+    ? "Drag samples into this collection or adjust active search/tag filters."
+    : null;
+
   return (
     <div className="flex-1 flex flex-col items-center justify-center p-6">
-      <div className="bg-surface-1 border border-line rounded-lg px-6 py-5 text-center space-y-3 shadow-xl">
-        <div className="font-mono text-[12px] text-fg-2">
-          {duplicatesFilterActive
-            ? "NO DUPLICATE AUDIO FOUND IN CURRENT SCOPE"
-            : "NO SAMPLES MATCH CURRENT FILTER CRITERIA"}
-        </div>
-        {duplicatesFilterActive && (
-          <div className="text-[11px] text-fg-3">
-            Try switching to Similar Audio or All Libraries in Filters → General
-            below and clicking Scan, or exit Duplicates view.
-          </div>
+      <div className="bg-surface-1 border border-line rounded-lg px-6 py-5 text-center space-y-3 shadow-xl max-w-[440px]">
+        <div className="font-mono text-[12px] text-fg-2">{emptyHeading}</div>
+        {emptySubtext && (
+          <div className="text-[11px] text-fg-3">{emptySubtext}</div>
         )}
         <button
           type="button"
           onClick={onResetFilters}
           className="h-[26px] px-3 bg-surface-3 hover:border-accent border border-line text-accent-fg font-mono text-[11px] rounded-xs transition-colors"
         >
-          RESET ALL FILTERS
+          {trashFilterActive
+            ? "EXIT TRASH"
+            : binFilterActive
+            ? "EXIT SESSION BIN"
+            : "RESET ALL FILTERS"}
         </button>
       </div>
     </div>

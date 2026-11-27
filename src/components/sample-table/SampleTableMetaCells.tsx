@@ -56,7 +56,8 @@ export function renderAiSuggestionChip(
             .getState()
             .resolveAiTagSuggestion(sampleId, suggestion.tag_name, true);
         }}
-        className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-accent-fg hover:bg-accent-soft shrink-0"
+        className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-accent-fg hover:bg-accent hover:text-accent-on transition-colors shrink-0"
+        aria-label={`Approve AI tag ${breadcrumb}`}
         title={`Approve AI tag "${breadcrumb}"`}
       >
         <Check className="w-2.5 h-2.5" />
@@ -70,7 +71,8 @@ export function renderAiSuggestionChip(
             .getState()
             .resolveAiTagSuggestion(sampleId, suggestion.tag_name, false);
         }}
-        className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:text-accent-fg hover:bg-accent-soft shrink-0"
+        className="w-3.5 h-3.5 rounded-[2px] flex items-center justify-center text-fg-2 hover:bg-accent hover:text-accent-on transition-colors shrink-0"
+        aria-label={`Dismiss AI tag ${breadcrumb}`}
         title={`Dismiss AI tag "${breadcrumb}"`}
       >
         <X className="w-2.5 h-2.5" />

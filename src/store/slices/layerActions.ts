@@ -3,7 +3,6 @@ import { open } from "@tauri-apps/plugin-dialog";
 import {
   LayerHistoryEntry,
   LayerPreviewResult,
-  LayerTrashSummary,
   PreparedLayerDragResult,
   SampleItem,
 } from "../../types";
@@ -11,33 +10,76 @@ import {
   buildNextLayerRecipeForSamples,
   createLayerDraftVirtualSample,
   isLayerDraftSample,
+  layerEntryToPreviewSample,
+  MAX_LAYER_CLIPS,
   parseLayerRecipeJson,
+  setLayerDraftPreviewPending,
 } from "../../utils/layerHelpers";
-import { seedPeaksCache } from "../../utils/peaksStore";
-import { getPlayheadSec, resetPlayheadClock } from "../playheadClock";
+import { normalizePathForMatch } from "../../utils/pathHelpers";
+import {
+  getLayerDraftPlayheadSec,
+  resetLayerDraftPlayheadClock,
+  resetPlayheadClock,
+  setLayerDraftPlayheadSec,
+} from "../playheadClock";
 import type { StoreSliceContext } from "../types";
+import { createLayerTrashActions } from "./layerTrashActions";
 
 export function createLayerActions(ctx: StoreSliceContext) {
-  const { set, get, applyInstantMemoryFilter, emitNotice, getProfileEpoch } = ctx;
+  const { set, get, emitNotice, getProfileEpoch } = ctx;
 
   let previewSeq = 0;
   let previewDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let historySeq = 0;
 
+  const cancelPendingPreview = () => {
+    if (previewDebounceTimer !== null) {
+      clearTimeout(previewDebounceTimer);
+      previewDebounceTimer = null;
+    }
+    setLayerDraftPreviewPending(false);
+    previewSeq++;
+  };
+
+  const unloadDraftAudioIfActive = async () => {
+    await invoke("native_audio_unload").catch(() => {});
+  };
+
+  const releaseActiveAudioIfPathMatches = async (rawPaths: string[]) => {
+    const selectedPath = get().selectedSample?.file_path;
+    if (!selectedPath || rawPaths.length === 0) return;
+    const normSel = normalizePathForMatch(selectedPath);
+    const matched = rawPaths.some((p) => normalizePathForMatch(p) === normSel);
+    if (!matched) return;
+    if (get().isPlaying) {
+      set({ isPlaying: false });
+    }
+    await invoke("native_audio_unload").catch(() => {});
+  };
+
   const renderLayerDraftPreview = async (opts?: {
     autoplay?: boolean;
     startSec?: number;
   }): Promise<void> => {
+    if (previewDebounceTimer !== null) {
+      clearTimeout(previewDebounceTimer);
+      previewDebounceTimer = null;
+    }
     const reqSeq = ++previewSeq;
+    const epoch = getProfileEpoch();
     const st = get();
     const recipe = st.layerDraftRecipe;
     if (recipe.clips.length === 0) {
+      setLayerDraftPreviewPending(false);
+      resetLayerDraftPlayheadClock(0);
+      const wasDraft = isLayerDraftSample(st.selectedSample);
       set({
         layerDraftPreview: null,
         isRenderingLayerPreview: false,
+        ...(wasDraft ? { isPlaying: false, durationSec: 0, currentTimeSec: 0 } : {}),
       });
-      if (isLayerDraftSample(st.selectedSample)) {
-        set({ isPlaying: false, durationSec: 0, currentTimeSec: 0 });
+      if (wasDraft) {
+        await unloadDraftAudioIfActive();
       }
       return;
     }
@@ -51,9 +93,7 @@ export function createLayerActions(ctx: StoreSliceContext) {
       const startSec =
         opts?.startSec !== undefined
           ? Math.max(0, opts.startSec)
-          : isLayerDraftSample(st.selectedSample)
-          ? Math.max(0, getPlayheadSec())
-          : 0;
+          : Math.max(0, getLayerDraftPlayheadSec());
       const result = await invoke<LayerPreviewResult>("preview_layer_mix", {
         recipe,
         autoplay: shouldAutoplay,
@@ -62,16 +102,21 @@ export function createLayerActions(ctx: StoreSliceContext) {
         looping: st.isLooping,
         normalizePreview: st.normalizePreview,
       });
-      if (reqSeq !== previewSeq) return;
+      if (reqSeq !== previewSeq || epoch !== getProfileEpoch()) return;
+      if (result.audioSync?.event === "superseded") {
+        set({ isRenderingLayerPreview: false });
+        return;
+      }
 
+      setLayerDraftPreviewPending(false);
       const virtualSample = createLayerDraftVirtualSample(
         get().layerDraftName,
         result.durationSec,
         result.masterPeaks
       );
-      seedPeaksCache([virtualSample]);
       const clampedPos = Math.min(result.durationSec, result.audioSync.positionSec || 0);
       resetPlayheadClock(clampedPos);
+      setLayerDraftPlayheadSec(clampedPos);
       set({
         isRenderingLayerPreview: false,
         layerDraftPreview: {
@@ -88,13 +133,15 @@ export function createLayerActions(ctx: StoreSliceContext) {
         sliceRange: null,
       });
     } catch (err) {
-      if (reqSeq !== previewSeq) return;
+      if (reqSeq !== previewSeq || epoch !== getProfileEpoch()) return;
+      setLayerDraftPreviewPending(false);
       set({ isRenderingLayerPreview: false });
       emitNotice(`Layer mix preview failed: ${String(err)}`, "error");
     }
   };
 
   const schedulePreviewRender = (opts?: { autoplay?: boolean }) => {
+    setLayerDraftPreviewPending(true);
     if (previewDebounceTimer !== null) {
       clearTimeout(previewDebounceTimer);
     }
@@ -104,7 +151,15 @@ export function createLayerActions(ctx: StoreSliceContext) {
     }, 55);
   };
 
+  const trashActions = createLayerTrashActions(
+    ctx,
+    releaseActiveAudioIfPathMatches
+  );
+
   return {
+    ...trashActions,
+    cancelPendingPreview,
+    unloadDraftAudioIfActive,
     schedulePreviewRender,
     renderLayerDraftPreview,
 
@@ -144,54 +199,14 @@ export function createLayerActions(ctx: StoreSliceContext) {
           isLoadingLayerHistory: false,
         });
       } catch {
-        if (seq === historySeq) {
+        if (seq === historySeq && epoch === getProfileEpoch()) {
           set({ isLoadingLayerHistory: false });
         }
       }
     },
 
-    fetchLayerTrashStatus: async () => {
-      const epoch = getProfileEpoch();
-      try {
-        const summary = await invoke<LayerTrashSummary>("get_layer_trash_status");
-        if (epoch !== getProfileEpoch()) return;
-        set({
-          trashedLayerCount: summary?.trashed_count ?? 0,
-          trashedLayerTotalBytes: summary?.total_bytes ?? 0,
-        });
-      } catch {
-        // Ignore non-Tauri test environments
-      }
-    },
-
-    fetchTrashedLayers: async () => {
-      const epoch = getProfileEpoch();
-      set({ isLoadingLayerHistory: true });
-      try {
-        const [list, summary] = await Promise.all([
-          invoke<LayerHistoryEntry[]>("list_trashed_layers"),
-          invoke<LayerTrashSummary>("get_layer_trash_status").catch(() => null),
-        ]);
-        if (epoch !== getProfileEpoch()) return;
-        const cleanList = Array.isArray(list) ? list : [];
-        set({
-          trashedLayerHistory: cleanList,
-          trashedLayerCount:
-            summary && typeof summary.trashed_count === "number"
-              ? summary.trashed_count
-              : cleanList.length,
-          trashedLayerTotalBytes:
-            summary && typeof summary.total_bytes === "number"
-              ? summary.total_bytes
-              : 0,
-          isLoadingLayerHistory: false,
-        });
-      } catch {
-        set({ isLoadingLayerHistory: false });
-      }
-    },
-
     toggleLayerFavorite: async (layerId: number) => {
+      const epoch = getProfileEpoch();
       const prev = get().layerHistory;
       set({
         layerHistory: prev.map((item) =>
@@ -202,13 +217,14 @@ export function createLayerActions(ctx: StoreSliceContext) {
         const updated = await invoke<LayerHistoryEntry>("toggle_layer_favorite", {
           layerId,
         });
+        if (epoch !== getProfileEpoch()) return;
         set((state) => ({
           layerHistory: state.layerHistory.map((item) =>
             item.id === updated.id ? updated : item
           ),
         }));
       } catch (err) {
-        set({ layerHistory: prev });
+        if (epoch === getProfileEpoch()) set({ layerHistory: prev });
         emitNotice(`Failed updating layer favorite: ${String(err)}`, "error");
       }
     },
@@ -218,6 +234,7 @@ export function createLayerActions(ctx: StoreSliceContext) {
         new Set(layerIds.filter((id) => Number.isSafeInteger(id) && id > 0))
       );
       if (cleanIds.length === 0) return;
+      const epoch = getProfileEpoch();
       const idSet = new Set(cleanIds);
       const prev = get().layerHistory;
       set({
@@ -231,25 +248,41 @@ export function createLayerActions(ctx: StoreSliceContext) {
           isFavorite,
         });
       } catch (err) {
-        set({ layerHistory: prev });
+        if (epoch === getProfileEpoch()) set({ layerHistory: prev });
         emitNotice(`Failed updating layer favorites: ${String(err)}`, "error");
       }
     },
 
     renameLayerItem: async (layerId: number, newName: string) => {
+      const epoch = getProfileEpoch();
+      const existing = get().layerHistory.find((h) => h.id === layerId);
+      if (existing) {
+        await releaseActiveAudioIfPathMatches([existing.layer_path]);
+      }
       try {
         const updated = await invoke<LayerHistoryEntry>("rename_layer_item", {
           layerId,
           newName,
         });
-        set((state) => ({
-          layerHistory: state.layerHistory.map((item) =>
-            item.id === updated.id ? updated : item
-          ),
-          ...(state.layerDraftEditingId === updated.id
-            ? { layerDraftName: updated.layer_name.replace(/\.wav$/i, "") }
-            : {}),
-        }));
+        if (epoch !== getProfileEpoch()) return updated;
+        set((state) => {
+          const matchesSelected =
+            existing &&
+            state.selectedSample &&
+            normalizePathForMatch(state.selectedSample.file_path) ===
+              normalizePathForMatch(existing.layer_path);
+          return {
+            layerHistory: state.layerHistory.map((item) =>
+              item.id === updated.id ? updated : item
+            ),
+            ...(matchesSelected
+              ? { selectedSample: layerEntryToPreviewSample(updated) }
+              : {}),
+            ...(state.layerDraftEditingId === updated.id
+              ? { layerDraftName: updated.layer_name.replace(/\.wav$/i, "") }
+              : {}),
+          };
+        });
         emitNotice(`Renamed layer to "${updated.layer_name}"`, "success");
         return updated;
       } catch (err) {
@@ -261,27 +294,48 @@ export function createLayerActions(ctx: StoreSliceContext) {
     batchRenameLayers: async (
       entries: Array<{ layer_id: number; new_stem: string }>
     ) => {
+      const epoch = getProfileEpoch();
+      const byId = new Map(get().layerHistory.map((h) => [h.id, h]));
+      const targetPaths = entries
+        .map((e) => byId.get(e.layer_id)?.layer_path)
+        .filter((p): p is string => Boolean(p));
+      await releaseActiveAudioIfPathMatches(targetPaths);
+
       let renamedCount = 0;
       for (const entry of entries) {
         try {
+          const prevEntry = byId.get(entry.layer_id);
           const updated = await invoke<LayerHistoryEntry>("rename_layer_item", {
             layerId: entry.layer_id,
             newName: entry.new_stem,
           });
           renamedCount++;
-          set((state) => ({
-            layerHistory: state.layerHistory.map((item) =>
-              item.id === updated.id ? updated : item
-            ),
-            ...(state.layerDraftEditingId === updated.id
-              ? { layerDraftName: updated.layer_name.replace(/\.wav$/i, "") }
-              : {}),
-          }));
+          if (epoch !== getProfileEpoch()) continue;
+          set((state) => {
+            const matchesSelected =
+              prevEntry &&
+              state.selectedSample &&
+              normalizePathForMatch(state.selectedSample.file_path) ===
+                normalizePathForMatch(prevEntry.layer_path);
+            return {
+              layerHistory: state.layerHistory.map((item) =>
+                item.id === updated.id ? updated : item
+              ),
+              ...(matchesSelected
+                ? { selectedSample: layerEntryToPreviewSample(updated) }
+                : {}),
+              ...(state.layerDraftEditingId === updated.id
+                ? { layerDraftName: updated.layer_name.replace(/\.wav$/i, "") }
+                : {}),
+            };
+          });
         } catch (err) {
           emitNotice(`Rename layer failed: ${String(err)}`, "error");
         }
       }
-      set({ batchRenameLayerIds: null });
+      if (epoch === getProfileEpoch()) {
+        set({ batchRenameLayerIds: null });
+      }
       if (renamedCount > 0) {
         emitNotice(
           renamedCount === 1
@@ -307,103 +361,6 @@ export function createLayerActions(ctx: StoreSliceContext) {
       }
     },
 
-    trashLayerFiles: async (layerIds: number[]) => {
-      const cleanIds = Array.from(
-        new Set(layerIds.filter((id) => Number.isSafeInteger(id) && id > 0))
-      );
-      if (cleanIds.length === 0) return;
-      try {
-        const summary = await invoke<LayerTrashSummary>("trash_layer_files", {
-          layerIds: cleanIds,
-        });
-        const trashedSet = new Set(summary.affected_ids);
-        set((state) => ({
-          layerHistory: state.layerHistory.filter((l) => !trashedSet.has(l.id)),
-          selectedLayerIds: state.selectedLayerIds.filter(
-            (id) => !trashedSet.has(id)
-          ),
-          trashedLayerCount: summary.trashed_count,
-          trashedLayerTotalBytes: summary.total_bytes,
-          ...(state.layerDraftEditingId !== null &&
-          trashedSet.has(state.layerDraftEditingId)
-            ? { layerDraftEditingId: null }
-            : {}),
-        }));
-        emitNotice(
-          `Moved ${summary.affected_count} layer(s) to Trash`,
-          "info"
-        );
-      } catch (err) {
-        emitNotice(`Move layer to Trash failed: ${String(err)}`, "error");
-      }
-    },
-
-    restoreTrashedLayers: async (layerIds?: number[]) => {
-      try {
-        const summary = await invoke<LayerTrashSummary>(
-          "restore_trashed_layer_files",
-          { layerIds: layerIds ?? null }
-        );
-        const restoredSet = new Set(summary.affected_ids);
-        set((state) => ({
-          trashedLayerHistory: state.trashedLayerHistory.filter(
-            (l) => !restoredSet.has(l.id)
-          ),
-          selectedLayerIds: state.selectedLayerIds.filter(
-            (id) => !restoredSet.has(id)
-          ),
-          trashedLayerCount: summary.trashed_count,
-          trashedLayerTotalBytes: summary.total_bytes,
-        }));
-        await get().fetchLayerHistory();
-        emitNotice(
-          `Restored ${summary.affected_count} layer(s) from Trash`,
-          "success"
-        );
-        const st = get();
-        if (
-          st.trashFilterActive &&
-          st.trashedCount === 0 &&
-          st.trashedSliceCount === 0 &&
-          summary.trashed_count === 0
-        ) {
-          set({ trashFilterActive: false, trashViewTab: "tracks" });
-          if (!applyInstantMemoryFilter({ preserveMultiSelect: false })) {
-            void get().fetchSamples({ preserveMultiSelect: false });
-          }
-        }
-      } catch (err) {
-        emitNotice(`Restore layers failed: ${String(err)}`, "error");
-      }
-    },
-
-    emptyTrashedLayers: async (layerIds?: number[]) => {
-      try {
-        const summary = await invoke<LayerTrashSummary>("empty_trashed_layers", {
-          layerIds: layerIds ?? null,
-        });
-        const deletedSet = new Set(summary.affected_ids);
-        set((state) => ({
-          trashedLayerHistory: state.trashedLayerHistory.filter(
-            (l) => !deletedSet.has(l.id)
-          ),
-          selectedLayerIds: state.selectedLayerIds.filter(
-            (id) => !deletedSet.has(id)
-          ),
-          trashedLayerCount: summary.trashed_count,
-          trashedLayerTotalBytes: summary.total_bytes,
-        }));
-        emitNotice(
-          `Moved ${summary.affected_count} trashed layer(s) to Recycle Bin`,
-          "info"
-        );
-        return summary;
-      } catch (err) {
-        emitNotice(`Empty layer trash failed: ${String(err)}`, "error");
-        return null;
-      }
-    },
-
     sendSamplesToLayers: async (
       samples: SampleItem[],
       mode: "current" | "new" | "active-lane" = "current"
@@ -421,8 +378,16 @@ export function createLayerActions(ctx: StoreSliceContext) {
           selectedClipIds: st.layerDraftSelectedClipIds,
           samples: valid,
           mode,
-          playheadSec: getPlayheadSec(),
+          playheadSec: getLayerDraftPlayheadSec(),
         });
+
+      if (addedClipIds.length === 0) {
+        emitNotice(
+          `Layer mix reached the maximum limit of ${MAX_LAYER_CLIPS} clips`,
+          "error"
+        );
+        return;
+      }
 
       if (st.isMiniDock) {
         await get().toggleMiniDock();
@@ -438,7 +403,7 @@ export function createLayerActions(ctx: StoreSliceContext) {
         layerDraftUndoStack: [...st.layerDraftUndoStack.slice(-59), prevRecipe],
         layerDraftRedoStack: [],
       });
-      get().setLayersFilterActive(true, "editor");
+      get().setLayersFilterActive(true, "editor", { skipAutoRender: true });
       emitNotice(
         isFresh
           ? `Created new layer with ${addedClipIds.length} track(s)`
@@ -457,6 +422,7 @@ export function createLayerActions(ctx: StoreSliceContext) {
         return;
       }
 
+      const epoch = getProfileEpoch();
       if (get().isMiniDock) {
         await get().toggleMiniDock();
       }
@@ -464,7 +430,10 @@ export function createLayerActions(ctx: StoreSliceContext) {
       const missingIds = await invoke<string[]>("validate_layer_recipe_sources", {
         recipe: parsed,
       }).catch(() => [] as string[]);
+      if (epoch !== getProfileEpoch()) return;
 
+      cancelPendingPreview();
+      resetLayerDraftPlayheadClock(0);
       set({
         layerDraftName: entry.layer_name.replace(/\.wav$/i, ""),
         layerDraftEditingId: entry.id,
@@ -474,8 +443,9 @@ export function createLayerActions(ctx: StoreSliceContext) {
         layerDraftMissingClipIds: missingIds,
         layerDraftUndoStack: [],
         layerDraftRedoStack: [],
+        layerDraftPreview: null,
       });
-      get().setLayersFilterActive(true, "editor");
+      get().setLayersFilterActive(true, "editor", { skipAutoRender: true });
 
       if (missingIds.length > 0) {
         emitNotice(
@@ -493,6 +463,7 @@ export function createLayerActions(ctx: StoreSliceContext) {
         emitNotice("Add at least one clip before saving a layer", "error");
         return null;
       }
+      const epoch = getProfileEpoch();
       const targetName = (opts?.name ?? st.layerDraftName).trim() || "Untitled_Layer";
       const overwriteId =
         opts?.overwrite && st.layerDraftEditingId !== null
@@ -509,6 +480,7 @@ export function createLayerActions(ctx: StoreSliceContext) {
           exportPreset: st.exportAudioPreset,
           exportLoudnessMode: st.exportLoudnessMode,
         });
+        if (epoch !== getProfileEpoch()) return saved;
         set((state) => {
           const exists = state.layerHistory.some((h) => h.id === saved.id);
           const nextHistory = exists
@@ -530,7 +502,9 @@ export function createLayerActions(ctx: StoreSliceContext) {
         );
         return saved;
       } catch (err) {
-        set({ isSavingLayer: false });
+        if (epoch === getProfileEpoch()) {
+          set({ isSavingLayer: false });
+        }
         emitNotice(`Failed saving layer: ${String(err)}`, "error");
         return null;
       }
@@ -542,6 +516,7 @@ export function createLayerActions(ctx: StoreSliceContext) {
         emitNotice("Add at least one clip before dragging mix to NLE", "error");
         return null;
       }
+      const epoch = getProfileEpoch();
       try {
         const res = await invoke<PreparedLayerDragResult>(
           "prepare_layer_drag_wav",
@@ -554,7 +529,7 @@ export function createLayerActions(ctx: StoreSliceContext) {
             exportLoudnessMode: st.exportLoudnessMode,
           }
         );
-        if (res.savedRecord) {
+        if (res.savedRecord && epoch === getProfileEpoch()) {
           const saved = res.savedRecord;
           set((state) => ({
             layerHistory: [

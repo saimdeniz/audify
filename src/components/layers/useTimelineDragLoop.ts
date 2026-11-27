@@ -1,6 +1,11 @@
 import React, { useEffect } from "react";
+import {
+  getLayerDraftPlayheadSec,
+  setLayerDraftPlayheadSec,
+} from "../../store/playheadClock";
 import { useSampleStore } from "../../store/useSampleStore";
 import type { LayerRecipe } from "../../types";
+import { isLayerDraftSample } from "../../utils/layerHelpers";
 import {
   ActiveDragState,
   applyTrimOrFadeDrag,
@@ -9,10 +14,8 @@ import {
   computeEdgeAutoScrollStep,
   finalizeDragCommitRecipe,
 } from "./layersTimelineDragHelpers";
-import {
-  getClipsInMarqueeRect,
-  TimelineMarqueeRect,
-} from "./layersTimelineMath";
+import { getClipsInMarqueeRect } from "./layersTimelineEditOps";
+import { TimelineMarqueeRect } from "./layersTimelineMath";
 import type { TimelineDropPreview } from "./layersTimelineRenderer";
 
 export interface DragPointerSnapshot {
@@ -86,10 +89,12 @@ export function useTimelineDragLoop(params: UseTimelineDragLoopParams): void {
     ) => {
       if (drag.mode === "scrub") {
         const x = clientX - drag.viewportLeft;
-        requestSeek(
-          Math.max(0, (x + scrollLeftRef.current) / pxPerSec),
-          useSampleStore.getState().isPlaying
-        );
+        const targetSec = Math.max(0, (x + scrollLeftRef.current) / pxPerSec);
+        setLayerDraftPlayheadSec(targetSec);
+        const st = useSampleStore.getState();
+        if (isLayerDraftSample(st.selectedSample)) {
+          requestSeek(targetSec, st.isPlaying);
+        }
         return;
       }
 
@@ -253,6 +258,21 @@ export function useTimelineDragLoop(params: UseTimelineDragLoopParams): void {
         dropPreviewRef.current = null;
         setGhostNewLaneVisible(false);
       }
+      if (drag.mode === "scrub") {
+        const st = useSampleStore.getState();
+        if (
+          !isLayerDraftSample(st.selectedSample) &&
+          !st.isPlaying &&
+          st.layerDraftRecipe.clips.length > 0 &&
+          st.layerDraftMissingClipIds.length === 0
+        ) {
+          void st.renderLayerDraftPreview({
+            autoplay: false,
+            startSec: getLayerDraftPlayheadSec(),
+          });
+        }
+        return;
+      }
       if (!drag.dirty) {
         if (drag.collapseToSingleOnClick && drag.clipId) {
           anchorClipIdRef.current = drag.clipId;
@@ -260,7 +280,7 @@ export function useTimelineDragLoop(params: UseTimelineDragLoopParams): void {
         }
         return;
       }
-      if (drag.mode === "scrub" || drag.mode === "hand") return;
+      if (drag.mode === "hand") return;
 
       const committed = finalizeDragCommitRecipe(
         drag,

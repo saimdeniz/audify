@@ -96,5 +96,17 @@ describe("updateCheckService", () => {
     expect(invokeMock).toHaveBeenCalledWith("open_github_url", {
       url: "https://github.com/saimdeniz/audify/releases/latest",
     });
+
+    // Reject sibling-repo prefix bypasses and spoofed hosts
+    invokeMock.mockClear();
+    invokeMock.mockResolvedValue(undefined);
+    await openAudifyReleasesPage("https://github.com/saimdeniz/audify-malicious/releases/latest");
+    await openAudifyReleasesPage("https://github.com/saimdeniz/audify.evil.tld/releases");
+    await openAudifyReleasesPage("https://user@github.com/saimdeniz/audify/releases/latest");
+    for (const call of invokeMock.mock.calls) {
+      expect(call[1]).toEqual({
+        url: "https://github.com/saimdeniz/audify/releases/latest",
+      });
+    }
   });
 });

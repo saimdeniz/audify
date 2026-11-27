@@ -4,13 +4,15 @@ import {
   hash2,
   hexToRgb,
   mixRgb,
+} from "./blueprintGrid";
+import {
   paintGridBox,
   paintGridCircleRing,
   paintGridLine,
   paintGridMist,
   paintGridMoon,
   paintGridSun,
-} from "./blueprintGrid";
+} from "./blueprintShapes";
 import { AsciiRenderParams } from "./shared";
 
 export function renderCityPreset(params: AsciiRenderParams): void {

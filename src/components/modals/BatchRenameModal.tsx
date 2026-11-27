@@ -277,6 +277,10 @@ export const BatchRenameModal: React.FC = () => {
                 ? isSingle
                   ? "RENAME SLICE"
                   : "BATCH RENAME SLICES"
+                : isLayerMode
+                ? isSingle
+                  ? "RENAME LAYER"
+                  : "BATCH RENAME LAYERS"
                 : isSingle
                 ? "RENAME FILE"
                 : "BATCH RENAME FILES"}
@@ -307,11 +311,11 @@ export const BatchRenameModal: React.FC = () => {
           }}
           className="flex-1 min-h-0 flex flex-col overflow-hidden"
         >
-          {isSliceMode && (
+          {(isSliceMode || isLayerMode) && (
             <div className="px-4 py-1.5 bg-warn/10 border-b border-warn/30 text-warn text-[10.5px] font-mono flex items-center gap-2 shrink-0">
               <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
               <span>
-                Renaming changes the .wav filename on disk — DAW timeline clips referencing the old name may need relinking. Ctrl+Z reverts.
+                Renaming changes the rendered {isLayerMode ? "layer " : ""}.wav filename on disk — DAW timeline clips referencing the old name may need relinking. Ctrl+Z reverts.
               </span>
             </div>
           )}

@@ -1,8 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { SampleItem, SliceRange } from "../../types";
+import {
+  isLayerDraftPreviewPending,
+  isLayerDraftSample,
+} from "../../utils/layerHelpers";
 import { markLocalKeyEdited } from "../../utils/localStorageSafe";
 import { resolveSamplesByIds } from "../../utils/sampleLookup";
-import { getPlayheadSec, resetPlayheadClock, setPlayheadSec } from "../playheadClock";
+import {
+  getLayerDraftPlayheadSec,
+  getPlayheadSec,
+  resetPlayheadClock,
+  setPlayheadSec,
+} from "../playheadClock";
 import {
   AUDIFY_STORAGE_KEYS,
   postCrossWindowSync,
@@ -64,6 +73,9 @@ export function createPlaybackSlice(
   if (timers) {
     timers.flushPendingVolume = flushPendingVolume;
     timers.cancelPendingVolume = cancelPendingVolume;
+  }
+  if (typeof window !== "undefined") {
+    window.addEventListener("pagehide", flushPendingVolume);
   }
 
   return {
@@ -150,13 +162,19 @@ export function createPlaybackSlice(
 
         const samePrimary = selectedSample?.id === sample.id;
         if (!samePrimary) {
-          setPlayheadSec(0);
+          resetPlayheadClock(0);
         }
         set({
           selectedSample: sample,
           selectedSampleIds: merged,
           lastSelectedIndex: anchor,
-          ...(samePrimary ? {} : { sliceRange: null }),
+          ...(samePrimary
+            ? {}
+            : {
+                sliceRange: null,
+                currentTimeSec: 0,
+                durationSec: Math.max(0.01, sample.duration_ms / 1000),
+              }),
         });
         return;
       }
@@ -182,13 +200,21 @@ export function createPlaybackSlice(
 
         const primaryChanged = nextPrimary?.id !== selectedSample?.id;
         if (primaryChanged) {
-          setPlayheadSec(0);
+          resetPlayheadClock(0);
         }
         set({
           selectedSample: nextPrimary,
           selectedSampleIds: nextIds,
           lastSelectedIndex: index,
-          ...(primaryChanged ? { sliceRange: null } : {}),
+          ...(primaryChanged
+            ? {
+                sliceRange: null,
+                currentTimeSec: 0,
+                durationSec: nextPrimary
+                  ? Math.max(0.01, nextPrimary.duration_ms / 1000)
+                  : 0,
+              }
+            : {}),
         });
         return;
       }
@@ -347,7 +373,21 @@ export function createPlaybackSlice(
         return;
       }
       if (!selectedSample) return;
-      saveLastSample(selectedSample);
+      if (selectedSample.id > 0) {
+        saveLastSample(selectedSample);
+      }
+
+      if (
+        !isPlaying &&
+        isLayerDraftSample(selectedSample) &&
+        (get().isRenderingLayerPreview || isLayerDraftPreviewPending())
+      ) {
+        void get().renderLayerDraftPreview({
+          autoplay: true,
+          startSec: getLayerDraftPlayheadSec(),
+        });
+        return;
+      }
 
       const liveTime = getPlayheadSec();
       if (sliceRange) {

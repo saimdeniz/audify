@@ -124,6 +124,8 @@ export function createProfileCrudActions(deps: ProfileCrudDeps) {
             autoCreateCollectionSubfolders: false,
             autoRouteCollectionDrops: true,
             customSliceExportPath: "",
+            customLayerExportPath: "",
+            autoSaveLayerOnNleDrag: get().autoSaveLayerOnNleDrag,
             enableAdvancedFileOps: get().enableAdvancedFileOps,
             confirmBeforeTrash: get().confirmBeforeTrash,
             enableLiveFolderWatch: get().enableLiveFolderWatch,

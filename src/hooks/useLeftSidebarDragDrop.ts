@@ -75,11 +75,42 @@ export function useLeftSidebarDragDrop({
   const isExternalFileDragRef = useRef(false);
   const refreshCachedRectsRef = useRef<(() => void) | null>(null);
 
+  const lastBroadcastHoverRef = useRef<{
+    target: string | null;
+    railTab: SidebarTab | null;
+    inSidebar: boolean;
+    overlayOpen: boolean;
+    externalActive: boolean;
+  } | null>(null);
+
   const updateDragHoverTarget = useCallback(
     (
       next: string | null,
       opts?: { railTab?: SidebarTab | null; inSidebar?: boolean }
     ) => {
+      const nextRailTab = opts?.railTab ?? null;
+      const nextInSidebar = opts?.inSidebar ?? false;
+      const nextOverlayOpen =
+        isMiniOverlayRef.current && isOverlayOpenRef.current;
+      const nextExternalActive = isExternalFileDragRef.current;
+      const prev = lastBroadcastHoverRef.current;
+      if (
+        prev &&
+        prev.target === next &&
+        prev.railTab === nextRailTab &&
+        prev.inSidebar === nextInSidebar &&
+        prev.overlayOpen === nextOverlayOpen &&
+        prev.externalActive === nextExternalActive
+      ) {
+        return;
+      }
+      lastBroadcastHoverRef.current = {
+        target: next,
+        railTab: nextRailTab,
+        inSidebar: nextInSidebar,
+        overlayOpen: nextOverlayOpen,
+        externalActive: nextExternalActive,
+      };
       dragHoverTargetRef.current = next;
       if (opts?.railTab !== undefined) {
         hoveredRailTabRef.current = opts.railTab;
@@ -87,16 +118,15 @@ export function useLeftSidebarDragDrop({
       if (opts?.inSidebar !== undefined) {
         isPointerInSidebarRef.current = opts.inSidebar;
       }
-      setDragHoverTarget(next);
+      setDragHoverTarget((curr) => (curr === next ? curr : next));
       window.dispatchEvent(
         new CustomEvent("audify:folder-drop-overlay", {
           detail: {
-            isExternalFileDragActive: isExternalFileDragRef.current,
+            isExternalFileDragActive: nextExternalActive,
             dragHoverTarget: next,
-            hoveredRailTab: opts?.railTab ?? null,
-            isPointerInSidebar: opts?.inSidebar ?? false,
-            isSidebarOverlayOpen:
-              isMiniOverlayRef.current && isOverlayOpenRef.current,
+            hoveredRailTab: nextRailTab,
+            isPointerInSidebar: nextInSidebar,
+            isSidebarOverlayOpen: nextOverlayOpen,
           },
         })
       );

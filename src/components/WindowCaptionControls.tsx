@@ -107,7 +107,7 @@ export const WindowCaptionControls: React.FC<WindowCaptionControlsProps> =
       const btnW = compact ? "w-[30px]" : "w-[34px]";
       const closeW = compact ? "w-[32px]" : "w-[38px]";
       const baseBtn =
-        "h-full flex items-center justify-center text-fg transition-colors focus:outline-none";
+        "h-full flex items-center justify-center text-fg transition-colors";
 
       return (
         <div

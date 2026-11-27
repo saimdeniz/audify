@@ -86,21 +86,28 @@ fn validate_staged_sqlite_db(staging_db: &Path, user_dir: &Path) -> Result<Conne
         return Err("Snapshot database contains unsupported views or triggers".to_string());
     }
 
-    // Reject snapshot DBs carrying unsafe library paths (UNC, ADS colons, forbidden OS/root folders, or inside user_dir).
-    if let Ok(mut stmt) = conn.prepare("SELECT path FROM libraries") {
-        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
-            for raw_lib in rows.flatten() {
-                let trimmed = raw_lib.trim();
-                if trimmed.is_empty()
-                    || is_unc_or_network_path(trimmed)
-                    || has_ntfs_ads_colon(trimmed)
-                    || is_forbidden_os_or_root_path(trimmed)
-                    || ensure_not_inside_user_dir(user_dir, Path::new(trimmed)).is_err()
-                {
-                    return Err(
-                        "Snapshot database contains unsafe or forbidden library path".to_string(),
-                    );
-                }
+    // Reject snapshot DBs carrying unsafe library paths (UNC, ADS colons, traversal, forbidden OS/root folders, or inside user_dir).
+    {
+        let mut stmt = conn
+            .prepare("SELECT path FROM libraries")
+            .map_err(|_| "Snapshot database has invalid libraries schema".to_string())?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|_| "Snapshot database failed reading libraries table".to_string())?;
+        for row_res in rows {
+            let raw_lib = row_res
+                .map_err(|_| "Snapshot database contains malformed library path".to_string())?;
+            let trimmed = raw_lib.trim();
+            if trimmed.is_empty()
+                || is_unc_or_network_path(trimmed)
+                || has_ntfs_ads_colon(trimmed)
+                || crate::security::has_parent_dir_traversal(trimmed)
+                || is_forbidden_os_or_root_path(trimmed)
+                || ensure_not_inside_user_dir(user_dir, Path::new(trimmed)).is_err()
+            {
+                return Err(
+                    "Snapshot database contains unsafe or forbidden library path".to_string(),
+                );
             }
         }
     }
@@ -411,10 +418,16 @@ where
     state.drain_read_pool();
     apply_staged_db_backup(&mut conn, &prepared.staging_conn)?;
     drop(prepared.staging_conn);
-    let (restored_images, restored_slices) =
-        extract_snapshot_media_assets(&mut prepared.archive, &state.user_dir)?;
-    let res =
-        finalize_restored_snapshot_conn(&conn, &state.user_dir, restored_images, restored_slices);
+    // Live DB has been swapped: guarantee pool drain & cache invalidation even if media extraction fails.
+    let res = match extract_snapshot_media_assets(&mut prepared.archive, &state.user_dir) {
+        Ok((restored_images, restored_slices)) => finalize_restored_snapshot_conn(
+            &conn,
+            &state.user_dir,
+            restored_images,
+            restored_slices,
+        ),
+        Err(err) => Err(err),
+    };
     state.drain_read_pool();
     on_db_swapped();
     res

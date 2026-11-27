@@ -7,21 +7,28 @@ import React, {
   useState,
 } from "react";
 import { Plus } from "lucide-react";
-import { getPlayheadSec, subscribePlayhead } from "../../store/playheadClock";
+import {
+  getLayerDraftPlayheadSec,
+  setLayerDraftPlayheadSec,
+  subscribeLayerDraftPlayhead,
+  subscribePlayhead,
+} from "../../store/playheadClock";
 import { useSampleStore } from "../../store/useSampleStore";
 import type { LayerRecipe, SampleItem } from "../../types";
 import { useDevicePixelRatio } from "../../utils/devicePixelRatio";
-import { MAX_LAYER_LANES } from "../../utils/layerHelpers";
+import { isLayerDraftSample, MAX_LAYER_LANES } from "../../utils/layerHelpers";
 import { requestPeaks, subscribePeaksCache } from "../../utils/peaksStore";
+import { getCachedSampleByIdMap } from "../../utils/sampleLookup";
 import { LayersLaneHeader } from "./LayersLaneHeader";
+import { computePlayheadCenteredScrollLeft } from "./layersTimelineEditOps";
 import {
-  computePlayheadCenteredScrollLeft,
   getTimelineSpanSec,
   TIMELINE_RULER_HEIGHT,
   TimelineMarqueeRect,
 } from "./layersTimelineMath";
 import {
   renderFixedTimelineRuler,
+  renderLayersPlayheadOverlay,
   renderLayersTimelineCanvas,
   TimelineDropPreview,
 } from "./layersTimelineRenderer";
@@ -42,13 +49,12 @@ interface LayersTimelineCanvasProps {
   onStartLaneHeaderResize: (e: React.MouseEvent) => void;
   onChangePxPerSec: (next: number) => void;
   onChangeLaneHeight: (next: number) => void;
-  onFitAll: (viewportWidth: number) => void;
   onSelectClips: (clipIds: string[]) => void;
   onCommitRecipe: (next: LayerRecipe) => void;
   onAddLane: () => void;
   onToggleMute: (laneId: string) => void;
   onToggleSolo: (laneId: string) => void;
-  onChangeLaneVolume: (laneId: string, db: number) => void;
+  onChangeLaneVolume: (laneId: string, db: number, pushUndo?: boolean) => void;
   onRenameLane: (laneId: string, name: string) => void;
   onRemoveLane: (laneId: string) => void;
   onDropSamplesAt: (
@@ -57,18 +63,14 @@ interface LayersTimelineCanvasProps {
     isNewLane: boolean,
     startSec: number
   ) => void;
-  onSplitAtPlayhead: () => void;
-  onCopySelected: () => void;
-  onPasteAtPlayhead: () => void;
-  onDuplicateSelected: () => void;
-  onDeleteSelected: () => void;
   viewportWidthRef: React.MutableRefObject<number>;
 }
 
 /**
  * Interactive 60fps DaVinci-style Timeline stage featuring a fixed `24px` top ruler,
- * resizable lane headers, exact 1:1 logical-to-CSS pixel canvas sizing (zero hit-test drift),
- * DaVinci mouse navigation (`useLayersTimelineInteractions`), and Ghost Lane drag-and-drop.
+ * resizable lane headers, viewport-sized sticky scene canvas (immune to 16,384px GPU
+ * height limits), a separate 60Hz playhead overlay canvas, clamped horizontal scrolling,
+ * and Split-mode independent draft playhead tracking.
  */
 export const LayersTimelineCanvas: React.FC<LayersTimelineCanvasProps> = ({
   recipe,
@@ -83,7 +85,6 @@ export const LayersTimelineCanvas: React.FC<LayersTimelineCanvasProps> = ({
   onStartLaneHeaderResize,
   onChangePxPerSec,
   onChangeLaneHeight,
-  onFitAll,
   onSelectClips,
   onCommitRecipe,
   onAddLane,
@@ -93,11 +94,6 @@ export const LayersTimelineCanvas: React.FC<LayersTimelineCanvasProps> = ({
   onRenameLane,
   onRemoveLane,
   onDropSamplesAt,
-  onSplitAtPlayhead,
-  onCopySelected,
-  onPasteAtPlayhead,
-  onDuplicateSelected,
-  onDeleteSelected,
   viewportWidthRef,
 }) => {
   const themeMode = useSampleStore((s) => s.themeMode);
@@ -112,14 +108,18 @@ export const LayersTimelineCanvas: React.FC<LayersTimelineCanvasProps> = ({
   const rulerCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const canvasWrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const playheadCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const scrollLeftRef = useRef(0);
+  const scrollTopRef = useRef(0);
+  const maxScrollRef = useRef(0);
   const prevPxPerSecRef = useRef(pxPerSec);
   const liveRecipeRef = useRef<LayerRecipe>(recipe);
   const hoveredClipIdRef = useRef<string | null>(null);
   const dropPreviewRef = useRef<TimelineDropPreview | null>(null);
   const marqueeRectRef = useRef<TimelineMarqueeRect | null>(null);
-  const drawRef = useRef<() => void>(() => {});
+  const drawSceneRef = useRef<() => void>(() => {});
+  const drawPlayheadRef = useRef<() => void>(() => {});
 
   const [viewportWidth, setViewportWidth] = useState(640);
   const [vScrollHeight, setVScrollHeight] = useState(240);
@@ -127,29 +127,55 @@ export const LayersTimelineCanvas: React.FC<LayersTimelineCanvasProps> = ({
   const selectedSet = useMemo(() => new Set(selectedClipIds), [selectedClipIds]);
   const missingSet = useMemo(() => new Set(missingClipIds), [missingClipIds]);
 
+  // O(1) lookup via shared sample map ONLY for legacy saved clips missing `sourceDurationSec`
   const sourceDurationBySampleId = useMemo(() => {
     const map = new Map<number, number>();
-    const pool = useSampleStore.getState().allProfileSamples;
-    const needed = new Set<number>();
+    let needsLookup = false;
     for (const c of recipe.clips) {
-      if (c.sourceSampleId !== null) needed.add(c.sourceSampleId);
+      if (
+        c.sourceSampleId !== null &&
+        !(c.sourceDurationSec && c.sourceDurationSec > 0)
+      ) {
+        needsLookup = true;
+        break;
+      }
     }
-    if (needed.size > 0 && pool.length > 0) {
-      for (let i = 0; i < pool.length && map.size < needed.size; i++) {
-        if (needed.has(pool[i].id)) {
-          map.set(pool[i].id, Math.max(0.05, pool[i].duration_ms / 1000));
+    if (!needsLookup) return map;
+    const sampleMap = getCachedSampleByIdMap(
+      useSampleStore.getState().allProfileSamples
+    );
+    for (const c of recipe.clips) {
+      if (c.sourceSampleId !== null && !map.has(c.sourceSampleId)) {
+        const hit = sampleMap.get(c.sourceSampleId);
+        if (hit) {
+          map.set(c.sourceSampleId, Math.max(0.05, hit.duration_ms / 1000));
         }
       }
     }
     return map;
   }, [recipe.clips]);
 
+  const timelineSpanSec = useMemo(() => getTimelineSpanSec(recipe, 8), [recipe]);
+  const contentWidthPx = Math.max(
+    viewportWidth,
+    Math.ceil(timelineSpanSec * pxPerSec)
+  );
+  maxScrollRef.current = Math.max(0, contentWidthPx - viewportWidth);
+
   const setHorizontalScroll = useCallback((nextLeft: number) => {
-    const clamped = Math.max(0, nextLeft);
+    const clamped = Math.max(0, Math.min(maxScrollRef.current, nextLeft));
+    if (Math.abs(clamped - scrollLeftRef.current) < 0.01) return;
     scrollLeftRef.current = clamped;
     if (hScrollRef.current) hScrollRef.current.scrollLeft = clamped;
-    drawRef.current();
+    drawSceneRef.current();
+    drawPlayheadRef.current();
   }, []);
+
+  const drawBothRef = useRef<() => void>(() => {});
+  drawBothRef.current = () => {
+    drawSceneRef.current();
+    drawPlayheadRef.current();
+  };
 
   const interactions = useLayersTimelineInteractions({
     recipe,
@@ -157,7 +183,6 @@ export const LayersTimelineCanvas: React.FC<LayersTimelineCanvasProps> = ({
     selectedSet,
     pxPerSec,
     laneHeight,
-    viewportWidth,
     snapEnabled,
     snapGridSec,
     sourceDurationBySampleId,
@@ -170,19 +195,13 @@ export const LayersTimelineCanvas: React.FC<LayersTimelineCanvasProps> = ({
     hoveredClipIdRef,
     dropPreviewRef,
     marqueeRectRef,
-    drawRef,
+    drawRef: drawBothRef,
     setHorizontalScroll,
     onChangePxPerSec,
     onChangeLaneHeight,
-    onFitAll,
     onSelectClips,
     onCommitRecipe,
     onDropSamplesAt,
-    onSplitAtPlayhead,
-    onCopySelected,
-    onPasteAtPlayhead,
-    onDuplicateSelected,
-    onDeleteSelected,
   });
 
   useEffect(() => {
@@ -193,39 +212,42 @@ export const LayersTimelineCanvas: React.FC<LayersTimelineCanvasProps> = ({
     }
   }, [recipe.clips]);
 
-  const timelineSpanSec = useMemo(() => getTimelineSpanSec(recipe, 8), [recipe]);
-  const contentWidthPx = Math.max(
-    viewportWidth,
-    Math.ceil(timelineSpanSec * pxPerSec)
-  );
   const lanesPixelHeight =
     (recipe.lanes.length + (interactions.ghostNewLaneVisible ? 1 : 0)) * laneHeight;
   const canvasLogicalHeight = Math.max(vScrollHeight, lanesPixelHeight + laneHeight);
+  const stickyViewportH = Math.max(laneHeight, Math.min(vScrollHeight, canvasLogicalHeight));
 
-  // Apply Playhead-centered horizontal scroll AFTER contentWidthPx updates in the DOM
-  // so both Alt+Scroll and Zoom Slider never suffer premature browser scrollLeft clamping.
+  // Re-clamp horizontal scroll whenever content shrinks or viewport expands, and keep playhead-centered zoom.
   useLayoutEffect(() => {
+    const maxScroll = Math.max(0, contentWidthPx - viewportWidth);
+    maxScrollRef.current = maxScroll;
     const prevPx = prevPxPerSecRef.current;
-    if (prevPx === pxPerSec) return;
-    prevPxPerSecRef.current = pxPerSec;
-    const nextLeft = computePlayheadCenteredScrollLeft(
-      getPlayheadSec(),
-      prevPx,
-      pxPerSec,
-      scrollLeftRef.current,
-      viewportWidth,
-      contentWidthPx
-    );
-    scrollLeftRef.current = nextLeft;
-    if (hScrollRef.current) {
-      hScrollRef.current.scrollLeft = nextLeft;
+    if (prevPx !== pxPerSec) {
+      prevPxPerSecRef.current = pxPerSec;
+      const nextLeft = computePlayheadCenteredScrollLeft(
+        getLayerDraftPlayheadSec(),
+        prevPx,
+        pxPerSec,
+        scrollLeftRef.current,
+        viewportWidth,
+        contentWidthPx
+      );
+      scrollLeftRef.current = nextLeft;
+      if (hScrollRef.current) hScrollRef.current.scrollLeft = nextLeft;
+      drawBothRef.current();
+      return;
     }
-    drawRef.current();
+    if (scrollLeftRef.current > maxScroll) {
+      scrollLeftRef.current = maxScroll;
+      if (hScrollRef.current) hScrollRef.current.scrollLeft = maxScroll;
+      drawBothRef.current();
+    }
   }, [pxPerSec, contentWidthPx, viewportWidth]);
 
-  const draw = useCallback(() => {
+  const drawPlayheadAndRuler = useCallback(() => {
     const width = Math.max(100, Math.floor(viewportWidth));
-    const playheadSec = getPlayheadSec();
+    const height = Math.max(laneHeight, Math.floor(stickyViewportH));
+    const playheadSec = getLayerDraftPlayheadSec();
 
     const rulerCanvas = rulerCanvasRef.current;
     if (rulerCanvas) {
@@ -250,9 +272,46 @@ export const LayersTimelineCanvas: React.FC<LayersTimelineCanvasProps> = ({
       }
     }
 
+    const phCanvas = playheadCanvasRef.current;
+    if (phCanvas) {
+      const pw = Math.floor(width * liveDpr);
+      const ph = Math.floor(height * liveDpr);
+      if (phCanvas.width !== pw || phCanvas.height !== ph) {
+        phCanvas.width = pw;
+        phCanvas.height = ph;
+      }
+      const pCtx = phCanvas.getContext("2d");
+      if (pCtx) {
+        renderLayersPlayheadOverlay(pCtx, {
+          width,
+          height,
+          dpr: liveDpr,
+          scrollLeftPx: scrollLeftRef.current,
+          pxPerSec,
+          playheadSec,
+          themeMode,
+          accentColor,
+          enableMica,
+        });
+      }
+    }
+  }, [
+    viewportWidth,
+    stickyViewportH,
+    laneHeight,
+    liveDpr,
+    pxPerSec,
+    themeMode,
+    accentColor,
+    enableMica,
+  ]);
+  drawPlayheadRef.current = drawPlayheadAndRuler;
+
+  const drawScene = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const height = Math.max(laneHeight, Math.floor(canvasLogicalHeight));
+    const width = Math.max(100, Math.floor(viewportWidth));
+    const height = Math.max(laneHeight, Math.floor(stickyViewportH));
     const targetW = Math.floor(width * liveDpr);
     const targetH = Math.floor(height * liveDpr);
     if (canvas.width !== targetW || canvas.height !== targetH) {
@@ -266,13 +325,13 @@ export const LayersTimelineCanvas: React.FC<LayersTimelineCanvasProps> = ({
       height,
       dpr: liveDpr,
       scrollLeftPx: scrollLeftRef.current,
+      scrollTopPx: scrollTopRef.current,
       pxPerSec,
       laneHeight,
       recipe: liveRecipeRef.current,
       selectedClipIds: selectedSet,
       missingClipIds: missingSet,
       hoveredClipId: hoveredClipIdRef.current,
-      playheadSec,
       snapEnabled,
       snapGridSec,
       themeMode,
@@ -284,7 +343,7 @@ export const LayersTimelineCanvas: React.FC<LayersTimelineCanvasProps> = ({
     });
   }, [
     viewportWidth,
-    canvasLogicalHeight,
+    stickyViewportH,
     laneHeight,
     liveDpr,
     pxPerSec,
@@ -297,11 +356,12 @@ export const LayersTimelineCanvas: React.FC<LayersTimelineCanvasProps> = ({
     enableMica,
     sourceDurationBySampleId,
   ]);
-  drawRef.current = draw;
+  drawSceneRef.current = drawScene;
 
   useEffect(() => {
-    draw();
-  }, [draw, recipe]);
+    drawScene();
+    drawPlayheadAndRuler();
+  }, [drawScene, drawPlayheadAndRuler, recipe]);
 
   const followParamsRef = useRef({
     followMode,
@@ -317,17 +377,25 @@ export const LayersTimelineCanvas: React.FC<LayersTimelineCanvasProps> = ({
   };
 
   useEffect(() => {
-    const unsubPlay = subscribePlayhead((sec) => {
+    const unsubMainPlay = subscribePlayhead((sec) => {
+      const st = useSampleStore.getState();
+      // Only mirror global playhead into Layers timeline when the Layers Draft itself is active!
+      if (!isLayerDraftSample(st.selectedSample)) return;
+      setLayerDraftPlayheadSec(sec);
+    });
+
+    const unsubDraftPlay = subscribeLayerDraftPlayhead((sec) => {
       const { followMode: mode, pxPerSec: pps, viewportWidth: vw, contentWidthPx: cw } =
         followParamsRef.current;
-      if (mode !== "off" && useSampleStore.getState().isPlaying) {
+      const st = useSampleStore.getState();
+      let scrolled = false;
+      if (mode !== "off" && st.isPlaying && isLayerDraftSample(st.selectedSample)) {
         const maxScroll = Math.max(0, cw - vw);
         if (maxScroll > 0) {
           const playheadPx = sec * pps;
           const curLeft = scrollLeftRef.current;
           let nextLeft: number | null = null;
           if (mode === "page") {
-            // DaVinci Page Scroll: jump cleanly to next page when playhead leaves viewport
             if (playheadPx > curLeft + vw - 20 || playheadPx < curLeft) {
               nextLeft = Math.max(0, Math.min(maxScroll, playheadPx - vw * 0.12));
             }
@@ -340,14 +408,18 @@ export const LayersTimelineCanvas: React.FC<LayersTimelineCanvasProps> = ({
           if (nextLeft !== null && Math.abs(nextLeft - curLeft) >= 0.5) {
             scrollLeftRef.current = nextLeft;
             if (hScrollRef.current) hScrollRef.current.scrollLeft = nextLeft;
+            scrolled = true;
           }
         }
       }
-      drawRef.current();
+      if (scrolled) drawSceneRef.current();
+      drawPlayheadRef.current();
     });
-    const unsubPeaks = subscribePeaksCache(() => drawRef.current());
+
+    const unsubPeaks = subscribePeaksCache(() => drawSceneRef.current());
     return () => {
-      unsubPlay();
+      unsubMainPlay();
+      unsubDraftPlay();
       unsubPeaks();
     };
   }, []);
@@ -373,9 +445,8 @@ export const LayersTimelineCanvas: React.FC<LayersTimelineCanvasProps> = ({
   return (
     <div
       ref={rootRef}
-      tabIndex={0}
-      onKeyDown={interactions.handleKeyDown}
-      className="flex-1 min-h-0 flex flex-col overflow-hidden bg-surface-0 focus:outline-none"
+      tabIndex={-1}
+      className="flex-1 min-h-0 flex flex-col overflow-hidden bg-surface-0 outline-none"
     >
       {/* FIXED / STICKY TOP RULER ROW */}
       <div
@@ -410,7 +481,7 @@ export const LayersTimelineCanvas: React.FC<LayersTimelineCanvasProps> = ({
           ref={rulerWrapRef}
           onMouseDown={interactions.handleRulerMouseDown}
           className="flex-1 min-w-0 relative cursor-pointer overflow-hidden"
-          title="Click or drag ruler to position playhead"
+          title="Click or drag ruler to position timeline playhead"
         >
           <canvas
             ref={rulerCanvasRef}
@@ -420,9 +491,13 @@ export const LayersTimelineCanvas: React.FC<LayersTimelineCanvasProps> = ({
         </div>
       </div>
 
-      {/* VERTICALLY SCROLLABLE SYNCHRONIZED LANES + 1:1 CANVAS */}
+      {/* VERTICALLY SCROLLABLE SYNCHRONIZED LANES + VIEWPORT-SIZED STICKY CANVAS */}
       <div
         ref={vScrollRef}
+        onScroll={(e) => {
+          scrollTopRef.current = e.currentTarget.scrollTop;
+          drawSceneRef.current();
+        }}
         className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex relative"
       >
         <LayersLaneHeader
@@ -445,20 +520,30 @@ export const LayersTimelineCanvas: React.FC<LayersTimelineCanvasProps> = ({
           onMouseLeave={() => {
             if (hoveredClipIdRef.current !== null) {
               hoveredClipIdRef.current = null;
-              drawRef.current();
+              drawSceneRef.current();
             }
           }}
           onDragOver={interactions.handleDragOver}
           onDragLeave={interactions.clearDropPreview}
           onDrop={interactions.handleDrop}
           style={{ height: canvasLogicalHeight }}
-          className={`flex-1 min-w-0 relative bg-surface-0 overflow-hidden ${interactions.cursorClass}`}
+          className={`flex-1 min-w-0 relative bg-surface-0 ${interactions.cursorClass}`}
         >
-          <canvas
-            ref={canvasRef}
-            className="block pointer-events-none"
-            style={{ width: viewportWidth, height: canvasLogicalHeight }}
-          />
+          <div
+            style={{ height: stickyViewportH }}
+            className="sticky top-0 left-0 w-full overflow-hidden pointer-events-none"
+          >
+            <canvas
+              ref={canvasRef}
+              className="block"
+              style={{ width: viewportWidth, height: stickyViewportH }}
+            />
+            <canvas
+              ref={playheadCanvasRef}
+              className="block absolute inset-0"
+              style={{ width: viewportWidth, height: stickyViewportH }}
+            />
+          </div>
           {recipe.clips.length === 0 && (
             <div className="pointer-events-none absolute inset-x-0 top-[14px] flex justify-center px-4">
               <span className="px-2.5 py-1 rounded-[3px] bg-surface-1 border border-line text-[11px] text-fg-3">
@@ -480,8 +565,11 @@ export const LayersTimelineCanvas: React.FC<LayersTimelineCanvasProps> = ({
         <div
           ref={hScrollRef}
           onScroll={(e) => {
-            scrollLeftRef.current = e.currentTarget.scrollLeft;
-            drawRef.current();
+            scrollLeftRef.current = Math.min(
+              maxScrollRef.current,
+              e.currentTarget.scrollLeft
+            );
+            drawBothRef.current();
           }}
           className="flex-1 overflow-x-auto overflow-y-hidden"
         >

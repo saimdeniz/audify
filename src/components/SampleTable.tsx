@@ -14,11 +14,8 @@ import {
   resolveDuplicateScopeLabel,
 } from "../store/slices/duplicateSlice";
 import { useSampleStore } from "../store/useSampleStore";
-import { AUDIFY_STORAGE_KEYS } from "../constants/storageKeys";
 import { Z_INDEX } from "../constants/zIndex";
-import { safeSetItem } from "../store/storageHelpers";
 import { SampleItem } from "../types";
-import { safeGetItem } from "../utils/localStorageSafe";
 import { buildCollectionHierarchy } from "../utils/collectionTree";
 import {
   EMPTY_SAMPLE_MAP,
@@ -62,6 +59,7 @@ import { SampleTableRowsPane } from "./sample-table/SampleTableRowsPane";
 import { ContextMenuState, RowPopoverPosition } from "./sample-table/tableLayout";
 import { useSampleTableInteractions } from "./sample-table/useSampleTableInteractions";
 import { useSampleTableLayout } from "./sample-table/useSampleTableLayout";
+import { useSampleTableSplitAndDrag } from "./sample-table/useSampleTableSplitAndDrag";
 
 const SampleContextMenu = lazy(() =>
   import("./sample-table/SampleContextMenu").then((m) => ({
@@ -106,6 +104,8 @@ export const SampleTable: React.FC = () => {
   const layersWorkspaceTab = useSampleStore((s) => s.layersWorkspaceTab);
   const layersSplitLibraryOpen = useSampleStore((s) => s.layersSplitLibraryOpen);
   const favoriteOnly = useSampleStore((s) => s.favoriteOnly);
+  const recentOnly = useSampleStore((s) => s.recentOnly);
+  const binFilterActive = useSampleStore((s) => s.binFilterActive);
   const favoritesViewTab = useSampleStore((s) => s.favoritesViewTab);
   const trashFilterActive = useSampleStore((s) => s.trashFilterActive);
   const trashViewTab = useSampleStore((s) => s.trashViewTab);
@@ -218,41 +218,14 @@ export const SampleTable: React.FC = () => {
   const parentRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const splitStageRef = useRef<HTMLDivElement>(null);
-  const [librarySplitPct, setLibrarySplitPct] = useState<number>(() => {
-    const raw = safeGetItem(AUDIFY_STORAGE_KEYS.layerSplitRatioV1);
-    const parsed = raw ? Number(raw) : NaN;
-    return Number.isFinite(parsed)
-      ? Math.max(18, Math.min(68, Math.round(parsed)))
-      : 36;
-  });
-
-  const [isResizingSplit, setIsResizingSplit] = useState(false);
-
-  const handleStartSplitResize = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    const stage = splitStageRef.current;
-    if (!stage) return;
-    const rect = stage.getBoundingClientRect();
-    if (rect.height < 160) return;
-    let latestPct = librarySplitPct;
-    setIsResizingSplit(true);
-    const onMove = (ev: MouseEvent) => {
-      const rel = ((ev.clientY - rect.top) / rect.height) * 100;
-      latestPct = Math.max(18, Math.min(68, Math.round(rel)));
-      setLibrarySplitPct(latestPct);
-    };
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      document.body.style.cursor = "";
-      setIsResizingSplit(false);
-      safeSetItem(AUDIFY_STORAGE_KEYS.layerSplitRatioV1, String(latestPct));
-    };
-    document.body.style.cursor = "row-resize";
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  }, [librarySplitPct]);
+  const hasInAppDrag = useSampleStore((s) => s.inAppDragSample !== null);
+  const {
+    splitStageRef,
+    librarySplitPct,
+    isResizingSplit,
+    dragOverlayArmed,
+    handleStartSplitResize,
+  } = useSampleTableSplitAndDrag(hasInAppDrag);
 
   const [rowTagPopover, setRowTagPopover] = useState<RowPopoverPosition | null>(
     null
@@ -467,6 +440,15 @@ export const SampleTable: React.FC = () => {
                     duplicateHasResult={duplicateHasResult}
                     duplicateScopeLabel={duplicateScopeLabel}
                     duplicateScanModeLabel={duplicateScanModeLabel}
+                    favoriteOnly={favoriteOnly}
+                    recentOnly={recentOnly}
+                    binFilterActive={binFilterActive}
+                    trashFilterActive={trashFilterActive}
+                    selectedCollectionName={
+                      selectedCollectionId !== null
+                        ? collections.find((c) => c.id === selectedCollectionId)?.name ?? null
+                        : null
+                    }
                     onScanDuplicates={handleScanDuplicates}
                     onAddFolder={handleAddFolder}
                     onResetFilters={resetAllFilters}
@@ -537,9 +519,11 @@ export const SampleTable: React.FC = () => {
         </div>
       )}
 
-      <Suspense fallback={null}>
-        <LazyDragDropFeedbackOverlay />
-      </Suspense>
+      {(dragOverlayArmed || hasInAppDrag) && (
+        <Suspense fallback={null}>
+          <LazyDragDropFeedbackOverlay />
+        </Suspense>
+      )}
 
       {selectedSampleIds.length > 1 && showRealSampleTable && (
         <Suspense fallback={null}>

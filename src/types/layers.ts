@@ -1,4 +1,3 @@
-export type LayerTopDeckView = "sum" | "lanes";
 export type FavoritesViewTab = "tracks" | "slices" | "layers";
 export type LayersWorkspaceTab = "saved" | "editor";
 
@@ -20,6 +19,7 @@ export interface LayerClipSpec {
   sourceSampleId: number | null;
   sourcePath: string;
   sourceName: string;
+  sourceDurationSec?: number;
   startSec: number;
   trimStartSec: number;
   trimEndSec: number;

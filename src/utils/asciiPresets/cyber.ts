@@ -4,12 +4,14 @@ import {
   hash2,
   hexToRgb,
   mixRgb,
+} from "./blueprintGrid";
+import {
   paintGridBox,
   paintGridCircleRing,
   paintGridLine,
   paintGridRidge,
   paintGridSun,
-} from "./blueprintGrid";
+} from "./blueprintShapes";
 import { AsciiRenderParams } from "./shared";
 
 export function renderCyberPreset(params: AsciiRenderParams): void {

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { setLayerDraftPlayheadSec } from "../../store/playheadClock";
 import { useSampleStore } from "../../store/useSampleStore";
 import type { LayerRecipe, SampleItem } from "../../types";
 import { getActiveOsDragSample } from "../../utils/drag";
@@ -8,10 +9,9 @@ import {
   buildDraggedClipsList,
   buildExternalDropPreview,
   createBaseDragState,
-  dispatchTimelineKeyDown,
 } from "./layersTimelineDragHelpers";
+import { getShiftClickRangeClipIds } from "./layersTimelineEditOps";
 import {
-  getShiftClickRangeClipIds,
   hitTestTimelineClip,
   MAX_LANE_HEIGHT,
   MAX_PX_PER_SEC,
@@ -39,7 +39,6 @@ interface UseLayersTimelineInteractionsParams {
   selectedSet: ReadonlySet<string>;
   pxPerSec: number;
   laneHeight: number;
-  viewportWidth: number;
   snapEnabled: boolean;
   snapGridSec: number;
   sourceDurationBySampleId: ReadonlyMap<number, number>;
@@ -56,7 +55,6 @@ interface UseLayersTimelineInteractionsParams {
   setHorizontalScroll: (nextLeft: number) => void;
   onChangePxPerSec: (next: number) => void;
   onChangeLaneHeight: (next: number) => void;
-  onFitAll: (viewportWidth: number) => void;
   onSelectClips: (clipIds: string[]) => void;
   onCommitRecipe: (next: LayerRecipe) => void;
   onDropSamplesAt: (
@@ -65,11 +63,6 @@ interface UseLayersTimelineInteractionsParams {
     isNewLane: boolean,
     startSec: number
   ) => void;
-  onSplitAtPlayhead: () => void;
-  onCopySelected: () => void;
-  onPasteAtPlayhead: () => void;
-  onDuplicateSelected: () => void;
-  onDeleteSelected: () => void;
 }
 
 /**
@@ -86,7 +79,6 @@ export function useLayersTimelineInteractions(
     selectedSet,
     pxPerSec,
     laneHeight,
-    viewportWidth,
     snapEnabled,
     snapGridSec,
     sourceDurationBySampleId,
@@ -103,15 +95,9 @@ export function useLayersTimelineInteractions(
     setHorizontalScroll,
     onChangePxPerSec,
     onChangeLaneHeight,
-    onFitAll,
     onSelectClips,
     onCommitRecipe,
     onDropSamplesAt,
-    onSplitAtPlayhead,
-    onCopySelected,
-    onPasteAtPlayhead,
-    onDuplicateSelected,
-    onDeleteSelected,
   } = params;
 
   const requestSeek = useSampleStore((s) => s.requestSeek);
@@ -176,10 +162,12 @@ export function useLayersTimelineInteractions(
     rootRef.current?.focus();
     const rect = rulerWrapRef.current?.getBoundingClientRect();
     const x = rect ? e.clientX - rect.left : 0;
-    requestSeek(
-      Math.max(0, (x + scrollLeftRef.current) / pxPerSec),
-      useSampleStore.getState().isPlaying
-    );
+    const targetSec = Math.max(0, (x + scrollLeftRef.current) / pxPerSec);
+    setLayerDraftPlayheadSec(targetSec);
+    const st = useSampleStore.getState();
+    if (isLayerDraftSample(st.selectedSample)) {
+      requestSeek(targetSec, st.isPlaying);
+    }
     lastDragPointerRef.current = {
       clientX: e.clientX,
       clientY: e.clientY,
@@ -230,7 +218,8 @@ export function useLayersTimelineInteractions(
       y,
       scrollLeftRef.current,
       pxPerSec,
-      laneHeight
+      laneHeight,
+      selectedSet
     );
 
     if (!hit) {
@@ -268,11 +257,15 @@ export function useLayersTimelineInteractions(
       nextSelectedIds = getShiftClickRangeClipIds(recipe, anchor, hit.clip.id);
       onSelectClips(nextSelectedIds);
     } else if (isCtrl) {
-      nextSelectedIds = selectedSet.has(hit.clip.id)
+      const wasSelected = selectedSet.has(hit.clip.id);
+      nextSelectedIds = wasSelected
         ? selectedClipIds.filter((id) => id !== hit.clip.id)
         : [...selectedClipIds, hit.clip.id];
       anchorClipIdRef.current = hit.clip.id;
       onSelectClips(nextSelectedIds);
+      if (wasSelected) {
+        return;
+      }
     } else if (!selectedSet.has(hit.clip.id)) {
       nextSelectedIds = [hit.clip.id];
       anchorClipIdRef.current = hit.clip.id;
@@ -332,7 +325,15 @@ export function useLayersTimelineInteractions(
   const handleLaneMouseMoveHover = (e: React.MouseEvent<HTMLDivElement>) => {
     if (dragRef.current) return;
     const { x, y } = getLaneCoords(e.clientX, e.clientY);
-    const hit = hitTestTimelineClip(recipe, x, y, scrollLeftRef.current, pxPerSec, laneHeight);
+    const hit = hitTestTimelineClip(
+      recipe,
+      x,
+      y,
+      scrollLeftRef.current,
+      pxPerSec,
+      laneHeight,
+      selectedSet
+    );
     const nextHover = hit?.clip.id ?? null;
     if (nextHover !== hoveredClipIdRef.current) {
       hoveredClipIdRef.current = nextHover;
@@ -391,26 +392,6 @@ export function useLayersTimelineInteractions(
     onDropSamplesAt(dragged, preview.laneIndex, preview.isNewLane, preview.startSec);
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) =>
-    dispatchTimelineKeyDown(e, {
-      recipe,
-      viewportWidth,
-      onFitAll,
-      onSelectClips,
-      onCopySelected,
-      onPasteAtPlayhead,
-      onDuplicateSelected,
-      onSplitAtPlayhead,
-      onDeleteSelected,
-      onUndo: () => useSampleStore.getState().undoLayerDraft(),
-      onRedo: () => useSampleStore.getState().redoLayerDraft(),
-      onPlayOrRenderDraft: () => {
-        const st = useSampleStore.getState();
-        if (isLayerDraftSample(st.selectedSample)) st.togglePlayPause();
-        else void st.renderLayerDraftPreview({ autoplay: true, startSec: 0 });
-      },
-    });
-
   return {
     ghostNewLaneVisible,
     cursorClass,
@@ -420,6 +401,5 @@ export function useLayersTimelineInteractions(
     handleDragOver,
     clearDropPreview,
     handleDrop,
-    handleKeyDown,
   };
 }

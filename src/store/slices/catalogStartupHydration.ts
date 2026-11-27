@@ -16,6 +16,7 @@ import {
 } from "../../types";
 import { onError } from "../../utils/errors";
 import { normalizePathForMatch } from "../../utils/format";
+import { resolveNextTrashViewState } from "../../utils/viewModes";
 import { doesSampleMatchInitialView } from "../filterEngine";
 import { runStartupMtimeBackfill } from "../mtimeBackfill";
 import {
@@ -219,10 +220,12 @@ export function scheduleStartupBackgroundStages(
 
   if (!standaloneSettings) {
     setTimeout(() => {
+      if (bootEpoch !== getProfileEpoch()) return;
       get()
         .reloadProfileSamples({ skipFolderStats: true })
         .finally(() => {
           setTimeout(() => {
+            if (bootEpoch !== getProfileEpoch()) return;
             void runStartupMtimeBackfill({
               set,
               get,
@@ -237,19 +240,23 @@ export function scheduleStartupBackgroundStages(
 
   if (!isStandaloneSettingsWindow()) {
     setTimeout(() => {
+      if (bootEpoch !== getProfileEpoch()) return;
       get()
         .syncAllLibrariesBackground()
         .catch(onError("background library sync"));
     }, 3500);
 
     setTimeout(() => {
+      if (bootEpoch !== getProfileEpoch()) return;
       const todayStr = new Date().toISOString().slice(0, 10);
       const lastAutoBackup = safeGetItem(AUDIFY_STORAGE_KEYS.lastAutoBackupDate);
       if (lastAutoBackup !== todayStr) {
         get()
           .createQuickBackup(true)
           .then(() => {
-            safeSetItem(AUDIFY_STORAGE_KEYS.lastAutoBackupDate, todayStr);
+            if (bootEpoch === getProfileEpoch()) {
+              safeSetItem(AUDIFY_STORAGE_KEYS.lastAutoBackupDate, todayStr);
+            }
           })
           .catch(onError("daily auto-backup"));
       } else {
@@ -258,6 +265,7 @@ export function scheduleStartupBackgroundStages(
     }, 3000);
   } else {
     setTimeout(() => {
+      if (bootEpoch !== getProfileEpoch()) return;
       get().fetchLocalBackups().catch(onError("backup list refresh"));
     }, 400);
   }
@@ -322,6 +330,16 @@ export function buildSidebarRefreshState(
   const nextTrashedTracks = trashStatus?.trashed_count ?? state.trashedCount;
   const nextTrashedSlices =
     sliceTrashStatus?.trashed_count ?? state.trashedSliceCount;
+  const nextTrashedLayers = state.trashedLayerCount;
+  const trashExitPatch = resolveNextTrashViewState(
+    state.trashFilterActive,
+    state.trashViewTab,
+    {
+      tracks: nextTrashedTracks,
+      slices: nextTrashedSlices,
+      layers: nextTrashedLayers,
+    }
+  );
 
   return {
     profiles,
@@ -349,8 +367,6 @@ export function buildSidebarRefreshState(
           trashedSliceTotalBytes: sliceTrashStatus.total_bytes,
         }
       : {}),
-    ...(nextTrashedTracks + nextTrashedSlices === 0 && state.trashFilterActive
-      ? { trashFilterActive: false, trashViewTab: "tracks" as const }
-      : {}),
+    ...trashExitPatch,
   };
 }

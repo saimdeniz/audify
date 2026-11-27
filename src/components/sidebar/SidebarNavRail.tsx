@@ -170,6 +170,7 @@ export const SidebarNavRail: React.FC<SidebarNavRailProps> = ({
               data-sidebar-tab={tab.id}
               data-tooltip={isHoverOverlayMode ? undefined : tab.label}
               aria-label={tab.label}
+              aria-current={isTabActive ? "page" : undefined}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 if (onPrimaryTabSelect) {
@@ -201,7 +202,7 @@ export const SidebarNavRail: React.FC<SidebarNavRailProps> = ({
               )}
               {tab.icon}
               {tab.countBadge !== undefined && tab.countBadge > 0 && (
-                <span className="absolute top-0.5 right-0.5 min-w-[12px] h-[12px] px-0.5 rounded-full bg-accent text-accent-on font-mono text-[8.5px] font-bold flex items-center justify-center">
+                <span className="absolute top-0.5 right-0.5 min-w-[13px] h-[13px] px-0.5 rounded-full bg-accent text-accent-on font-mono text-[9.5px] font-bold flex items-center justify-center">
                   {tab.countBadge}
                 </span>
               )}
@@ -227,6 +228,7 @@ export const SidebarNavRail: React.FC<SidebarNavRailProps> = ({
               data-sidebar-tab="bin"
               data-tooltip="Session Bin"
               aria-label="Session Bin"
+              aria-current={isBinActiveTab ? "page" : undefined}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 if (onBinRailSelect) {
@@ -265,7 +267,7 @@ export const SidebarNavRail: React.FC<SidebarNavRailProps> = ({
               )}
               <Inbox className={railIconSize} />
               {validBinCount > 0 && (
-                <span className="absolute top-0.5 right-0 min-w-[13px] h-[12px] px-0.5 rounded-full bg-accent text-accent-on font-mono text-[8.5px] font-bold flex items-center justify-center">
+                <span className="absolute top-0.5 right-0 min-w-[14px] h-[13px] px-0.5 rounded-full bg-accent text-accent-on font-mono text-[9.5px] font-bold flex items-center justify-center">
                   {validBinCount > 99 ? "99+" : validBinCount}
                 </span>
               )}
@@ -287,6 +289,7 @@ export const SidebarNavRail: React.FC<SidebarNavRailProps> = ({
                 data-sidebar-tab="trash"
                 data-tooltip="Trash"
                 aria-label="Trash"
+                aria-current={isTrashActiveTab ? "page" : undefined}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
                   if (onTrashRailSelect) {
@@ -321,7 +324,7 @@ export const SidebarNavRail: React.FC<SidebarNavRailProps> = ({
                 )}
                 <Trash2 className={railIconSize} />
                 {trashedCount > 0 && (
-                  <span className="absolute top-0.5 right-0 min-w-[13px] h-[12px] px-0.5 rounded-full bg-accent text-accent-on font-mono text-[8.5px] font-bold flex items-center justify-center">
+                  <span className="absolute top-0.5 right-0 min-w-[14px] h-[13px] px-0.5 rounded-full bg-accent text-accent-on font-mono text-[9.5px] font-bold flex items-center justify-center">
                     {trashedCount > 99 ? "99+" : trashedCount}
                   </span>
                 )}

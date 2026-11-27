@@ -14,22 +14,27 @@ import {
   createBaseDragState,
   finalizeDragCommitRecipe,
 } from "./layersTimelineDragHelpers";
-import { getClipActiveFxBadges } from "./layersClipFxBadges";
+import {
+  getClipActiveFxBadges,
+  getFxBadgeWidthTemplate,
+} from "./layersClipFxBadges";
+import {
+  computePlayheadCenteredScrollLeft,
+  getClipsInMarqueeRect,
+  getShiftClickRangeClipIds,
+  resolveSameLaneOverlaps,
+} from "./layersTimelineEditOps";
 import {
   applyLeftTrim,
   applyRightTrim,
   computeFitAllPxPerSec,
-  computePlayheadCenteredScrollLeft,
   DEFAULT_LANE_HEIGHT,
   getClipPitchMode,
   getClipRenderedDurationSec,
-  getClipsInMarqueeRect,
-  getShiftClickRangeClipIds,
   hitTestTimelineClip,
   MAX_PX_PER_SEC,
   MIN_PX_PER_SEC,
   pxPerSecToSliderValue,
-  resolveSameLaneOverlaps,
   sliderValueToPxPerSec,
   snapTimeSec,
   splitClipAtTimelineSec,
@@ -131,9 +136,16 @@ describe("layersTimelineMath", () => {
     );
     expect(tapeBadges).toEqual([
       { kind: "missing", label: "MISSING" },
-      { kind: "gain", label: "-6dB" },
+      { kind: "gain", label: "-6.0dB" },
       { kind: "pitch", label: "+12st T" },
     ]);
+
+    // Fixed-width badge templates prevent frame jitter when Gain/Pitch values change width
+    expect(getFxBadgeWidthTemplate({ kind: "gain", label: "-6.0dB" })).toBe("-24.0dB");
+    expect(getFxBadgeWidthTemplate({ kind: "gain", label: "-10.5dB" })).toBe("-24.0dB");
+    expect(getFxBadgeWidthTemplate({ kind: "pitch", label: "+4st" })).toBe("+24st");
+    expect(getFxBadgeWidthTemplate({ kind: "pitch", label: "-12st" })).toBe("+24st");
+    expect(getFxBadgeWidthTemplate({ kind: "pitch", label: "+4st T" })).toBe("+24st T");
   });
 
   it("snaps time cleanly to grid when enabled and preserves precision when disabled", () => {
@@ -381,5 +393,75 @@ describe("layersTimelineMath", () => {
       expect(hex).toMatch(/^#[0-9A-F]{6}$/);
     }
     expect(new Set(colors).size).toBe(64);
+  });
+
+  it("untrims reversed clips leftward up to sourceDurationSec and caps right trim for external clips", () => {
+    const revClip: LayerClipSpec = {
+      ...BASE_CLIP,
+      sourceSampleId: null,
+      sourceDurationSec: 2.0,
+      startSec: 1.0,
+      trimStartSec: 0.2,
+      trimEndSec: 1.2,
+      reversed: true,
+    };
+    const untrimmedLeft = applyLeftTrim(revClip, -0.5, revClip.sourceDurationSec);
+    expect(untrimmedLeft.startSec).toBeCloseTo(0.5, 5);
+    expect(untrimmedLeft.trimEndSec).toBeCloseTo(1.7, 5);
+
+    // Expanding past maxSourceDurationSec clamps cleanly to 2.0s
+    const clampedLeft = applyLeftTrim(revClip, -1.5, revClip.sourceDurationSec);
+    expect(clampedLeft.trimEndSec).toBeCloseTo(2.0, 5);
+
+    // Right trim on external clip (sourceSampleId: null) falls back to clip.sourceDurationSec
+    const extClip: LayerClipSpec = {
+      ...BASE_CLIP,
+      sourceSampleId: null,
+      sourceDurationSec: 1.5,
+      trimStartSec: 0.2,
+      trimEndSec: 1.0,
+      reversed: false,
+    };
+    const cappedRight = applyRightTrim(extClip, 2.0);
+    expect(cappedRight.trimEndSec).toBeCloseTo(1.5, 5);
+  });
+
+  it("prioritizes selected clips in hit-test Z-order and protects trim edges when fade is 0", () => {
+    const c1: LayerClipSpec = {
+      ...BASE_CLIP,
+      id: "c1",
+      startSec: 1.0,
+      trimStartSec: 0,
+      trimEndSec: 1.0,
+      fadeInSec: 0,
+      fadeOutSec: 0,
+    };
+    const c2: LayerClipSpec = {
+      ...c1,
+      id: "c2",
+    };
+    const recipe: LayerRecipe = { ...BASE_RECIPE, clips: [c1, c2] };
+    // Even though c2 is later in array, selecting c1 gives c1 Z-order priority
+    const hitSelected = hitTestTimelineClip(
+      recipe,
+      150,
+      25,
+      0,
+      100,
+      DEFAULT_LANE_HEIGHT,
+      new Set(["c1"])
+    );
+    expect(hitSelected?.clip.id).toBe("c1");
+
+    // Near bottom-left edge with fadeIn=0 must resolve to trim-left (not fade-in)
+    const hitLeftEdge = hitTestTimelineClip(
+      recipe,
+      102,
+      30,
+      0,
+      100,
+      DEFAULT_LANE_HEIGHT
+    );
+    expect(hitLeftEdge?.zone).toBe("trim-left");
   });
 });

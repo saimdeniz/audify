@@ -1,7 +1,6 @@
 use crate::security::open_https_url_in_browser;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
-use std::time::Duration;
 
 pub const AUDIFY_GITHUB_REPO_URL: &str = "https://github.com/saimdeniz/audify";
 pub const AUDIFY_RELEASES_LATEST_URL: &str = "https://github.com/saimdeniz/audify/releases/latest";
@@ -115,15 +114,7 @@ pub(crate) fn sanitize_allowed_github_url(raw: &str) -> Option<String> {
 }
 
 fn build_update_http_agent() -> ureq::Agent {
-    let tls_config = ureq::tls::TlsConfig::builder()
-        .provider(ureq::tls::TlsProvider::NativeTls)
-        .root_certs(ureq::tls::RootCerts::PlatformVerifier)
-        .build();
-    ureq::Agent::config_builder()
-        .tls_config(tls_config)
-        .timeout_global(Some(Duration::from_secs(UPDATE_CHECK_TIMEOUT_SECS)))
-        .build()
-        .new_agent()
+    crate::ai_tagger::model_download::build_https_agent_with_timeout(UPDATE_CHECK_TIMEOUT_SECS)
 }
 
 fn fetch_latest_release_sync(current_version: &str) -> Result<AppUpdateInfo, String> {

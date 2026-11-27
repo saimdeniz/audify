@@ -137,7 +137,7 @@ export const TaxonomyStudioRow: React.FC<TaxonomyStudioRowProps> = React.memo(
 
         <span className="flex items-center gap-1.5 shrink-0 ml-2">
           {isNodeDropHover && (
-            <span className="font-mono text-[8.5px] text-accent-fg font-semibold">
+            <span className="font-mono text-[9.5px] text-accent-fg font-semibold">
               ↳ Nest
             </span>
           )}

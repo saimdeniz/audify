@@ -4,6 +4,20 @@ import type {
   SliceSortKey,
   SortDir,
 } from "../types";
+import { normalizePathForMatch } from "./pathHelpers";
+
+export function upsertSliceEntryInList(
+  list: SliceHistoryEntry[],
+  entry: SliceHistoryEntry
+): SliceHistoryEntry[] {
+  const norm = normalizePathForMatch(entry.slice_path);
+  const filtered = list.filter(
+    (item) =>
+      item.id !== entry.id &&
+      normalizePathForMatch(item.slice_path) !== norm
+  );
+  return [entry, ...filtered];
+}
 
 export function isSlicePreviewSample(
   sample: SampleItem | null | undefined

@@ -4,11 +4,11 @@ import {
   makeLayerClipId,
   MAX_LAYER_LANES,
 } from "../../utils/layerHelpers";
+import { resolveSameLaneOverlaps } from "./layersTimelineEditOps";
 import {
   applyLeftTrim,
   applyRightTrim,
   getClipRenderedDurationSec,
-  resolveSameLaneOverlaps,
   snapTimeSec,
   TimelineClipHitZone,
 } from "./layersTimelineMath";
@@ -240,12 +240,14 @@ export function applyTrimOrFadeDrag(
   deltaSec: number,
   sourceDurationBySampleId: ReadonlyMap<number, number>
 ): LayerClipSpec {
-  if (mode === "trim-left") return applyLeftTrim(orig, deltaSec);
+  const maxDur =
+    orig.sourceDurationSec && orig.sourceDurationSec > 0
+      ? orig.sourceDurationSec
+      : orig.sourceSampleId !== null
+      ? sourceDurationBySampleId.get(orig.sourceSampleId)
+      : undefined;
+  if (mode === "trim-left") return applyLeftTrim(orig, deltaSec, maxDur);
   if (mode === "trim-right") {
-    const maxDur =
-      orig.sourceSampleId !== null
-        ? sourceDurationBySampleId.get(orig.sourceSampleId)
-        : undefined;
     return applyRightTrim(orig, deltaSec, maxDur);
   }
   const maxFade = getClipRenderedDurationSec(orig) * 0.5;

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Hash, Music, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { FAMILY_COLOR_PALETTE } from "../../constants/palettes";
 import { useStudioPointerDrag } from "../../hooks/useStudioPointerDrag";
 import { AUDIFY_STORAGE_KEYS } from "../../store/storageHelpers";
@@ -17,10 +17,7 @@ import {
 import { StudioDragPill } from "../common/StudioDragPill";
 import { QuickCreatePopover } from "../QuickCreatePopover";
 import { TaxonomySidebarHeader } from "./TaxonomySidebarHeader";
-import {
-  TaxonomyFacetSectionHeader,
-  TaxonomySidebarRow,
-} from "./TaxonomySidebarRow";
+import { TaxonomySidebarSections } from "./TaxonomySidebarSections";
 import {
   loadSidebarExpandedTagIds,
   loadSidebarSectionMap,
@@ -459,145 +456,32 @@ export const TaxonomyDomainSidebarTab: React.FC<
         ref={scrollContainerRef}
         className="flex-1 overflow-y-auto py-1.5 select-none"
       >
-        {tabTags.length === 0 ? (
-          <div className="py-8 px-3 text-center space-y-2">
-            <div className="w-8 h-8 mx-auto rounded-[3px] bg-surface-2 flex items-center justify-center text-fg-3 border border-line">
-              {isGenres ? (
-                <Music className="w-4 h-4" />
-              ) : (
-                <Hash className="w-4 h-4" />
-              )}
-            </div>
-            <div className="text-[11px] font-medium text-fg">
-              {isGenres ? "No genres or moods yet" : "No tags yet"}
-            </div>
-            <div className="text-[10px] text-fg-3 leading-relaxed">
-              {isGenres
-                ? "Scan a music library or click + above to create genres and moods."
-                : "Scan your audio library to auto-tag matching sounds, or click + above to create categories."}
-            </div>
-          </div>
-        ) : visibleCount === 0 ? (
-          <div className="py-4 text-center text-[11px] text-fg-3 font-mono">
-            {isGenres
-              ? "No genres or moods match filter."
-              : "No tags match filter."}
-          </div>
-        ) : (
-          <div className="flex flex-col">
-            {facetSections.map(
-              ({ facet, hierarchical, totalCount, rows }, idx) => {
-                const showSection =
-                  idx === 0 ||
-                  rows.length > 0 ||
-                  draggingTagId !== null ||
-                  !facet.is_system;
-                if (!showSection) return null;
-                const isOpen = isSearching
-                  ? true
-                  : sectionsOpen[facet.slug] !== false;
-                const dropKey = `sec:${facet.slug}`;
-                const isSource = facet.slug === "source";
-                return (
-                  <div key={facet.slug}>
-                    <TaxonomyFacetSectionHeader
-                      label={facet.name.toUpperCase()}
-                      count={isSearching ? rows.length : totalCount}
-                      isOpen={isOpen}
-                      isDropActive={activeDropKey === dropKey}
-                      dropScope={dropScope}
-                      dropKey={dropKey}
-                      dropHint={`↳ ${facet.name} root`}
-                      title={`Click to collapse · Drop an item here to move to ${facet.name}`}
-                      rightExtra={
-                        facet.slug !== defaultFacetSlug ? (
-                          <QuickCreatePopover
-                            title={`New ${facet.name}`}
-                            placeholder={
-                              hierarchical
-                                ? "e.g. Parent/Child"
-                                : `New ${facet.name}...`
-                            }
-                            hasColor={!isSource}
-                            align="right"
-                            buttonTitle={`Create in ${facet.name}`}
-                            buttonClassName="w-[16px] h-[16px] rounded-[2px] text-fg-3 hover:text-accent-fg hover:bg-surface-3 flex items-center justify-center transition-colors"
-                            buttonIcon={<Plus className="w-3 h-3" />}
-                            onCreated={(name, color) =>
-                              handleCreateInFacet(name, color, facet.slug)
-                            }
-                          />
-                        ) : undefined
-                      }
-                      onToggle={() => setSectionOpen(facet.slug, !isOpen)}
-                    />
-
-                    {isOpen && rows.length > 0 && (
-                      <div className="flex flex-col text-[12px]">
-                        {rows.map((row) => {
-                          const isSelected =
-                            selectedTagSet.has(row.tag.id) ||
-                            (isGenres &&
-                              selectedGenre !== null &&
-                              selectedGenre.toLowerCase() ===
-                                row.tag.name.toLowerCase());
-                          const targetKey = `tag-${row.tag.id}`;
-                          const nodeDropKey = `node:${facet.slug}:${row.tag.id}`;
-                          return (
-                            <TaxonomySidebarRow
-                              key={row.tag.id}
-                              tag={row.tag}
-                              depth={hierarchical ? row.depth : 0}
-                              hasChildren={hierarchical && row.hasChildren}
-                              isExpanded={hierarchical && row.isExpanded}
-                              isSource={isSource}
-                              flat={!hierarchical}
-                              effectiveColor={row.effectiveColor}
-                              breadcrumb={
-                                isGenres
-                                  ? `${facet.name}: ${row.breadcrumb}`
-                                  : isSource
-                                  ? `Source: ${row.breadcrumb}`
-                                  : row.breadcrumb
-                              }
-                              dropLabelPrefix={isGenres ? facet.name : undefined}
-                              isSelected={isSelected}
-                              isExcluded={excludedTagSet.has(row.tag.id)}
-                              isDraggingInApp={isDraggingInApp}
-                              isDraggingSelf={draggingTagId === row.tag.id}
-                              inAppDragCount={inAppDragCount}
-                              isDropHover={
-                                isDraggingInApp && dragHoverTarget === targetKey
-                              }
-                              isDropFlash={dropFlashTarget === targetKey}
-                              isReparentHover={
-                                hierarchical && activeDropKey === nodeDropKey
-                              }
-                              dropScope={hierarchical ? dropScope : undefined}
-                              dropKey={hierarchical ? nodeDropKey : undefined}
-                              dropHint={
-                                hierarchical
-                                  ? `↳ Nest under ${row.tag.name}`
-                                  : undefined
-                              }
-                              onToggleExpand={
-                                hierarchical ? toggleExpand : undefined
-                              }
-                              onClick={handleRowClick}
-                              onContextMenu={handleRowContextMenu}
-                              onMouseEnterTag={handleRowMouseEnter}
-                              onPointerDragStart={handleRowPointerDragStart}
-                            />
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              }
-            )}
-          </div>
-        )}
+        <TaxonomySidebarSections
+          isGenres={isGenres}
+          tabTagsCount={tabTags.length}
+          visibleCount={visibleCount}
+          isSearching={isSearching}
+          facetSections={facetSections}
+          sectionsOpen={sectionsOpen}
+          defaultFacetSlug={defaultFacetSlug}
+          dropScope={dropScope}
+          selectedTagSet={selectedTagSet}
+          excludedTagSet={excludedTagSet}
+          selectedGenre={selectedGenre}
+          isDraggingInApp={isDraggingInApp}
+          inAppDragCount={inAppDragCount}
+          draggingTagId={draggingTagId}
+          activeDropKey={activeDropKey}
+          dragHoverTarget={dragHoverTarget}
+          dropFlashTarget={dropFlashTarget}
+          onSetSectionOpen={setSectionOpen}
+          onCreateInFacet={handleCreateInFacet}
+          onToggleExpand={toggleExpand}
+          onRowClick={handleRowClick}
+          onRowContextMenu={handleRowContextMenu}
+          onRowMouseEnter={handleRowMouseEnter}
+          onRowPointerDragStart={handleRowPointerDragStart}
+        />
       </div>
       <StudioDragPill dragState={dragState} />
     </div>

@@ -1,6 +1,7 @@
 use super::{
-    dedup_positive_ids, ensure_existing_layer_in_scope, ensure_slice_not_in_readonly_library,
-    format_os_display_path, sanitize_layer_stem, with_read_conn, LayerHistoryRecord,
+    cleanup_quarantined_layer_file_if_present, dedup_positive_ids, ensure_existing_layer_in_scope,
+    ensure_slice_not_in_readonly_library, format_os_display_path, sanitize_layer_stem,
+    with_read_conn, LayerHistoryRecord,
 };
 use crate::audio_engine::AudioEngineState;
 use crate::db::{get_active_profile_id, AppState};
@@ -78,6 +79,7 @@ pub(super) fn query_layer_record_by_id(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn upsert_layer_history_row(
     conn: &Connection,
+    user_dir: &Path,
     profile_id: i64,
     overwrite_id: Option<i64>,
     wav_path: &Path,
@@ -134,6 +136,20 @@ pub(super) fn upsert_layer_history_row(
         }
         return query_layer_record_by_id(conn, profile_id, id);
     }
+
+    // If a previously trashed row occupies this exact (profile_id, layer_path),
+    // clean up its quarantined file on disk before ON CONFLICT clears trash_file_path.
+    let prior_trash_path: Option<String> = conn
+        .query_row(
+            "SELECT trash_file_path FROM layer_history
+             WHERE profile_id = ?1 AND layer_path = ?2 AND COALESCE(is_trashed, 0) = 1
+             LIMIT 1",
+            params![profile_id, path_str],
+            |r| r.get(0),
+        )
+        .ok()
+        .flatten();
+    cleanup_quarantined_layer_file_if_present(user_dir, prior_trash_path.as_deref());
 
     conn.execute(
         "INSERT INTO layer_history (
@@ -309,7 +325,7 @@ pub(crate) fn rename_layer_item_with_conn(
 
     let same_ci = normalize_clean_path(&src_pb.to_string_lossy())
         .eq_ignore_ascii_case(&normalize_clean_path(&target_pb.to_string_lossy()));
-    if !same_ci && target_pb.exists() {
+    if !same_ci && fs::symlink_metadata(&target_pb).is_ok() {
         return Err(format!("A layer named '{}' already exists in this folder", next_file_name));
     }
 

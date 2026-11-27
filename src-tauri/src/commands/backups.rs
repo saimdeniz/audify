@@ -11,8 +11,11 @@ use crate::security::{
 };
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
+
+static QUICK_BACKUP_NONCE: AtomicU64 = AtomicU64::new(1);
 
 fn is_profile_backup_filename(fname: &str) -> bool {
     let lower = fname.to_ascii_lowercase();
@@ -35,7 +38,10 @@ fn list_backups_from_dir(user_dir: &Path) -> Result<Vec<BackupFileInfo>, String>
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path.is_file() {
+        let Ok(meta) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() || !meta.file_type().is_file() {
             continue;
         }
         let fname = entry.file_name().to_string_lossy().to_string();
@@ -45,11 +51,10 @@ fn list_backups_from_dir(user_dir: &Path) -> Result<Vec<BackupFileInfo>, String>
             continue;
         }
 
-        let meta = entry.metadata().ok();
-        let file_size = meta.as_ref().map(|m| m.len() as i64).unwrap_or(0);
+        let file_size = meta.len() as i64;
         let modified_ms = meta
-            .as_ref()
-            .and_then(|m| m.modified().ok())
+            .modified()
+            .ok()
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
@@ -158,8 +163,13 @@ pub async fn create_quick_backup(
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
 
-        let file_name = format!("{}_{}_{}.audify-profile", prefix, slug, ts_str);
-        let file_path = backups_dir.join(&file_name);
+        let mut file_name = format!("{}_{}_{}.audify-profile", prefix, slug, ts_str);
+        let mut file_path = backups_dir.join(&file_name);
+        if fs::symlink_metadata(&file_path).is_ok() {
+            let nonce = QUICK_BACKUP_NONCE.fetch_add(1, Ordering::Relaxed);
+            file_name = format!("{}_{}_{}_{}.audify-profile", prefix, slug, ts_str, nonce);
+            file_path = backups_dir.join(&file_name);
+        }
         let file_size = write_profile_package_to_path(&pkg, &file_path)
             .map_err(|e| sanitize_err(&state_owned.user_dir, &e))? as i64;
 

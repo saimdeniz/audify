@@ -5,6 +5,8 @@ import {
   hexToRgbTriplet,
   normalizeAccentForTheme,
   resolveAccentPresetRowBg,
+  srgbRelativeLuminance,
+  wcagContrastRatio,
 } from "../constants/themePalettes";
 import { ThemeMode } from "../types";
 
@@ -71,41 +73,65 @@ export function applyThemeAndAccentToDom(themeMode: ThemeMode, accentHex: string
     `#${hr.toString(16).padStart(2, "0")}${hg.toString(16).padStart(2, "0")}${hb.toString(16).padStart(2, "0")}`
   );
 
-  // Dynamic luminance for text-on-accent and text-accent-fg:
-  const accentLum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  // Dynamic WCAG 2.1 linearized luminance for text-on-accent and text-accent-fg:
   const isMonochrome = Math.abs(r - g) < 16 && Math.abs(g - b) < 16;
 
   root.style.setProperty("--c-accent-on", computeAccentOnColor(themeMode, accentHex));
 
-  // Accent used as text/icon on surface background:
+  // Accent used as text/icon on surface background (guarantee >= 4.6:1 AA contrast):
   let fgR = r;
   let fgG = g;
   let fgB = b;
 
   if (themeMode === "dark" || themeMode === "contrast") {
-    if (accentLum < 0.42) {
-      if (isMonochrome) {
-        fgR = 244;
-        fgG = 244;
-        fgB = 245;
-      } else {
-        const boost = 0.55 / Math.max(0.08, accentLum);
-        fgR = Math.min(255, Math.round(r * boost + 35));
-        fgG = Math.min(255, Math.round(g * boost + 35));
-        fgB = Math.min(255, Math.round(b * boost + 35));
+    const surfaceLum = themeMode === "contrast" ? 0.005 : 0.011;
+    const minRatio = themeMode === "contrast" ? 6.5 : 4.7;
+    if (isMonochrome && wcagContrastRatio(srgbRelativeLuminance(fgR, fgG, fgB), surfaceLum) < minRatio) {
+      fgR = 244;
+      fgG = 244;
+      fgB = 245;
+    } else if (wcagContrastRatio(srgbRelativeLuminance(fgR, fgG, fgB), surfaceLum) < minRatio) {
+      let lo = 0;
+      let hi = 1;
+      for (let step = 0; step < 12; step++) {
+        const mid = (lo + hi) * 0.5;
+        const candR = Math.round(r + (255 - r) * mid);
+        const candG = Math.round(g + (255 - g) * mid);
+        const candB = Math.round(b + (255 - b) * mid);
+        if (wcagContrastRatio(srgbRelativeLuminance(candR, candG, candB), surfaceLum) >= minRatio) {
+          hi = mid;
+        } else {
+          lo = mid;
+        }
       }
+      fgR = Math.round(r + (255 - r) * hi);
+      fgG = Math.round(g + (255 - g) * hi);
+      fgB = Math.round(b + (255 - b) * hi);
     }
   } else if (themeMode === "light") {
+    const surfaceLum = 0.835; // #EAECEF (surface-1)
+    const minRatio = 4.7;
     if (isMonochrome) {
       fgR = 24;
       fgG = 24;
       fgB = 27;
-    } else if (accentLum > 0.24) {
-      // Scale luminance into WCAG AA readable ink range on white/pastel Light surfaces
-      const scale = Math.min(0.76, Math.sqrt(0.24 / Math.max(0.05, accentLum)) * 0.72);
-      fgR = Math.max(0, Math.round(r * scale));
-      fgG = Math.max(0, Math.round(g * scale));
-      fgB = Math.max(0, Math.round(b * scale));
+    } else if (wcagContrastRatio(srgbRelativeLuminance(fgR, fgG, fgB), surfaceLum) < minRatio) {
+      let lo = 0;
+      let hi = 1;
+      for (let step = 0; step < 12; step++) {
+        const mid = (lo + hi) * 0.5;
+        const candR = Math.round(r * mid);
+        const candG = Math.round(g * mid);
+        const candB = Math.round(b * mid);
+        if (wcagContrastRatio(srgbRelativeLuminance(candR, candG, candB), surfaceLum) >= minRatio) {
+          lo = mid;
+        } else {
+          hi = mid;
+        }
+      }
+      fgR = Math.max(0, Math.round(r * lo));
+      fgG = Math.max(0, Math.round(g * lo));
+      fgB = Math.max(0, Math.round(b * lo));
     }
   }
 

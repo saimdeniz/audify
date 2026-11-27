@@ -104,7 +104,7 @@ const BackupListRow: React.FC<BackupListRowProps> = React.memo(
           <div className="grid grid-cols-[68px_138px_1fr_62px_auto] items-center gap-2.5 w-full min-w-0">
             <div>
               <span
-                className={`px-1.5 py-0.2 font-mono text-[8.5px] rounded-xs font-semibold uppercase inline-block border ${badge.className}`}
+                className={`px-1.5 py-0.2 font-mono text-[9.5px] rounded-xs font-semibold uppercase inline-block border ${badge.className}`}
               >
                 {badge.label}
               </span>

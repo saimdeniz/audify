@@ -7,7 +7,7 @@ use crate::commands::file_ops::{
 use crate::db::{get_active_profile_id, run_read_query, AppState};
 use crate::security::{
     has_ntfs_ads_colon, is_dos_device_name, is_safe_library_dir, is_unc_or_network_path,
-    normalize_clean_path, sanitize_err, validate_audio_path_in_scope,
+    normalize_clean_path, sanitize_err, truncate_filename_stem_utf16, AuthorizedAudioScope,
 };
 use rusqlite::{params, Connection};
 use std::fs;
@@ -87,10 +87,12 @@ pub(crate) fn move_samples_to_trash_with_conn(
     let user_trash_dir = user_dir.join("trash");
     let _ = fs::create_dir_all(&user_trash_dir);
 
+    // Pre-resolve authorized scope ONCE outside the per-sample loop (eliminates N+1 DB scope queries)
+    let audio_scope = AuthorizedAudioScope::from_conn(conn, user_dir);
     let mut moved_records: Vec<(i64, String, String, String)> = Vec::new();
     let mut completed_disk_moves: Vec<(PathBuf, PathBuf)> = Vec::new();
     for cand in &candidates {
-        let resolved_src = match validate_audio_path_in_scope(conn, user_dir, &cand.file_path) {
+        let resolved_src = match audio_scope.validate_audio_path(&cand.file_path) {
             Ok(p) => p,
             Err(e) => {
                 rollback_disk_moves(&completed_disk_moves);
@@ -147,13 +149,21 @@ pub(crate) fn move_samples_to_trash_with_conn(
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
         let nonce = TRASH_NONCE.fetch_add(1, Ordering::Relaxed);
-        let quarantine_file_name = format!(
-            "{}_{:x}{:x}_{}",
-            cand.sample_id,
-            ts_ms & 0xFFFF_FFFF,
-            nonce,
-            safe_leaf_name
-        );
+        let prefix = format!("{}_{:x}{:x}_", cand.sample_id, ts_ms & 0xFFFF_FFFF, nonce);
+        let leaf_path = Path::new(safe_leaf_name);
+        let leaf_stem = leaf_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Audio");
+        let leaf_ext = leaf_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let ext_part = if leaf_ext.is_empty() {
+            String::new()
+        } else {
+            format!(".{}", leaf_ext)
+        };
+        let reserved_units = prefix.encode_utf16().count() + ext_part.encode_utf16().count();
+        let bounded_stem = truncate_filename_stem_utf16(leaf_stem, reserved_units);
+        let quarantine_file_name = format!("{}{}{}", prefix, bounded_stem, ext_part);
         let dst_pb = quarantine_dir.join(&quarantine_file_name);
 
         if let Err(e) = move_file_resilient(&resolved_src, &dst_pb) {

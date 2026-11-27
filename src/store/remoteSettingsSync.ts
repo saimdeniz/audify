@@ -50,7 +50,6 @@ export const PROFILE_FIELD_STORAGE_KEYS = {
   customSliceExportPath: AUDIFY_STORAGE_KEYS.customSliceExportPath,
   customLayerExportPath: AUDIFY_STORAGE_KEYS.customLayerExportPath,
   autoSaveLayerOnNleDrag: AUDIFY_STORAGE_KEYS.autoSaveLayerOnNleDrag,
-  layerTopDeckView: AUDIFY_STORAGE_KEYS.layerTopDeckView,
   aiAutoAnalyzeOnScan: AI_STORAGE_KEYS.autoAnalyzeOnScan,
   aiTagConfidenceThreshold: AI_STORAGE_KEYS.tagConfidenceThreshold,
   aiTaggingMode: AI_STORAGE_KEYS.taggingMode,

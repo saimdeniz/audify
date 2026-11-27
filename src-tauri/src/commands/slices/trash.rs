@@ -67,10 +67,14 @@ pub(crate) fn trash_slice_files_with_conn(
             return Err("Refusing to trash source track".to_string());
         }
 
+        let alt_slice = norm_slice.replace('/', "\\");
         let is_indexed_source: bool = conn
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM samples WHERE LOWER(REPLACE(file_path, '\\', '/')) = LOWER(?1))",
-                params![norm_slice],
+                "SELECT EXISTS(
+                    SELECT 1 FROM samples
+                    WHERE LOWER(file_path) = LOWER(?1) OR LOWER(file_path) = LOWER(?2)
+                 )",
+                params![norm_slice, alt_slice],
                 |r| r.get(0),
             )
             .unwrap_or(false);

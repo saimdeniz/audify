@@ -149,9 +149,12 @@ export const MiniDockContextMenu: React.FC<MiniDockContextMenuProps> = ({
 
   useLayoutEffect(() => {
     const el = menuRef.current;
-    const menuWidth = el?.offsetWidth || 216;
-    const menuHeight = el?.offsetHeight || 220;
     const margin = 6;
+    const menuWidth = Math.min(
+      el?.offsetWidth || 216,
+      Math.max(140, window.innerWidth - margin * 2)
+    );
+    const menuHeight = el?.offsetHeight || 220;
     const clampedX = Math.max(
       margin,
       Math.min(menu.x, window.innerWidth - menuWidth - margin)
@@ -239,7 +242,7 @@ export const MiniDockContextMenu: React.FC<MiniDockContextMenuProps> = ({
           style={{ top: pos.y, left: pos.x, zIndex: Z_INDEX.floatingMenu }}
           onClick={(e) => e.stopPropagation()}
           onKeyDown={handleContextMenuKeyDown}
-          className="fixed w-[216px] max-h-[82vh] overflow-y-auto bg-surface-2 border border-line-strong rounded-md py-1 text-[11px] text-fg shadow-2xl focus:outline-none"
+          className="fixed w-[216px] max-w-[calc(100vw-12px)] max-h-[82vh] overflow-y-auto bg-surface-2 border border-line-strong rounded-md py-1 text-[11px] text-fg shadow-2xl"
         >
           {!trashFilterActive && menu.sample.id > 0 && (
             <MenuItem

@@ -15,7 +15,8 @@ import { ModernToggleSwitch } from "./ModernToggleSwitch";
 /**
  * 1-Click Curated Atmosphere Presets Bar + Custom Mode.
  */
-const AtmospherePresetsBar: React.FC = React.memo(() => {
+const AtmospherePresetsBar: React.FC<{ disabled?: boolean }> = React.memo(
+  ({ disabled = false }) => {
   const enableMica = useSampleStore((s) => s.enableMica);
   const themeTintIntensity = useSampleStore((s) => s.themeTintIntensity);
   const customBgBlur = useSampleStore((s) => s.customBgBlur);
@@ -104,8 +105,10 @@ const AtmospherePresetsBar: React.FC = React.memo(() => {
           <button
             key={p.id}
             type="button"
+            disabled={disabled}
+            aria-pressed={active}
             onClick={p.apply}
-            className={`h-[22px] px-2.5 rounded-xs text-[11px] flex items-center justify-center transition-colors cursor-pointer ${
+            className={`h-[22px] px-2.5 rounded-xs text-[11px] flex items-center justify-center transition-colors cursor-pointer disabled:cursor-not-allowed ${
               active
                 ? "bg-accent-soft border border-accent/60 text-accent-fg font-semibold"
                 : "text-fg-2 hover:text-fg border border-transparent font-medium"
@@ -131,13 +134,25 @@ const SurfaceAtmosphereRows: React.FC<{ disabled?: boolean }> = React.memo(
   const setCustomBgBlur = useSampleStore((s) => s.setCustomBgBlur);
   const customBgOpacity = useSampleStore((s) => s.customBgOpacity);
   const setCustomBgOpacity = useSampleStore((s) => s.setCustomBgOpacity);
+  const rowsRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const el = rowsRef.current;
+    if (!el) return;
+    if (disabled) el.setAttribute("inert", "");
+    else el.removeAttribute("inert");
+  }, [disabled]);
 
   return (
-    <div className={`divide-y divide-line ${disabled ? "opacity-50 pointer-events-none" : ""}`}>
+    <div
+      ref={rowsRef}
+      aria-disabled={disabled || undefined}
+      className={`divide-y divide-line ${disabled ? "opacity-50 pointer-events-none" : ""}`}
+    >
       {/* Row 1: Style Preset */}
       <div className="h-[38px] px-3 flex items-center justify-between gap-3">
         <span className="text-[12px] font-medium text-fg">Style</span>
-        <AtmospherePresetsBar />
+        <AtmospherePresetsBar disabled={disabled} />
       </div>
 
       {/* Row 2: Accent Tint */}
@@ -260,6 +275,14 @@ export const AppearanceTab: React.FC = () => {
   const setMiniDockEdgeSide = useSampleStore((s) => s.setMiniDockEdgeSide);
 
   const isContrast = themeMode === "contrast";
+  const wallpaperWrapperRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const el = wallpaperWrapperRef.current;
+    if (!el) return;
+    if (isContrast) el.setAttribute("inert", "");
+    else el.removeAttribute("inert");
+  }, [isContrast]);
 
   return (
     <div className="space-y-3">
@@ -283,6 +306,7 @@ export const AppearanceTab: React.FC = () => {
                   <button
                     key={m.id}
                     type="button"
+                    aria-pressed={active}
                     onClick={() => setThemeMode(m.id)}
                     className={`h-[22px] w-[74px] rounded-xs flex items-center justify-center space-x-1.5 text-[11px] font-medium border transition-colors cursor-pointer box-border ${
                       active
@@ -387,6 +411,7 @@ export const AppearanceTab: React.FC = () => {
                   <button
                     key={opt.id}
                     type="button"
+                    aria-pressed={active}
                     onClick={() => setMiniDockEdgeSide(opt.id)}
                     className={`h-[20px] px-2 rounded-xs text-[10.5px] transition-colors cursor-pointer ${
                       active
@@ -450,6 +475,7 @@ export const AppearanceTab: React.FC = () => {
 
       {/* Bottom: Wallpapers Gallery */}
       <div
+        ref={wallpaperWrapperRef}
         className={isContrast ? "opacity-55 pointer-events-none select-none" : undefined}
         aria-disabled={isContrast || undefined}
       >

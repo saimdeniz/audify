@@ -34,6 +34,7 @@ pub(crate) fn open_audio_decoder(path: &Path) -> Result<OpenedAudioDecoder, Stri
     if is_unc_or_network_path(&raw) || has_ntfs_ads_colon(&raw) {
         return Err("Network, UNC, and alternate data stream paths are not allowed".to_string());
     }
+    crate::security::reject_symlink_ancestors(path)?;
     let meta = fs::symlink_metadata(path).map_err(|_| "Audio file is unavailable".to_string())?;
     if meta.file_type().is_symlink() || !meta.is_file() {
         return Err("Symbolic links and junctions are not allowed".to_string());
@@ -400,9 +401,6 @@ pub fn fallback_lofty_props(path: &Path) -> (i64, i64, i64, i64) {
 /// targeting `-14 dBFS` active RMS (`0.1995`) without boosting quiet room tones above `1.0`
 /// and without routing `<audio>` through WebAudio (`setSinkId` remains 100% intact).
 pub fn compute_preview_norm_gain(path: &Path) -> Option<f32> {
-    if !path.exists() {
-        return None;
-    }
     let opened = open_audio_decoder(path).ok()?;
     let mut format = opened.format;
     let mut decoder = opened.decoder;

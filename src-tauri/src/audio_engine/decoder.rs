@@ -397,6 +397,16 @@ impl TrackDecodeCache {
         self.entries.push_back((id, track));
     }
 
+    pub fn try_get_cached(&mut self, canon_path: &Path) -> Option<AudioSource> {
+        let cache_id = CacheIdentity::from_path(canon_path);
+        self.get(&cache_id).map(AudioSource::InMemory)
+    }
+
+    pub fn insert_decoded_for_path(&mut self, canon_path: &Path, decoded: Arc<DecodedTrack>) {
+        let cache_id = CacheIdentity::from_path(canon_path);
+        self.insert(cache_id, decoded);
+    }
+
     pub fn evict_path(&mut self, path_norm: &str) {
         let target = path_norm.to_lowercase();
         let mut i = 0;
@@ -417,20 +427,11 @@ impl TrackDecodeCache {
     }
 }
 
-/// Opens a validated audio file via Symphonia using our hybrid memory model:
-/// short/medium files (<= ~62s) decode into RAM and close their OS handle
-/// immediately; long recordings stream incrementally through a bounded 4s ring.
-pub fn open_audio_source(
-    canon_path: &Path,
-    cache: &mut TrackDecodeCache,
-) -> Result<AudioSource, String> {
-    let cache_id = CacheIdentity::from_path(canon_path);
-    if let Some(hit) = cache.get(&cache_id) {
-        return Ok(AudioSource::InMemory(hit));
-    }
-
+/// Opens a validated audio file via Symphonia without touching any cache (safe to run
+/// on a background decode thread without blocking the audio control loop).
+pub fn open_audio_source_uncached(canon_path: &Path) -> Result<AudioSource, String> {
+    let path_norm = normalize_clean_path(&canon_path.to_string_lossy()).to_lowercase();
     let mut opened = open_audio_decoder(canon_path)?;
-    let path_norm = cache_id.path_norm.clone();
 
     if let Some(n_frames) = opened.n_frames {
         if n_frames > MAX_INMEM_FRAMES as u64 && opened.sample_rate > 0 {
@@ -516,8 +517,25 @@ pub fn open_audio_source(
         norm_gain: norm_acc.current_gain(),
         leading_silence_sec,
     });
-    cache.insert(cache_id, Arc::clone(&decoded));
     Ok(AudioSource::InMemory(decoded))
+}
+
+/// Opens a validated audio file via Symphonia using our hybrid memory model:
+/// short/medium files (<= ~62s) decode into RAM and close their OS handle
+/// immediately; long recordings stream incrementally through a bounded 4s ring.
+pub fn open_audio_source(
+    canon_path: &Path,
+    cache: &mut TrackDecodeCache,
+) -> Result<AudioSource, String> {
+    let cache_id = CacheIdentity::from_path(canon_path);
+    if let Some(hit) = cache.get(&cache_id) {
+        return Ok(AudioSource::InMemory(hit));
+    }
+    let src = open_audio_source_uncached(canon_path)?;
+    if let AudioSource::InMemory(ref decoded) = src {
+        cache.insert(cache_id, Arc::clone(decoded));
+    }
+    Ok(src)
 }
 
 #[cfg(test)]

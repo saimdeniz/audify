@@ -106,6 +106,31 @@ export const LayersStudioHeaderBar: React.FC<LayersStudioHeaderBarProps> = ({
 }) => {
   const barRef = useRef<HTMLDivElement | null>(null);
   const [barWidth, setBarWidth] = useState(1120);
+  const [confirmResetArmed, setConfirmResetArmed] = useState(false);
+  const [showSlowRenderHint, setShowSlowRenderHint] = useState(false);
+
+  // Only surface a subtle rendering cue if an uncached DSP pass exceeds 280ms;
+  // cached/fast edits (~5-20ms) keep the Mix button completely steady with zero flicker.
+  useEffect(() => {
+    if (!isRenderingLayerPreview) {
+      setShowSlowRenderHint(false);
+      return;
+    }
+    const t = window.setTimeout(() => setShowSlowRenderHint(true), 280);
+    return () => window.clearTimeout(t);
+  }, [isRenderingLayerPreview]);
+
+  useEffect(() => {
+    if (!confirmResetArmed) return;
+    const t = window.setTimeout(() => setConfirmResetArmed(false), 3000);
+    return () => window.clearTimeout(t);
+  }, [confirmResetArmed]);
+
+  useEffect(() => {
+    if (!layerDraftDirty || !hasClips) {
+      setConfirmResetArmed(false);
+    }
+  }, [layerDraftDirty, hasClips]);
 
   useEffect(() => {
     const el = barRef.current;
@@ -142,13 +167,18 @@ export const LayersStudioHeaderBar: React.FC<LayersStudioHeaderBarProps> = ({
         <button
           type="button"
           onClick={onRenderAndPlay}
-          disabled={!hasClips || isRenderingLayerPreview}
+          disabled={!hasClips}
+          aria-busy={showSlowRenderHint || undefined}
           className={`h-[22px] ${
             iconOnly ? "w-[22px] justify-center" : "px-2 gap-1"
           } rounded-[3px] bg-surface-3 hover:bg-accent-soft border border-line hover:border-accent text-fg-2 hover:text-accent-fg disabled:opacity-40 text-[11px] font-medium inline-flex items-center transition-colors cursor-pointer shrink-0`}
           title="Render & audition current layer mix (Space)"
         >
-          <Play className="w-3 h-3 shrink-0" />
+          <Play
+            className={`w-3 h-3 shrink-0 ${
+              showSlowRenderHint ? "animate-pulse text-accent" : ""
+            }`}
+          />
           {!iconOnly && <span>Mix</span>}
         </button>
 
@@ -376,14 +406,33 @@ export const LayersStudioHeaderBar: React.FC<LayersStudioHeaderBarProps> = ({
 
         <button
           type="button"
-          onClick={onResetDraft}
+          onClick={() => {
+            if (layerDraftDirty && hasClips && !confirmResetArmed) {
+              setConfirmResetArmed(true);
+              return;
+            }
+            setConfirmResetArmed(false);
+            onResetDraft();
+          }}
           className={`h-[22px] ${
-            iconOnly ? "w-[22px] justify-center" : "px-2 gap-1"
-          } rounded-[3px] bg-surface-3 hover:bg-accent-soft border border-line hover:border-accent text-fg-2 hover:text-accent-fg text-[11px] inline-flex items-center transition-colors cursor-pointer shrink-0`}
-          title="Start a fresh empty layer draft"
+            confirmResetArmed
+              ? "px-2 gap-1 bg-accent-soft border-accent text-accent-fg font-semibold"
+              : `${
+                  iconOnly ? "w-[22px] justify-center" : "px-2 gap-1"
+                } bg-surface-3 hover:bg-accent-soft border-line hover:border-accent text-fg-2 hover:text-accent-fg`
+          } rounded-[3px] border text-[11px] inline-flex items-center transition-colors cursor-pointer shrink-0`}
+          title={
+            confirmResetArmed
+              ? "Click again to discard unsaved edits and start a fresh draft"
+              : "Start a fresh empty layer draft"
+          }
         >
           <Plus className="w-3 h-3 shrink-0" />
-          {!iconOnly && <span>New</span>}
+          {confirmResetArmed ? (
+            <span>Discard?</span>
+          ) : (
+            !iconOnly && <span>New</span>
+          )}
         </button>
       </div>
     </div>

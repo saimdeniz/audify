@@ -18,6 +18,8 @@ export default defineConfig({
             id.includes("\\react\\") ||
             id.includes("/react/") ||
             id.includes("react-dom") ||
+            id.includes("\\scheduler\\") ||
+            id.includes("/scheduler/") ||
             id.includes("zustand")
           ) {
             return "react-vendor";

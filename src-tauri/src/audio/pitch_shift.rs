@@ -120,8 +120,8 @@ fn time_stretch_mono(input: &[f32], alpha: f64, target_len: usize) -> Vec<f32> {
         let ha = ((hs as f64) / alpha).max(16.0);
         (ha, hs)
     } else {
-        let ha = max_hop as f64;
         let hs = ((max_hop as f64) * alpha).round().max(16.0) as usize;
+        let ha = (hs as f64) / alpha;
         (ha, hs)
     };
 
@@ -212,8 +212,11 @@ fn time_stretch_mono(input: &[f32], alpha: f64, target_len: usize) -> Vec<f32> {
             }
 
             if peaks.is_empty() {
-                // Fallback standard phase propagation when frame is silent/flat
-                for k in 0..=half {
+                // Fallback standard phase propagation when frame is silent/flat.
+                // DC (k=0) and Nyquist (k=half) are strictly real and keep their analysis sign.
+                syn_phase[0] = phase[0];
+                syn_phase[half] = phase[half];
+                for k in 1..half {
                     let omega = TWO_PI * (k as f64) / (fft_size as f64);
                     let delta = wrap_pi(phase[k] - prev_phase[k] - omega * actual_ha);
                     let inst_freq = omega + delta / actual_ha;
@@ -230,9 +233,13 @@ fn time_stretch_mono(input: &[f32], alpha: f64, target_len: usize) -> Vec<f32> {
                     peak_rot[p] = next_sp - phase[p];
                 }
 
-                // Lock every non-peak bin to its nearest spectral peak's rotation angle
+                // DC (k=0) and Nyquist (k=half) are real bins — never rotate by a nearby peak.
+                syn_phase[0] = phase[0];
+                syn_phase[half] = phase[half];
+
+                // Lock every non-peak interior bin to its nearest spectral peak's rotation angle
                 let mut cur_peak_idx = 0usize;
-                for k in 0..=half {
+                for k in 1..half {
                     while cur_peak_idx + 1 < peaks.len()
                         && (peaks[cur_peak_idx + 1] as isize - k as isize).abs()
                             < (peaks[cur_peak_idx] as isize - k as isize).abs()
@@ -343,7 +350,11 @@ pub(super) fn pitch_shift_stereo_preserve_duration(
     }
     let ratio = pitch_ratio.clamp(0.25, 4.0);
     let stretched_len = ((frames as f64) * ratio).round().max(1.0) as usize;
-    if stretched_len.saturating_mul(2) > max_work_samples {
+    // Account for concurrent stereo f64 OLA buffers (out + norm + padded + f32 stretched ≈ 10 f32-equivalents/frame)
+    let estimated_work_f32_units = stretched_len
+        .saturating_mul(10)
+        .saturating_add(frames.saturating_mul(6));
+    if estimated_work_f32_units > max_work_samples.saturating_mul(2) {
         return Err("Clip is too long for time-preserving pitch shift buffer limit".to_string());
     }
 
@@ -454,5 +465,51 @@ mod tests {
                 db_diff
             );
         }
+    }
+
+    #[test]
+    fn downward_pitch_preserves_tuning_on_short_clips_and_tail_energy_on_long_clips() {
+        let sr = 48_000.0_f64;
+        // 1. Long clip (3.0s @ -1st): verifies fractional ana_hop_f avoids tail silence cutoff
+        let long_frames = 48_000 * 3;
+        let mut long_stereo = Vec::with_capacity(long_frames * 2);
+        for i in 0..long_frames {
+            let s = (TWO_PI * 440.0 * (i as f64) / sr).sin() as f32 * 0.6;
+            long_stereo.push(s);
+            long_stereo.push(s);
+        }
+        let ratio_m1 = 2.0_f64.powf(-1.0 / 12.0);
+        let shifted_long =
+            pitch_shift_stereo_preserve_duration(&long_stereo, ratio_m1, 32 * 1024 * 1024).unwrap();
+        assert_eq!(shifted_long.len(), long_stereo.len());
+        let mono_long: Vec<f32> = shifted_long.as_chunks::<2>().0.iter().map(|&[l, _]| l).collect();
+        // Check last 40ms (1920 frames, leaving 200 frames for edge window fade) still carries strong energy
+        let tail_rms = rms(&mono_long[long_frames - 2400..long_frames - 400]);
+        let expected_rms = 0.6 / 2.0_f64.sqrt();
+        assert!(
+            tail_rms > expected_rms * 0.65,
+            "Downward pitch (-1st) truncated tail energy: tail_rms={:.4}, expected~={:.4}",
+            tail_rms,
+            expected_rms
+        );
+
+        // 2. Short clip (~20ms -> fft_size = 512) downward pitch (-5st) keeps accurate tuning
+        let short_frames = 960;
+        let mut short_stereo = Vec::with_capacity(short_frames * 2);
+        for i in 0..short_frames {
+            let s = (TWO_PI * 880.0 * (i as f64) / sr).sin() as f32 * 0.6;
+            short_stereo.push(s);
+            short_stereo.push(s);
+        }
+        let ratio_m5 = 2.0_f64.powf(-5.0 / 12.0);
+        let shifted_short =
+            pitch_shift_stereo_preserve_duration(&short_stereo, ratio_m5, 32 * 1024 * 1024)
+                .unwrap();
+        assert_eq!(shifted_short.len(), short_stereo.len());
+        assert!(shifted_short.iter().all(|s| s.is_finite()));
+
+        // 3. Oversize memory guard rejects excessive working buffer
+        let err = pitch_shift_stereo_preserve_duration(&long_stereo, 4.0, 100_000);
+        assert!(err.is_err());
     }
 }

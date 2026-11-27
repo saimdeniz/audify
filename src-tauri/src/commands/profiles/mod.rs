@@ -11,7 +11,8 @@ pub(crate) use archive_pkg::{
 };
 pub(crate) use export_pkg::{apply_share_safe, build_profile_export_package_with_options};
 use export_share::{
-    collect_profile_library_ids, extract_custom_slice_path, sanitize_profile_settings_json,
+    collect_profile_library_ids, extract_custom_layer_path, extract_custom_slice_path,
+    sanitize_profile_settings_json,
 };
 #[cfg(test)]
 pub(crate) use import_pkg::import_profile_from_file_with_conn;
@@ -324,6 +325,7 @@ pub async fn update_profile(
         let conn = state_owned.lock_db();
         let current = query_profile_by_id(&conn, profile_id)?;
         let old_slice = extract_custom_slice_path(&current.settings_json);
+        let old_layer = extract_custom_layer_path(&current.settings_json);
 
         let next_name = name
             .map(|n| n.trim().to_string())
@@ -341,6 +343,7 @@ pub async fn update_profile(
             None => current.settings_json,
         };
         let new_slice = extract_custom_slice_path(&next_settings);
+        let new_layer = extract_custom_layer_path(&next_settings);
 
         conn.execute(
             "UPDATE profiles SET name = ?1, color = ?2, settings_json = ?3 WHERE id = ?4",
@@ -349,7 +352,7 @@ pub async fn update_profile(
         .map_err(|e| format!("Failed to update profile: {}", e))?;
 
         if has_new_settings && current.is_active {
-            if old_slice != new_slice {
+            if old_slice != new_slice || old_layer != new_layer {
                 crate::reconcile_library_asset_scopes(&app, &conn, None);
             } else {
                 crate::library_watcher::reconcile_watcher_if_managed(&app, &conn);
@@ -391,6 +394,19 @@ pub async fn delete_profile(
         let trashed_slice_paths: Vec<String> = tx
             .prepare(
                 "SELECT COALESCE(trash_file_path, '') FROM sample_slices
+                 WHERE profile_id = ?1 AND COALESCE(is_trashed, 0) = 1",
+            )
+            .ok()
+            .and_then(|mut stmt| {
+                stmt.query_map(params![profile_id], |r| r.get::<_, String>(0))
+                    .ok()
+                    .map(|rows| rows.flatten().collect())
+            })
+            .unwrap_or_default();
+
+        let trashed_layer_paths: Vec<String> = tx
+            .prepare(
+                "SELECT COALESCE(trash_file_path, '') FROM layer_history
                  WHERE profile_id = ?1 AND COALESCE(is_trashed, 0) = 1",
             )
             .ok()
@@ -446,6 +462,13 @@ pub async fn delete_profile(
                     }
                 }
             }
+        }
+
+        for raw_ltp in trashed_layer_paths {
+            crate::commands::layers::cleanup_quarantined_layer_file_if_present(
+                &state_owned.user_dir,
+                Some(&raw_ltp),
+            );
         }
 
         let active_id = get_active_profile_id(&conn);

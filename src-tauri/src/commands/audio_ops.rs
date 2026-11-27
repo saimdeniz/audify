@@ -32,7 +32,6 @@ fn resolve_profile_export_dir(
     if let Some(dir) = custom_dir {
         let trimmed = dir.trim();
         if !trimmed.is_empty() {
-            ensure_not_inside_user_dir(user_dir, Path::new(trimmed))?;
             let safe_dir =
                 ensure_safe_export_dir(trimmed).map_err(|e| sanitize_err(user_dir, &e))?;
             ensure_not_inside_user_dir(user_dir, &safe_dir)?;
@@ -49,9 +48,7 @@ fn resolve_profile_export_dir(
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&settings_json) {
             if let Some(custom_path) = parsed.get(settings_key).and_then(|v| v.as_str()) {
                 let trimmed = custom_path.trim();
-                if !trimmed.is_empty()
-                    && ensure_not_inside_user_dir(user_dir, Path::new(trimmed)).is_ok()
-                {
+                if !trimmed.is_empty() {
                     if let Ok(safe_dir) = ensure_safe_export_dir(trimmed) {
                         if ensure_not_inside_user_dir(user_dir, &safe_dir).is_ok()
                             && crate::commands::slices::ensure_slice_not_in_readonly_library(

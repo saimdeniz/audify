@@ -132,15 +132,19 @@ impl StreamingTrack {
         let closed_signal = Arc::new((Mutex::new(false), Condvar::new()));
 
         let mut ring = StreamRing::new(STREAM_RING_FRAMES);
-        let mut leftover: Vec<f32> = Vec::new();
         let mut ring_prefilled_frames: u64 = 0;
-        if !prefix_stereo.is_empty() {
+        let (leftover, leftover_offset) = if !prefix_stereo.is_empty() {
             let written = ring.push_stereo(&prefix_stereo);
             ring_prefilled_frames = written as u64;
             if written * 2 < prefix_stereo.len() {
-                leftover.extend_from_slice(&prefix_stereo[written * 2..]);
+                // Zero-copy handoff: reuse prefix_stereo with a read cursor instead of cloning ~46.5 MiB
+                (prefix_stereo, written * 2)
+            } else {
+                (Vec::new(), 0)
             }
-        }
+        } else {
+            (Vec::new(), 0)
+        };
 
         let track = Arc::new(Self {
             path_norm,
@@ -165,6 +169,7 @@ impl StreamingTrack {
                     opened,
                     ring_prefilled_frames,
                     leftover,
+                    leftover_offset,
                     initial_gain,
                     cmd_queue,
                     closed_signal,
@@ -336,6 +341,7 @@ fn run_streaming_producer(
     mut opened: OpenedAudioDecoder,
     ring_prefilled_frames: u64,
     mut pending_stereo: Vec<f32>,
+    mut pending_offset: usize,
     mut norm_acc: NormGainAccumulator,
     cmd_queue: StreamCmdQueue,
     closed_signal: Arc<(Mutex<bool>, Condvar)>,
@@ -343,9 +349,8 @@ fn run_streaming_producer(
     let mut sample_buf_slot: Option<(SignalSpec, usize, SampleBuffer<f32>)> = None;
     let mut active_gen: u64 = 1;
     let mut local_eof = false;
-    let mut decoded_pos: u64 =
-        ring_prefilled_frames.saturating_add((pending_stereo.len() / 2) as u64);
-    let mut pending_offset: usize = 0;
+    let mut decoded_pos: u64 = ring_prefilled_frames
+        .saturating_add((pending_stereo.len().saturating_sub(pending_offset) / 2) as u64);
     let mut skip_frames_remaining: u64 = 0;
 
     loop {

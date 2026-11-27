@@ -261,10 +261,6 @@ pub async fn relink_library_folder(
     let state_owned = state.inner().clone();
     let app_clone = app.clone();
     let updated_lib = tauri::async_runtime::spawn_blocking(move || {
-        crate::security::ensure_not_inside_user_dir(
-            &state_owned.user_dir,
-            std::path::Path::new(&new_path),
-        )?;
         let safe_root = is_safe_library_dir(&new_path)
             .map_err(|e| sanitize_err(&state_owned.user_dir, &e))?;
         crate::security::ensure_not_inside_user_dir(&state_owned.user_dir, &safe_root)?;

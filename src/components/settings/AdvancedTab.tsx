@@ -38,6 +38,13 @@ export const AdvancedTab: React.FC = () => {
   const setLibraryReadOnly = useSampleStore((s) => s.setLibraryReadOnly);
   const trashedCount = useSampleStore((s) => s.trashedCount);
   const trashedTotalBytes = useSampleStore((s) => s.trashedTotalBytes);
+  const trashedSliceCount = useSampleStore((s) => s.trashedSliceCount);
+  const trashedSliceTotalBytes = useSampleStore((s) => s.trashedSliceTotalBytes);
+  const trashedLayerCount = useSampleStore((s) => s.trashedLayerCount);
+  const trashedLayerTotalBytes = useSampleStore((s) => s.trashedLayerTotalBytes);
+  const totalTrashedCount = trashedCount + trashedSliceCount + trashedLayerCount;
+  const totalTrashedBytes =
+    trashedTotalBytes + trashedSliceTotalBytes + trashedLayerTotalBytes;
   const fileOpJournal = useSampleStore((s) => s.fileOpJournal);
   const fileOpUndoStack = useSampleStore((s) => s.fileOpUndoStack);
   const fileOpRedoStack = useSampleStore((s) => s.fileOpRedoStack);
@@ -150,21 +157,28 @@ export const AdvancedTab: React.FC = () => {
               <span className="text-[12px] font-medium text-fg">
                 Trash
               </span>
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-xs bg-surface-2 border border-line text-fg-2">
-                {trashedCount} {trashedCount === 1 ? "file" : "files"} •{" "}
-                {formatBytesCompact(trashedTotalBytes)}
+              <span
+                className="text-[10px] font-mono px-1.5 py-0.5 rounded-xs bg-surface-2 border border-line text-fg-2"
+                title={
+                  trashedSliceCount > 0 || trashedLayerCount > 0
+                    ? `${trashedCount} file(s), ${trashedSliceCount} slice(s), ${trashedLayerCount} layer(s)`
+                    : undefined
+                }
+              >
+                {totalTrashedCount} {totalTrashedCount === 1 ? "item" : "items"} •{" "}
+                {formatBytesCompact(totalTrashedBytes)}
               </span>
             </div>
 
             <div className="flex items-center space-x-1.5 shrink-0">
               <button
                 type="button"
-                disabled={trashedCount === 0}
+                disabled={totalTrashedCount === 0}
                 onClick={() => {
                   sendFilterToMain({ kind: "trash" });
                 }}
                 className="h-[22px] px-2 bg-surface-2 hover:bg-surface-3 border border-line hover:border-accent rounded-xs text-[10.5px] font-medium text-fg-2 hover:text-fg inline-flex items-center space-x-1 cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
-                title="View trashed files in main sample table"
+                title="View trashed items in main table"
               >
                 <span>View</span>
               </button>

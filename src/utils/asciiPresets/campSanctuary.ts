@@ -3,11 +3,13 @@ import {
   fbm1,
   hash2,
   hexToRgb,
+} from "./blueprintGrid";
+import {
   paintGridMist,
   paintGridMoon,
   paintGridPine,
   paintGridRidge,
-} from "./blueprintGrid";
+} from "./blueprintShapes";
 import { AsciiRenderParams } from "./shared";
 
 export function renderCampSanctuaryPreset(params: AsciiRenderParams): boolean {

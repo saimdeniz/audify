@@ -56,6 +56,10 @@ fn exec_restore_disk(
         }
 
         let src_pb = PathBuf::from(trash_src_str);
+        if crate::security::reject_symlink_ancestors(&src_pb).is_err() {
+            rollback_disk_moves(&completed_disk_moves);
+            return Err("Refusing to restore across symbolic links or junctions".to_string());
+        }
         let Ok(sym_meta) = fs::symlink_metadata(&src_pb) else {
             rollback_disk_moves(&completed_disk_moves);
             return Err(format!(
