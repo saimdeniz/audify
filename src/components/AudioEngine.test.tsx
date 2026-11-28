@@ -37,6 +37,7 @@ vi.mock("../services/nativeAudioClient", async (importOriginal) => {
   };
 });
 
+import { getPlayheadSec } from "../store/playheadClock";
 import { useSampleStore } from "../store/useSampleStore";
 import type { SampleItem } from "../types";
 import { AudioEngine } from "./AudioEngine";
@@ -90,6 +91,9 @@ describe("AudioEngine native bridge stability across visual re-renders", () => {
       selectedSample: SAMPLE_A,
       isPlaying: true,
       playTriggerSeq: 1,
+      seekRequest: null,
+      sliceRange: null,
+      pitchSemitones: 0,
       themeMode: "dark",
       wallpaperKind: "none",
       customBgImage: "",
@@ -251,5 +255,77 @@ describe("AudioEngine native bridge stability across visual re-renders", () => {
     };
     expect(lastArgs.pitchSemitones).toBe(0);
     expect(lastArgs.updateSlice).toBe(false);
+  });
+
+  it("holds playhead at 0 while cold nativeAudioLoad is decoding and ignores duplicate seq reset", async () => {
+    let resolveLoad!: (payload: unknown) => void;
+    nativeAudioLoadMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveLoad = resolve;
+        })
+    );
+
+    let nowMs = 1000;
+    const perfSpy = vi.spyOn(performance, "now").mockImplementation(() => nowMs);
+    let queuedRaf: FrameRequestCallback | null = null;
+    const rafSpy = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((cb: FrameRequestCallback) => {
+        queuedRaf = cb;
+        return 1;
+      });
+    const cancelRafSpy = vi
+      .spyOn(window, "cancelAnimationFrame")
+      .mockImplementation(() => {
+        queuedRaf = null;
+      });
+
+    try {
+      render(<AudioEngine />);
+
+      // Simulate 140ms passing while Rust is still decoding the cold track on disk
+      nowMs = 1140;
+      act(() => {
+        queuedRaf?.(nowMs);
+      });
+      expect(getPlayheadSec()).toBe(0);
+
+      // Rust finishes decoding and emits `"playing"` (`seq: 10`) on the sync channel first
+      const playingPayload = {
+        seq: 10,
+        event: "playing",
+        filePath: SAMPLE_A.file_path,
+        isPlaying: true,
+        positionSec: 0,
+        durationSec: 8,
+        playbackRate: 1,
+        activeDeviceId: "default",
+        activeDeviceName: "System Default",
+        outputLatencyMs: 0,
+        error: null,
+      };
+      act(() => {
+        syncListener?.(playingPayload);
+      });
+
+      // Playhead advances smoothly for 60ms after audio truly starts
+      nowMs = 1200;
+      act(() => {
+        queuedRaf?.(nowMs);
+      });
+      expect(getPlayheadSec()).toBeCloseTo(0.06, 3);
+
+      // Duplicate `seq: 10` arrives from the `nativeAudioLoad` promise resolution — must NOT snap back to 0!
+      await act(async () => {
+        resolveLoad(playingPayload);
+        await Promise.resolve();
+      });
+      expect(getPlayheadSec()).toBeCloseTo(0.06, 3);
+    } finally {
+      perfSpy.mockRestore();
+      rafSpy.mockRestore();
+      cancelRafSpy.mockRestore();
+    }
   });
 });

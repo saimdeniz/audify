@@ -120,7 +120,9 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
 
   const applySyncPayload = (payload: AudioSyncPayload) => {
     if (payload.event === "superseded") return;
-    if (payload.seq > 0 && payload.seq < lastSyncSeqRef.current) return;
+    // Deduplicate identical `seq` snapshots delivered via both `audify:audio-sync`
+    // and the `nativeAudioLoad` invoke return so playhead never snaps back to 0 twice.
+    if (payload.seq > 0 && payload.seq <= lastSyncSeqRef.current) return;
 
     const state = useSampleStore.getState();
     // Drop stale events from a previously selected track during rapid switching
@@ -268,6 +270,14 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
       loadedSampleRef.current !== null &&
       loadedSampleRef.current.id === activeSample.id &&
       loadedSampleRef.current.path === activeSample.file_path;
+    const willRunAsyncNativeLoad =
+      !isDraft && !(sameTrackAlreadyLoaded && hasUnappliedSeek);
+    const wasAnchorPlaying = anchorRef.current.isPlaying;
+    const initialAnchorPlaying = willRunAsyncNativeLoad
+      ? false
+      : isDraft && !hasUnappliedSeek && !sameTrackAlreadyLoaded
+      ? state.isPlaying
+      : state.isPlaying && wasAnchorPlaying;
 
     resetPlayheadClock(startSec);
     anchorRef.current = {
@@ -279,7 +289,9 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
           : Math.max(0.25, Math.min(4.0, Math.pow(2, state.pitchSemitones / 12))),
       durationSec:
         activeSample.duration_ms > 0 ? activeSample.duration_ms / 1000 : 0,
-      isPlaying: state.isPlaying,
+      // Hold playhead stationary at `startSec` until Rust finishes decoding / waking WASAPI
+      // so the waveform cursor never races ahead and snaps back to 0 on cold track loads.
+      isPlaying: initialAnchorPlaying,
       outputLatencyMs: anchorRef.current.outputLatencyMs,
     };
 
@@ -409,9 +421,8 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
         }
         // Symmetric race fix: if user pressed Play while an autoplay:false load was in-flight,
         // start playback now that the new track is actually loaded in the engine.
+        // Wait for Rust's `"playing"` sync event to advance the playhead anchor (avoids jump during WASAPI wake).
         if (liveNow.isPlaying && !payload.isPlaying) {
-          anchorRef.current.isPlaying = true;
-          anchorRef.current.anchorMs = performance.now();
           void nativeAudioPlay().catch(() => {
             lastEngineForcedPlayingRef.current = false;
             useSampleStore.getState().setIsPlaying(false);
@@ -464,8 +475,7 @@ const NativeRustAudioBridge: React.FC<{ onFallback: () => void }> = React.memo(
     if (loadingSampleRef.current) return;
 
     if (isPlaying) {
-      anchorRef.current.isPlaying = true;
-      anchorRef.current.anchorMs = performance.now();
+      // Keep playhead anchor parked until Rust emits `"playing"` after waking WASAPI.
       void nativeAudioPlay().catch(() => {
         lastEngineForcedPlayingRef.current = false;
         setIsPlaying(false);

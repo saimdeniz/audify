@@ -82,9 +82,10 @@ export function computeInterpolatedPlayheadSec(
     Number.isFinite(anchor.playbackRate) && anchor.playbackRate > 0
       ? anchor.playbackRate
       : 1;
-  const latencySec =
-    (manualLatencyMs === null ? anchor.outputLatencyMs : manualLatencyMs) /
-    1000;
+  const latencySec = anchor.isPlaying
+    ? (manualLatencyMs === null ? anchor.outputLatencyMs : manualLatencyMs) /
+      1000
+    : 0;
 
   let raw = anchor.positionSec + elapsedSec * rate - latencySec;
 
