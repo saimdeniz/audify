@@ -76,6 +76,7 @@ export interface AiSliceActions {
 let similarityRefetchTimer: ReturnType<typeof setTimeout> | null = null;
 let similaritySearchSeq = 0;
 let aiSuggestionsSeq = 0;
+let aiModelStatusSeq = 0;
 
 const similaritySeqTracker: SimilaritySeqTracker = {
   bump: () => ++similaritySearchSeq,
@@ -85,6 +86,11 @@ const similaritySeqTracker: SimilaritySeqTracker = {
 const aiSuggestionsSeqTracker: AiSeqTracker = {
   bump: () => ++aiSuggestionsSeq,
   current: () => aiSuggestionsSeq,
+};
+
+const aiModelStatusSeqTracker: AiSeqTracker = {
+  bump: () => ++aiModelStatusSeq,
+  current: () => aiModelStatusSeq,
 };
 
 export function cancelPendingSimilaritySearch(): void {
@@ -98,6 +104,7 @@ export function cancelPendingSimilaritySearch(): void {
 export function invalidateAiSliceAsyncState(): void {
   cancelPendingSimilaritySearch();
   aiSuggestionsSeq += 1;
+  aiModelStatusSeq += 1;
 }
 
 export function createAiSlice(ctx: StoreSliceContext): AiSliceActions {
@@ -117,7 +124,8 @@ export function createAiSlice(ctx: StoreSliceContext): AiSliceActions {
       const mod = await import("./aiModelLifecycle");
       cachedLifecycle = mod.createAiModelLifecycleActions(
         ctx,
-        cancelPendingSimilaritySearch
+        cancelPendingSimilaritySearch,
+        aiModelStatusSeqTracker
       );
     }
     return cachedLifecycle;
@@ -132,7 +140,14 @@ export function createAiSlice(ctx: StoreSliceContext): AiSliceActions {
   };
 
   return {
-    fetchAiModelStatus: async () => (await loadLifecycle()).fetchAiModelStatus(),
+    fetchAiModelStatus: async () => {
+      const reqSeq = aiModelStatusSeqTracker.bump();
+      const lifecycle = await loadLifecycle();
+      if (reqSeq !== aiModelStatusSeqTracker.current()) {
+        return null;
+      }
+      return lifecycle.fetchAiModelStatus();
+    },
     verifyAiModelIntegrity: async () =>
       (await loadLifecycle()).verifyAiModelIntegrity(),
     downloadAiModel: async () => (await loadLifecycle()).downloadAiModel(),
@@ -336,6 +351,7 @@ export function createAiSlice(ctx: StoreSliceContext): AiSliceActions {
     },
 
     resolveAiTagSuggestion: async (sampleId, tagName, approve) => {
+      aiModelStatusSeqTracker.bump();
       const mod = cachedSuggestionMod ?? (await loadSuggestionMod());
       await mod.executeResolveAiTagSuggestion(ctx, sampleId, tagName, approve);
     },

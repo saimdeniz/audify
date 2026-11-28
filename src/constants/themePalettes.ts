@@ -255,6 +255,35 @@ export function computeAccentOnColor(
   return contrastWithDark >= contrastWithWhite ? darkHex : "#FFFFFF";
 }
 
+export interface ThemeDangerTokens {
+  bgRgb: string;
+  fgRgb: string;
+  onHex: string;
+}
+
+/**
+ * Semantic destructive-action color tokens synchronized with `src/index.css`.
+ * Keeps solid danger buttons crisp white-on-crimson (>= 4.5:1 AA) while
+ * keeping foreground danger text/icons legible on dark, light, and high-contrast surfaces.
+ */
+export const THEME_DANGER_TOKENS: Record<ThemeMode, ThemeDangerTokens> = {
+  dark: {
+    bgRgb: "220 38 38",
+    fgRgb: "248 113 113",
+    onHex: "#FFFFFF",
+  },
+  light: {
+    bgRgb: "220 38 38",
+    fgRgb: "185 28 28",
+    onHex: "#FFFFFF",
+  },
+  contrast: {
+    bgRgb: "185 28 28",
+    fgRgb: "252 165 165",
+    onHex: "#FFFFFF",
+  },
+};
+
 export function normalizeThemeModeValue(raw: unknown): ThemeMode {
   if (raw === "light" || raw === "contrast" || raw === "dark") {
     return raw;

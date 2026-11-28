@@ -33,7 +33,7 @@ export const StatusNoticeToast: React.FC<{
     }`}
   >
     {notice.kind === "error" ? (
-      <AlertCircle className="w-4 h-4 text-danger shrink-0" />
+      <AlertCircle className="w-4 h-4 text-danger-fg shrink-0" />
     ) : notice.kind === "success" ? (
       <CheckCircle2 className="w-4 h-4 text-ok shrink-0" />
     ) : (

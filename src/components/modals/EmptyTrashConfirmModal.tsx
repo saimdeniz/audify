@@ -104,7 +104,7 @@ export const EmptyTrashConfirmModal: React.FC<EmptyTrashConfirmModalProps> = ({
           <button
             type="button"
             onClick={onConfirm}
-            className="h-[25px] px-2.5 rounded-xs bg-danger/15 hover:bg-danger hover:text-danger-on border border-danger/50 text-[11px] font-semibold text-danger inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+            className="h-[25px] px-2.5 rounded-xs bg-danger/15 hover:bg-danger hover:text-danger-on border border-danger/50 text-[11px] font-semibold text-danger-fg inline-flex items-center gap-1.5 transition-colors cursor-pointer"
           >
             <Trash2 className="w-3 h-3 shrink-0" />
             <span>Empty</span>

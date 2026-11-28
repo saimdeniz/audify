@@ -96,7 +96,7 @@ export const LibrariesTab: React.FC = () => {
                       prompt={
                         <>
                           Remove &ldquo;{lib.name}&rdquo; from database?{" "}
-                          <span className="text-fg-3 font-normal">
+                          <span className="text-fg-2 font-normal">
                             Files on disk are not touched.
                           </span>
                         </>
@@ -197,7 +197,7 @@ export const LibrariesTab: React.FC = () => {
                           className={`w-[22px] h-[22px] border rounded-xs shrink-0 flex items-center justify-center transition-colors cursor-pointer ${
                             lib.is_read_only
                               ? "bg-accent-soft border-accent/50 text-accent-fg hover:bg-accent/20"
-                              : "bg-surface-2 hover:bg-surface-3 border-line text-fg-3 hover:text-fg"
+                              : "bg-surface-2 hover:bg-surface-3 hover:border-accent border-line text-fg-2 hover:text-fg"
                           }`}
                           title={
                             lib.is_read_only
@@ -237,7 +237,7 @@ export const LibrariesTab: React.FC = () => {
                           type="button"
                           onClick={() => setConfirmRemoveLibId(lib.id)}
                           disabled={isScanning}
-                          className="w-[22px] h-[22px] bg-surface-2 hover:bg-danger/15 hover:text-danger hover:border-danger border border-line text-fg-3 rounded-xs disabled:opacity-50 shrink-0 flex items-center justify-center transition-colors cursor-pointer"
+                          className="w-[22px] h-[22px] bg-surface-2 hover:bg-accent-soft hover:text-accent-fg hover:border-accent border border-line text-fg-2 rounded-xs disabled:opacity-50 shrink-0 flex items-center justify-center transition-colors cursor-pointer"
                           title="Remove library from database"
                         >
                           <Trash2 className="w-3 h-3" />

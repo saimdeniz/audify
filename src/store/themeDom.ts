@@ -6,6 +6,7 @@ import {
   normalizeAccentForTheme,
   resolveAccentPresetRowBg,
   srgbRelativeLuminance,
+  THEME_DANGER_TOKENS,
   wcagContrastRatio,
 } from "../constants/themePalettes";
 import { ThemeMode } from "../types";
@@ -136,6 +137,11 @@ export function applyThemeAndAccentToDom(themeMode: ThemeMode, accentHex: string
   }
 
   root.style.setProperty("--accent-fg-rgb", `${fgR} ${fgG} ${fgB}`);
+
+  const dangerTokens = THEME_DANGER_TOKENS[themeMode];
+  root.style.setProperty("--danger-rgb", dangerTokens.bgRgb);
+  root.style.setProperty("--danger-fg-rgb", dangerTokens.fgRgb);
+  root.style.setProperty("--c-danger-on", dangerTokens.onHex);
 
   const rowBg = resolveAccentPresetRowBg(effectiveAccent, themeMode);
   root.style.setProperty("--signal-accent-bg", rowBg);

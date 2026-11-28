@@ -1,5 +1,5 @@
 import React from "react";
-import { Check, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, Trash2, X } from "lucide-react";
 
 export interface InlineConfirmDeleteButtonProps {
   isConfirming: boolean;
@@ -51,8 +51,8 @@ export const InlineConfirmDeleteButton: React.FC<InlineConfirmDeleteButtonProps>
               className={
                 confirmClassName ??
                 (confirmLabel
-                  ? "h-[24px] px-2 rounded-[3px] bg-danger text-danger-on font-mono text-[10.5px] font-bold inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                  : `${box} bg-danger text-danger-on rounded-xs flex items-center justify-center cursor-pointer shadow-xs`)
+                  ? "h-[24px] px-2 rounded-[3px] bg-danger hover:bg-danger/90 text-danger-on font-mono text-[10.5px] font-bold inline-flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-50"
+                  : `${box} bg-danger hover:bg-danger/90 text-danger-on rounded-xs flex items-center justify-center transition-colors cursor-pointer shadow-xs`)
               }
               title={confirmTitle}
             >
@@ -83,7 +83,7 @@ export const InlineConfirmDeleteButton: React.FC<InlineConfirmDeleteButtonProps>
             idleClassName ??
             (idleLabel
               ? "h-[24px] px-2 rounded-[3px] bg-surface-2 hover:bg-accent-soft hover:text-accent-fg border border-line hover:border-accent text-fg-2 font-mono text-[10.5px] font-semibold inline-flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-40 disabled:pointer-events-none shrink-0"
-              : `${box} bg-surface-2 hover:bg-accent-soft hover:text-accent-fg hover:border-accent border border-line text-fg-3 rounded-xs flex items-center justify-center transition-colors cursor-pointer shrink-0`)
+              : `${box} bg-surface-2 hover:bg-accent-soft hover:text-accent-fg hover:border-accent border border-line text-fg-2 rounded-xs flex items-center justify-center transition-colors cursor-pointer shrink-0`)
           }
           title={deleteTitle}
         >
@@ -121,22 +121,21 @@ export const InlineConfirmRowBar: React.FC<InlineConfirmRowBarProps> =
       onCancel,
     }) => (
       <div className={className}>
-        <span
-          className={`text-[11px] font-medium truncate ${
-            tone === "accent" ? "text-fg" : "text-danger"
-          }`}
-        >
-          {prompt}
+        <span className="flex items-center gap-1.5 min-w-0 text-[11px] font-medium text-fg">
+          {tone === "danger" && (
+            <AlertTriangle className="w-3.5 h-3.5 text-danger-fg shrink-0" />
+          )}
+          <span className="truncate">{prompt}</span>
         </span>
         <div className="flex items-center space-x-1.5 shrink-0">
           <button
             type="button"
             onClick={onConfirm}
             disabled={disabled}
-            className={`h-[22px] px-2.5 rounded-xs text-[10.5px] font-semibold inline-flex items-center cursor-pointer disabled:opacity-50 ${
+            className={`h-[22px] px-2.5 rounded-xs text-[10.5px] font-semibold inline-flex items-center transition-colors cursor-pointer disabled:opacity-50 ${
               tone === "accent"
                 ? "bg-accent hover:bg-accent-hover text-accent-on"
-                : "bg-danger text-danger-on"
+                : "bg-danger hover:bg-danger/90 text-danger-on"
             }`}
             title={confirmTitle}
           >
@@ -145,7 +144,7 @@ export const InlineConfirmRowBar: React.FC<InlineConfirmRowBarProps> =
           <button
             type="button"
             onClick={onCancel}
-            className="h-[22px] px-2 bg-surface-3 hover:bg-surface-2 border border-line text-fg-2 rounded-xs text-[10.5px] inline-flex items-center cursor-pointer"
+            className="h-[22px] px-2 bg-surface-3 hover:bg-surface-2 border border-line text-fg-2 hover:text-fg rounded-xs text-[10.5px] inline-flex items-center transition-colors cursor-pointer"
             title="Cancel"
           >
             Cancel

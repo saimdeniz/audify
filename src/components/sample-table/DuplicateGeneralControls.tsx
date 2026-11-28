@@ -337,7 +337,7 @@ export const DuplicateGeneralControls: React.FC<DuplicateGeneralControlsProps> =
       <div className="ml-auto flex items-center gap-1.5 font-mono text-[10px] shrink-0">
         {duplicateScanError ? (
           <span
-            className="text-danger truncate max-w-[200px]"
+            className="text-danger-fg truncate max-w-[200px]"
             title={duplicateScanError}
           >
             {duplicateScanError}

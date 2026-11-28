@@ -296,7 +296,7 @@ export const AsciiMagicCatalogPanel: React.FC = React.memo(() => {
       </form>
 
       {errorMsg && (
-        <div className="px-2.5 py-1.5 rounded-xs border border-danger bg-surface-2 text-danger text-[10.5px] flex items-start gap-1.5">
+        <div className="px-2.5 py-1.5 rounded-xs border border-danger bg-surface-2 text-danger-fg text-[10.5px] flex items-start gap-1.5">
           <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
           <span className="break-words">{errorMsg}</span>
         </div>

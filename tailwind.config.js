@@ -83,6 +83,7 @@ export default {
         info: "rgb(var(--info-rgb) / <alpha-value>)",
         danger: {
           DEFAULT: "rgb(var(--danger-rgb) / <alpha-value>)",
+          fg: "rgb(var(--danger-fg-rgb) / <alpha-value>)",
           on: "var(--c-danger-on)",
         },
       },

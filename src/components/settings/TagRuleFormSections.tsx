@@ -376,7 +376,7 @@ export const TagRuleEditorPanel: React.FC<TagRuleEditorPanelProps> = ({
           </label>
           {excludedKeywords.length > 0 && (
             <span
-              className="font-mono text-[9.5px] text-danger bg-danger/15 border border-danger/30 px-1 rounded-xs"
+              className="font-mono text-[9.5px] text-danger-fg bg-danger/15 border border-danger/30 px-1 rounded-xs"
               title={`Exclusions: ${excludedKeywords.join(", ")}`}
             >
               !{excludedKeywords.length} excluded

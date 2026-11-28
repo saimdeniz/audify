@@ -3,6 +3,7 @@ import { invokeCommand } from "../../utils/tauriCommands";
 import { postCrossWindowSync } from "../storageHelpers";
 import type { StoreSliceContext } from "../types";
 import type { AiSliceActions } from "./aiSlice";
+import type { AiSeqTracker } from "./aiSuggestionActions";
 
 export type AiModelLifecycleActions = Pick<
   AiSliceActions,
@@ -20,7 +21,8 @@ export type AiModelLifecycleActions = Pick<
  */
 export function createAiModelLifecycleActions(
   ctx: StoreSliceContext,
-  cancelPendingSimilaritySearch?: () => void
+  cancelPendingSimilaritySearch?: () => void,
+  statusSeq?: AiSeqTracker
 ): AiModelLifecycleActions {
   const { set, get, getProfileEpoch, emitNotice } = ctx;
 
@@ -47,12 +49,16 @@ export function createAiModelLifecycleActions(
   return {
     fetchAiModelStatus: async () => {
       const epoch = getProfileEpoch();
+      const reqSeq = statusSeq?.bump() ?? 0;
       try {
         const status = await invokeCommand("get_ai_model_status", {});
         if (!status || typeof status !== "object") {
           return null;
         }
-        if (epoch !== getProfileEpoch()) {
+        if (
+          epoch !== getProfileEpoch() ||
+          (statusSeq && reqSeq !== statusSeq.current())
+        ) {
           return null;
         }
         set({

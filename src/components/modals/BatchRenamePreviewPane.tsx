@@ -20,7 +20,7 @@ export const BatchRenamePreviewPane: React.FC<BatchRenamePreviewPaneProps> = ({
   <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-surface-1">
     {(preview.collisionCount > 0 || preview.invalidCount > 0) && (
       <div className="px-3 sm:px-4 py-2 bg-surface-2 border-b border-danger flex items-center justify-between gap-2 text-[11px] shrink-0">
-        <div className="flex items-center gap-2 text-danger font-medium min-w-0">
+        <div className="flex items-center gap-2 text-danger-fg font-medium min-w-0">
           <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
           <span className="truncate">
             {preview.collisionCount > 0
@@ -58,7 +58,7 @@ export const BatchRenamePreviewPane: React.FC<BatchRenamePreviewPaneProps> = ({
               row.status === "ready"
                 ? "text-accent-fg"
                 : row.status === "duplicate" || row.status === "invalid"
-                ? "text-danger"
+                ? "text-danger-fg"
                 : "text-fg-3"
             }`}
             title={row.reason || row.newFileName}
@@ -79,7 +79,7 @@ export const BatchRenamePreviewPane: React.FC<BatchRenamePreviewPaneProps> = ({
             )}
             {row.status === "duplicate" && (
               <span
-                className="px-1.5 py-0.5 rounded-xs bg-surface-2 border border-danger text-danger text-[9.5px]"
+                className="px-1.5 py-0.5 rounded-xs bg-surface-2 border border-danger text-danger-fg text-[9.5px]"
                 title={row.reason}
               >
                 Duplicate
@@ -87,7 +87,7 @@ export const BatchRenamePreviewPane: React.FC<BatchRenamePreviewPaneProps> = ({
             )}
             {row.status === "invalid" && (
               <span
-                className="px-1.5 py-0.5 rounded-xs bg-surface-2 border border-danger text-danger text-[9.5px]"
+                className="px-1.5 py-0.5 rounded-xs bg-surface-2 border border-danger text-danger-fg text-[9.5px]"
                 title={row.reason}
               >
                 Invalid

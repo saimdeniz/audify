@@ -53,6 +53,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 }));
 
 import { useSampleStore } from "./useSampleStore";
+import { invalidateAiSliceAsyncState } from "./slices/aiSlice";
 
 function makeSample(id: number, overrides: Partial<SampleItem> = {}): SampleItem {
   return {
@@ -226,6 +227,7 @@ describe("AI Audio config, settings bridge & filter engine", () => {
 
 describe("useSampleStore AI slice state transitions", () => {
   beforeEach(() => {
+    invalidateAiSliceAsyncState();
     invokeMock.mockReset();
     memoryStorage.clear();
 

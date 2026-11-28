@@ -62,7 +62,7 @@ export class AppErrorBoundary extends React.Component<
       >
         <div className="w-full max-w-[420px] rounded-sm bg-surface-1 border border-line-strong shadow-2xl overflow-hidden">
           <div className="h-[34px] px-3 border-b border-line bg-surface-header flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-danger shrink-0" />
+            <AlertTriangle className="w-4 h-4 text-danger-fg shrink-0" />
             <span className="text-[12px] font-semibold text-fg truncate">
               Audify Recovery Mode
             </span>

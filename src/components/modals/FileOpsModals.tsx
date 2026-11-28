@@ -112,9 +112,9 @@ export const FileOpsModals: React.FC = () => {
             <div className="h-[32px] px-3 border-b border-line bg-surface-header flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
                 {pendingTrashRequest.kind === "folder" ? (
-                  <FolderX className="w-3.5 h-3.5 text-danger shrink-0" />
+                  <FolderX className="w-3.5 h-3.5 text-danger-fg shrink-0" />
                 ) : (
-                  <Trash2 className="w-3.5 h-3.5 text-danger shrink-0" />
+                  <Trash2 className="w-3.5 h-3.5 text-danger-fg shrink-0" />
                 )}
                 <span className="text-[12px] font-semibold text-fg truncate">
                   {pendingTrashRequest.kind === "folder"
@@ -204,7 +204,7 @@ export const FileOpsModals: React.FC = () => {
                   type="button"
                   autoFocus
                   onClick={() => void confirmPendingTrashRequest(dontAskAgain)}
-                  className="h-[25px] px-2.5 rounded-xs bg-danger/15 hover:bg-danger hover:text-danger-on border border-danger/50 text-[11px] font-semibold text-danger flex items-center gap-1.5 transition-colors"
+                  className="h-[25px] px-2.5 rounded-xs bg-danger/15 hover:bg-danger hover:text-danger-on border border-danger/50 text-[11px] font-semibold text-danger-fg flex items-center gap-1.5 transition-colors"
                 >
                   <Trash2 className="w-3 h-3" />
                   <span>Trash (Enter)</span>

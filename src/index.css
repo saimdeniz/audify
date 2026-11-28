@@ -44,8 +44,9 @@ html[data-theme="dark"] {
   --c-ok-on: #0D0D0F;
   --warn-rgb: 245 158 11;
   --info-rgb: 96 165 250;
-  --danger-rgb: 239 68 68;
-  --c-danger-on: #0D0D0F;
+  --danger-rgb: 220 38 38;
+  --danger-fg-rgb: 248 113 113;
+  --c-danger-on: #FFFFFF;
   --signal-accent: #F59E0B;
   --signal-accent-bg: #242016;
   --accent-rgb: 245 158 11;
@@ -81,6 +82,7 @@ html[data-theme="light"] {
   --warn-rgb: 180 83 9;
   --info-rgb: 37 99 235;
   --danger-rgb: 220 38 38;
+  --danger-fg-rgb: 185 28 28;
   --c-danger-on: #FFFFFF;
 }
 
@@ -111,8 +113,9 @@ html[data-theme="contrast"] {
   --c-ok-on: #000000;
   --warn-rgb: 250 204 21;
   --info-rgb: 56 189 248;
-  --danger-rgb: 239 68 68;
-  --c-danger-on: #000000;
+  --danger-rgb: 185 28 28;
+  --danger-fg-rgb: 252 165 165;
+  --c-danger-on: #FFFFFF;
 }
 
 @layer base {

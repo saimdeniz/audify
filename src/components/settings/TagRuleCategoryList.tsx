@@ -506,7 +506,7 @@ export const TagRuleCategoryList: React.FC<TagRuleCategoryListProps> = ({
                             size="xs"
                             confirmTitle="Confirm Delete Category"
                             deleteTitle={`Delete category "${cat}"`}
-                            idleClassName="w-[18px] h-[18px] text-fg-3 hover:text-danger hover:bg-danger/10 border border-transparent hover:border-danger/30 rounded-xs flex items-center justify-center cursor-pointer"
+                            idleClassName="w-[18px] h-[18px] text-fg-2 hover:text-accent-fg hover:bg-accent-soft border border-transparent hover:border-accent/40 rounded-xs flex items-center justify-center cursor-pointer"
                           />
                         )}
                       </div>

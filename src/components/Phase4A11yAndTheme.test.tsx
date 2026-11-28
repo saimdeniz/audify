@@ -12,10 +12,12 @@ import {
 import { applyThemeAndAccentToDom } from "../store/themeDom";
 import { useSampleStore } from "../store/useSampleStore";
 import type { ThemeMode } from "../types";
+import { InlineConfirmRowBar } from "./common/InlineConfirmDeleteButton";
 import { EmptyTrashConfirmModal } from "./modals/EmptyTrashConfirmModal";
 import { BatchRenameModal } from "./modals/BatchRenameModal";
 import { QuickCreatePopover } from "./QuickCreatePopover";
 import { useActiveDrawerFilterCount } from "./sample-table/FilterDrawer";
+import { SidebarFolderContextMenu } from "./sidebar/SidebarFolderContextMenu";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockResolvedValue(undefined),
@@ -163,5 +165,116 @@ describe("Phase 4: WCAG 2.1 AA contrast, dialog a11y, and UI consistency", () =>
     );
     fireEvent.click(screen.getByRole("button", { name: "Save Slice" }));
     expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+  });
+
+  it("guarantees white danger button text and WCAG 2.1 AA contrast for danger tokens across dark, light, and contrast themes", () => {
+    const surfaceByMode: Record<ThemeMode, [number, number, number]> = {
+      dark: [20, 20, 23], // #141417 surface-1
+      light: [234, 236, 239], // #EAECEF surface-1
+      contrast: [5, 5, 5], // #050505 surface-1
+    };
+
+    for (const mode of ["dark", "light", "contrast"] as ThemeMode[]) {
+      applyThemeAndAccentToDom(mode, "#3B82F6");
+
+      const dangerBg = document.documentElement.style
+        .getPropertyValue("--danger-rgb")
+        .trim()
+        .split(/\s+/)
+        .map(Number);
+      const dangerFg = document.documentElement.style
+        .getPropertyValue("--danger-fg-rgb")
+        .trim()
+        .split(/\s+/)
+        .map(Number);
+      const dangerOn = document.documentElement.style
+        .getPropertyValue("--c-danger-on")
+        .trim();
+
+      expect(dangerBg, `${mode} --danger-rgb`).toHaveLength(3);
+      expect(dangerFg, `${mode} --danger-fg-rgb`).toHaveLength(3);
+      expect(dangerOn.toUpperCase(), `${mode} --c-danger-on`).toBe("#FFFFFF");
+
+      const [onR, onG, onB] = hexToRgbTriplet(dangerOn);
+      const buttonContrast = wcagContrastRatio(
+        srgbRelativeLuminance(dangerBg[0], dangerBg[1], dangerBg[2]),
+        srgbRelativeLuminance(onR, onG, onB)
+      );
+      expect(
+        buttonContrast,
+        `${mode} solid danger button contrast`
+      ).toBeGreaterThanOrEqual(4.5);
+
+      const [sr, sg, sb] = surfaceByMode[mode];
+      const fgContrast = wcagContrastRatio(
+        srgbRelativeLuminance(dangerFg[0], dangerFg[1], dangerFg[2]),
+        srgbRelativeLuminance(sr, sg, sb)
+      );
+      expect(
+        fgContrast,
+        `${mode} danger-fg text on surface-1 contrast`
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("renders all SidebarFolderContextMenu icons and items with active theme accent tokens", () => {
+    render(
+      <SidebarFolderContextMenu
+        menu={{
+          x: 40,
+          y: 40,
+          title: "Ambient",
+          explorerTargets: [{ label: "Show in Explorer", path: "F:\\sounds\\Ambient" }],
+          primaryCopyPath: "F:\\sounds\\Ambient",
+          onSyncFolder: vi.fn(),
+          onCreateSubfolder: vi.fn(),
+          onImportAudioFiles: vi.fn(),
+          onRenameSubfolder: vi.fn(),
+          onTrashSubfolder: vi.fn(),
+          onOpenSettings: vi.fn(),
+          settingsLabel: "Manage Library in Settings",
+        }}
+        onClose={vi.fn()}
+        onShowInFolder={vi.fn()}
+        onCopyPath={vi.fn()}
+      />
+    );
+
+    const header = screen.getByText("Ambient");
+    expect(header.className).toContain("text-accent-fg");
+
+    const items = screen.getAllByRole("menuitem");
+    expect(items).toHaveLength(8);
+    for (const item of items) {
+      expect(item.className).toContain("hover:bg-accent-soft");
+      expect(item.className).not.toContain("text-fg-2");
+      const iconSvg = item.querySelector("svg");
+      expect(iconSvg).toBeTruthy();
+      expect(iconSvg?.getAttribute("class")).toContain("text-accent-fg");
+      expect(iconSvg?.getAttribute("class")).not.toContain("text-fg-2");
+    }
+  });
+
+  it("renders InlineConfirmRowBar with high-contrast prompt text, danger-fg icon, and solid danger confirm button", () => {
+    render(
+      <InlineConfirmRowBar
+        prompt='Remove "sounds" from database?'
+        confirmLabel="Remove"
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+
+    const promptText = screen.getByText('Remove "sounds" from database?');
+    const promptWrapper = promptText.parentElement;
+    expect(promptWrapper?.className).toContain("text-fg");
+    expect(promptWrapper?.className).not.toContain("text-danger");
+    expect(promptWrapper?.querySelector("svg")?.getAttribute("class")).toContain(
+      "text-danger-fg"
+    );
+
+    const removeBtn = screen.getByRole("button", { name: "Remove" });
+    expect(removeBtn.className).toContain("bg-danger");
+    expect(removeBtn.className).toContain("text-danger-on");
   });
 });

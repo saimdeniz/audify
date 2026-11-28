@@ -180,7 +180,6 @@ export const CollectionTemplatesPanel: React.FC = () => {
                     }}
                     onCancel={() => setConfirmDeleteTemplateId(null)}
                     deleteTitle="Delete template"
-                    idleClassName="w-[22px] h-[22px] flex items-center justify-center text-fg-3 hover:text-danger rounded-xs bg-surface-2 hover:bg-danger/15 hover:border-danger border border-line shrink-0 cursor-pointer"
                   />
                 </div>
               </div>

@@ -114,6 +114,7 @@ export const SidebarFolderContextMenu: React.FC<
       tabIndex={-1}
       onKeyDown={handleContextMenuKeyDown}
       data-context-menu-portal="true"
+      data-mica-overlay="true"
       onContextMenu={(e) => e.preventDefault()}
       style={{
         left: `${pos.left}px`,
@@ -122,13 +123,14 @@ export const SidebarFolderContextMenu: React.FC<
       }}
       className="fixed w-[224px] rounded-md bg-surface-2 border border-line-strong shadow-2xl py-1 text-[11.5px] text-fg select-none outline-none"
     >
-      <div className="px-2.5 py-1 border-b border-line text-[10px] font-mono text-fg-3 truncate">
+      <div className="px-2.5 py-1 border-b border-line text-[10px] font-mono text-accent-fg truncate">
         {menu.title}
       </div>
 
       {menu.explorerTargets.map((target) => (
         <MenuItem
           key={target.path}
+          compactHeight
           tone="accent"
           icon={<ExternalLink className="w-3.5 h-3.5 text-accent-fg" />}
           label={target.label}
@@ -142,7 +144,9 @@ export const SidebarFolderContextMenu: React.FC<
 
       {menu.primaryCopyPath && (
         <MenuItem
-          icon={<Copy className="w-3.5 h-3.5 text-fg-2" />}
+          compactHeight
+          tone="accent"
+          icon={<Copy className="w-3.5 h-3.5 text-accent-fg" />}
           label="Copy Folder Path"
           title={menu.primaryCopyPath}
           onClick={() => {
@@ -154,7 +158,9 @@ export const SidebarFolderContextMenu: React.FC<
 
       {menu.onSyncFolder && (
         <MenuItem
-          icon={<RefreshCw className="w-3.5 h-3.5 text-fg-2" />}
+          compactHeight
+          tone="accent"
+          icon={<RefreshCw className="w-3.5 h-3.5 text-accent-fg" />}
           label="Sync Folder Changes"
           onClick={() => {
             menu.onSyncFolder?.();
@@ -171,6 +177,8 @@ export const SidebarFolderContextMenu: React.FC<
           <div className="my-1 border-t border-line" />
           {menu.onCreateSubfolder && (
             <MenuItem
+              compactHeight
+              tone="accent"
               disabled={menu.isReadOnlyVault}
               icon={<FolderPlus className="w-3.5 h-3.5 text-accent-fg" />}
               label="New Subfolder"
@@ -191,8 +199,10 @@ export const SidebarFolderContextMenu: React.FC<
 
           {menu.onImportAudioFiles && (
             <MenuItem
+              compactHeight
+              tone="accent"
               disabled={menu.isReadOnlyVault}
-              icon={<Upload className="w-3.5 h-3.5 text-fg-2" />}
+              icon={<Upload className="w-3.5 h-3.5 text-accent-fg" />}
               label="Import Audio Files..."
               rightSlot={
                 menu.isReadOnlyVault && <Lock className="w-3 h-3 text-warn" />
@@ -211,8 +221,10 @@ export const SidebarFolderContextMenu: React.FC<
 
           {menu.onRenameSubfolder && (
             <MenuItem
+              compactHeight
+              tone="accent"
               disabled={menu.isReadOnlyVault}
-              icon={<Edit3 className="w-3.5 h-3.5 text-fg-2" />}
+              icon={<Edit3 className="w-3.5 h-3.5 text-accent-fg" />}
               label="Rename Folder"
               rightSlot={
                 menu.isReadOnlyVault ? (
@@ -235,8 +247,9 @@ export const SidebarFolderContextMenu: React.FC<
 
           {menu.onTrashSubfolder && (
             <MenuItem
-              disabled={menu.isReadOnlyVault}
+              compactHeight
               tone="accent"
+              disabled={menu.isReadOnlyVault}
               icon={<Trash2 className="w-3.5 h-3.5 text-accent-fg" />}
               label="Move Folder to Trash"
               rightSlot={
@@ -260,8 +273,9 @@ export const SidebarFolderContextMenu: React.FC<
         <>
           <div className="my-1 border-t border-line" />
           <MenuItem
-            className="text-fg-2"
-            icon={<Settings className="w-3.5 h-3.5" />}
+            compactHeight
+            tone="accent"
+            icon={<Settings className="w-3.5 h-3.5 text-accent-fg" />}
             label={menu.settingsLabel || "Manage in Settings"}
             onClick={() => {
               menu.onOpenSettings?.();

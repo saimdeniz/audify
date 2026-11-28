@@ -258,7 +258,7 @@ export const ProfilesTab: React.FC = () => {
                           setConfirmDeleteProfileId(prof.id);
                         }}
                         disabled={profiles.length <= 1 || isCurrent}
-                        className="w-[22px] h-[22px] flex items-center justify-center bg-surface-2 hover:bg-danger/15 hover:border-danger hover:text-danger border border-line text-fg-2 rounded-xs disabled:opacity-30 transition-colors cursor-pointer"
+                        className="w-[22px] h-[22px] flex items-center justify-center bg-surface-2 hover:bg-accent-soft hover:border-accent hover:text-accent-fg border border-line text-fg-2 rounded-xs disabled:opacity-30 transition-colors cursor-pointer"
                         title={
                           isCurrent
                             ? "Cannot delete active profile"

@@ -233,7 +233,7 @@ export const ScopeLimitsEditor: React.FC<ScopeLimitsEditorProps> = ({
 
           {/* EXCLUDE FOLDERS */}
           <div className="space-y-1">
-            <div className="flex items-center justify-between font-mono text-[9px] text-danger font-semibold">
+            <div className="flex items-center justify-between font-mono text-[9px] text-danger-fg font-semibold">
               <span>EXCLUDE FOLDERS</span>
               <button
                 type="button"
@@ -241,7 +241,7 @@ export const ScopeLimitsEditor: React.FC<ScopeLimitsEditorProps> = ({
                 className="w-[18px] h-[18px] bg-surface-2 hover:bg-surface-3 border border-line text-fg-2 rounded-xs flex items-center justify-center cursor-pointer"
                 title="Browse folder to exclude"
               >
-                <FolderPlus className="w-2.5 h-2.5 text-danger" />
+                <FolderPlus className="w-2.5 h-2.5 text-danger-fg" />
               </button>
             </div>
             <div className="flex flex-wrap gap-1">
@@ -252,7 +252,7 @@ export const ScopeLimitsEditor: React.FC<ScopeLimitsEditorProps> = ({
                     className="inline-flex items-center gap-1 bg-surface-soft border border-danger/20 text-fg-2 font-mono text-[9px] px-1.5 py-0.5 rounded-xs"
                     title={`Inherited exclude from category "${categoryName}": ${p}`}
                   >
-                    <span className="text-[9.5px] text-danger font-semibold">
+                    <span className="text-[9.5px] text-danger-fg font-semibold">
                       {categoryName}:
                     </span>
                     <span className="truncate max-w-[120px]">
@@ -264,7 +264,7 @@ export const ScopeLimitsEditor: React.FC<ScopeLimitsEditorProps> = ({
               {excludePaths.map((p) => (
                 <span
                   key={p}
-                  className="inline-flex items-center space-x-1 bg-danger/15 border border-danger/30 text-danger font-mono text-[9px] px-1.5 py-0.5 rounded-xs"
+                  className="inline-flex items-center space-x-1 bg-danger/15 border border-danger/30 text-danger-fg font-mono text-[9px] px-1.5 py-0.5 rounded-xs"
                 >
                   <span className="truncate max-w-[140px]" title={p}>
                     {renderScopePathLabel(p)}

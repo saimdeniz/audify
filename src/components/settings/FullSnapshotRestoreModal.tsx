@@ -170,7 +170,7 @@ export const FullSnapshotRestoreModal: React.FC = () => {
             type="button"
             disabled={isRestoring}
             onClick={() => void handleConfirm()}
-            className="h-[26px] px-3 rounded-xs bg-danger/15 hover:bg-danger text-danger hover:text-danger-on border border-danger/40 text-[11px] font-semibold inline-flex items-center gap-1.5 disabled:opacity-50 transition-colors cursor-pointer"
+            className="h-[26px] px-3 rounded-xs bg-danger/15 hover:bg-danger text-danger-fg hover:text-danger-on border border-danger/40 text-[11px] font-semibold inline-flex items-center gap-1.5 disabled:opacity-50 transition-colors cursor-pointer"
           >
             <RotateCcw
               className={`w-3 h-3 shrink-0 ${isRestoring ? "animate-spin" : ""}`}

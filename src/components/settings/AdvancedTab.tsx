@@ -203,7 +203,7 @@ export const AdvancedTab: React.FC = () => {
                 type="button"
                 disabled={trashedCount === 0 || busyAction !== null}
                 onClick={() => setConfirmEmptyTrash(true)}
-                className="h-[22px] px-2 bg-danger/15 hover:bg-danger hover:text-danger-on border border-danger/50 rounded-xs text-[10.5px] font-semibold text-danger inline-flex items-center space-x-1 transition-colors cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
+                className="h-[22px] px-2 bg-danger/15 hover:bg-danger hover:text-danger-on border border-danger/50 rounded-xs text-[10.5px] font-semibold text-danger-fg inline-flex items-center space-x-1 transition-colors cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
                 title="Move trashed files to Windows Recycle Bin"
               >
                 <Trash2 className="w-3 h-3 shrink-0" />
@@ -222,7 +222,7 @@ export const AdvancedTab: React.FC = () => {
                 prompt={
                   <>
                     Send{" "}
-                    <span className="font-mono font-semibold text-danger">
+                    <span className="font-mono font-semibold text-danger-fg">
                       {trashedCount} file(s)
                     </span>{" "}
                     to Recycle Bin?
@@ -466,12 +466,12 @@ export const AdvancedTab: React.FC = () => {
                         entry.op_type === "RENAME" || entry.op_type === "MOVE"
                           ? "bg-accent-soft border-accent/40 text-accent-fg"
                           : entry.op_type === "TRASH"
-                          ? "bg-danger/15 border-danger/40 text-danger"
+                          ? "bg-danger/15 border-danger/40 text-danger-fg"
                           : entry.op_type === "RESTORE" ||
                             entry.op_type === "UNDO_RENAME" ||
                             entry.op_type === "UNDO_MOVE"
                           ? "bg-ok/15 border-ok/40 text-ok"
-                          : "bg-danger/15 border-danger/40 text-danger"
+                          : "bg-danger/15 border-danger/40 text-danger-fg"
                       }`}
                     >
                       {entry.op_type === "UNDO_RENAME" ||
